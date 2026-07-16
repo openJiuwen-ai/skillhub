@@ -1,0 +1,65 @@
+# frontend Deployment + Service
+# 依赖：namespace.yaml、marketplace-deploy.yaml（通过 ClusterIP 内部访问）
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skillhub-frontend
+  namespace: skillhub-system
+  labels:
+    app: skillhub-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skillhub-frontend
+  template:
+    metadata:
+      labels:
+        app: skillhub-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: skillhub-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9002
+          env:
+            - name: BACKEND_URL
+              value: "skillhub-backend.skillhub-system.svc.cluster.local"
+            - name: BACKEND_PORT
+              value: "8100"
+          startupProbe:
+            httpGet: { path: /health, port: 9002 }
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            httpGet: { path: /health, port: 9002 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 9002 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: skillhub-frontend
+  namespace: skillhub-system
+spec:
+  type: ClusterIP
+  selector:
+    app: skillhub-frontend
+  ports:
+    - name: http
+      port: 9002
+      targetPort: 9002

@@ -39,11 +39,11 @@ Output:
 
 Ownership:
 
-- [indexing/tree](/home/doujzc/codes/Demo/indexing/tree)
-- [indexing/catalog](/home/doujzc/codes/Demo/indexing/catalog)
-- [indexing/embedding](/home/doujzc/codes/Demo/indexing/embedding)
-- [indexing/bm25](/home/doujzc/codes/Demo/indexing/bm25)
-- [indexing/workflows](/home/doujzc/codes/Demo/indexing/workflows)
+- [indexing/tree](./indexing/tree)
+- [indexing/catalog](./indexing/catalog)
+- [indexing/embedding](./indexing/embedding)
+- [indexing/bm25](./indexing/bm25)
+- [indexing/workflows](./indexing/workflows)
 
 ### 2. Online retrieval
 
@@ -63,11 +63,11 @@ Execution route:
 
 Ownership:
 
-- [retrieval/tree](/home/doujzc/codes/Demo/retrieval/tree)
-- [retrieval/semantic](/home/doujzc/codes/Demo/retrieval/semantic)
-- [retrieval/lexical](/home/doujzc/codes/Demo/retrieval/lexical)
-- [retrieval/merge](/home/doujzc/codes/Demo/retrieval/merge)
-- [retrieval/service](/home/doujzc/codes/Demo/retrieval/service)
+- [retrieval/tree](./retrieval/tree)
+- [retrieval/semantic](./retrieval/semantic)
+- [retrieval/lexical](./retrieval/lexical)
+- [retrieval/merge](./retrieval/merge)
+- [retrieval/service](./retrieval/service)
 
 ### 3. Orchestration
 
@@ -87,10 +87,10 @@ Responsibilities:
 
 Ownership:
 
-- [orchestration/engine](/home/doujzc/codes/Demo/orchestration/engine)
-- [orchestration/routing](/home/doujzc/codes/Demo/orchestration/routing)
-- [orchestration/runtime](/home/doujzc/codes/Demo/orchestration/runtime)
-- [orchestration/retrieval_adapter](/home/doujzc/codes/Demo/orchestration/retrieval_adapter)
+- `orchestration/engine`
+- `orchestration/routing`
+- `orchestration/runtime`
+- `orchestration/retrieval_adapter`
 
 ## Shared Layers
 
@@ -107,20 +107,20 @@ Shared contracts only:
 
 Generic helpers only:
 
-- optional dependency fallbacks such as [shared/rich_compat.py](/home/doujzc/codes/Demo/shared/rich_compat.py)
+- optional dependency fallbacks such as [shared/rich_compat.py](./shared/rich_compat.py)
 
 ## Current Package Roles
 
-- [indexing](/home/doujzc/codes/Demo/indexing): offline build
-- [retrieval](/home/doujzc/codes/Demo/retrieval): online retrieval
-- [orchestration](/home/doujzc/codes/Demo/orchestration): runtime orchestration
-- [demo](/home/doujzc/codes/Demo/demo): runnable examples that import and use the SDK
-- [training](/home/doujzc/codes/Demo/training): training/eval built on top of the SDK
-- [models](/home/doujzc/codes/Demo/models): shared contracts
-- [shared](/home/doujzc/codes/Demo/shared): shared utilities
-- [data](/home/doujzc/codes/Demo/data): local assets and generated artifacts, not imported by core packages
-- [tests](/home/doujzc/codes/Demo/tests): verification only
-- [scripts](/home/doujzc/codes/Demo/scripts): local tooling only
+- [indexing](./indexing): offline build
+- [retrieval](./retrieval): online retrieval
+- [orchestration](./orchestration): runtime orchestration
+- `demo`: runnable examples that import and use the SDK
+- `training`: training/eval built on top of the SDK
+- [models](./models): shared contracts
+- [shared](./shared): shared utilities
+- `data`: local assets and generated artifacts, not imported by core packages
+- `tests`: verification only
+- `scripts`: local tooling only
 
 ## Final State
 

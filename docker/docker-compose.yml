@@ -1,0 +1,110 @@
+# SkillHub 一键部署（本地试用 / 联调场景）
+#
+# 用法（在仓库根目录执行）：
+#   docker compose -f docker/docker-compose.yml --env-file .env.docker up -d --build
+#
+# 配置统一从仓库根目录的 .env.docker 读取（由 .env.example 复制后填写），变量说明见：
+#   docs/zh/3. 安装指导/Docker方式安装/SkillHub安装指导-一键部署.md
+#
+# MySQL 与 MinIO 数据保存在 named volume（mysql-data / minio-data）中，
+# 执行 docker compose down 不会丢数据；down -v 才会清空。
+
+name: skillhub
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      # 仅 backend 在 compose 内部网络访问，不发布端口到宿主机。
+      # backend 不使用 root：MySQL 首次初始化数据卷时按 DB_USER/DB_PASSWORD 自动创建
+      # 专用账号，仅授予 STORE_DB_NAME 库的全部权限。DB_USER 不能为 root，否则 MySQL 拒绝初始化。
+      # DB_PASSWORD 同时作为 MySQL root 密码（root 仅用于运维，端口不对外发布）。
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?请在 .env.docker 中设置 DB_PASSWORD}
+      MYSQL_DATABASE: ${STORE_DB_NAME:?请在 .env.docker 中设置 STORE_DB_NAME}
+      MYSQL_USER: ${DB_USER:?请在 .env.docker 中设置 DB_USER（不能为 root）}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    # 9000 发布到宿主机：预签名 URL 需要浏览器 / CLI 直连 MinIO。
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MARKET_S3_ACCESS_KEY:?请在 .env.docker 中设置 MARKET_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MARKET_S3_SECRET_KEY:?请在 .env.docker 中设置 MARKET_S3_SECRET_KEY}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  # 一次性初始化容器：等待 MinIO 就绪并创建 Bucket，避免 backend 启动时 head_bucket 失败。
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MARKET_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MARKET_S3_SECRET_KEY}
+      MARKET_BUCKET_NAME: ${MARKET_BUCKET_NAME}
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 \"$${MINIO_ROOT_USER}\" \"$${MINIO_ROOT_PASSWORD}\" > /dev/null 2>&1; do
+        echo 'waiting for minio...'; sleep 2;
+      done;
+      mc mb --ignore-existing \"local/$${MARKET_BUCKET_NAME}\" && echo 'bucket ready';
+      "
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.skillhub-backend
+      args:
+        # 默认使用官方 PyPI。构建期下载慢或超时时，在 .env.docker（不提交到仓库）中设置：
+        #   PIP_INDEX_URL=<PyPI 镜像地址>
+        #   PIP_TRUSTED_HOST=<镜像主机名>
+        #   APT_MIRROR=<apt 源镜像主机名，不含协议和路径>
+        INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.org}
+        APT_MIRROR: ${APT_MIRROR:-}
+    env_file:
+      - ../.env.docker
+    environment:
+      # 覆盖 .env.docker 中的 DB_HOST：compose 内部通过服务名访问 MySQL。
+      DB_HOST: mysql
+    extra_hosts:
+      # MARKET_S3_ENDPOINT 使用 skillhub.local：浏览器经宿主机 hosts 解析（第 3 节已配置），
+      # 容器内经 host-gateway 解析到宿主机，再访问宿主机发布的 MinIO 9000 端口。
+      - "skillhub.local:host-gateway"
+    ports:
+      - "8100:8100"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.skillhub-frontend
+    environment:
+      # Nginx 启动时解析 BACKEND_URL，因此必须 depends_on backend。
+      BACKEND_URL: backend
+      BACKEND_PORT: "8100"
+    ports:
+      - "9002:9002"
+    depends_on:
+      - backend
+
+volumes:
+  mysql-data:
+  minio-data:

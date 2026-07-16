@@ -7,7 +7,7 @@
 
 ### Added
 
-- [TeamSkillsHub 接口参考](../接口文档/v1/TeamSkillsHub-接口参考.md)：按模块组织的对外 API 文档（端点总览、curl 示例、可见性/审核状态表）
+- [TeamSkillsHub 接口参考](docs/zh/7.%20API参考/TeamSkillsHub-接口参考.md)：按模块组织的对外 API 文档（端点总览、curl 示例、可见性/审核状态表）
 - 用户文档体系：新用户入门、前端操作手册、角色与权限、场景化指引与 FAQ、环境配置说明（使用者）
 - 根目录 `CHANGELOG.md` 持续记录版本变更
 
@@ -66,7 +66,7 @@
 ### 兼容性
 
 - **数据库**：升级时 marketplace 启动会自动迁移 schema；建议在维护窗口操作
-- **API**：客户端请优先使用 `detail.error_code` 解析错误；OpenAPI 见 `docs/zh/接口文档/v1/TeamSkillsHub.md`
+- **API**：客户端请优先使用 `detail.error_code` 解析错误；OpenAPI 见 `docs/zh/7. API参考/TeamSkillsHub.md`
 - **CLI**：与市场 API 版本保持一致部署，避免跨大版本混用
 
 ---

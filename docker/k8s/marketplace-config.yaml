@@ -1,0 +1,73 @@
+# marketplace 配置
+# 包含：ConfigMap（非敏感配置）
+# 依赖：namespace.yaml 已创建 skillhub-system namespace
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marketplace-env
+  namespace: skillhub-system
+data:
+  STORE_HOST: "0.0.0.0"
+  STORE_PORT: "8100"
+  # 数据库（复用已有 MySQL，填写集群内可达的地址）
+  DB_TYPE: "mysql"
+  DB_HOST: "REPLACE_WITH_DB_HOST"
+  DB_PORT: "3306"
+  DB_USER: "skillhub"
+  STORE_DB_NAME: "openjiuwen_market"
+  AUTH_USER_API_URL: "https://gitcode.com/api/v5/user"
+  SYSTEM_ADMIN_USER: "system_admin"
+
+  # 对象存储（复用已有 MinIO 或华为云 OBS，STORAGE_TYPE 二选一）
+  # MinIO 示例：MARKET_S3_ENDPOINT: "http://minio.example.com:9000"
+  # OBS 示例：STORAGE_TYPE: "OBS"，MARKET_S3_ENDPOINT: "https://obs.cn-north-4.myhuaweicloud.com"，
+  #           并填写 MARKET_S3_REGION（如 "cn-north-4"）
+  STORAGE_TYPE: "MinIO"
+  MARKET_BUCKET_NAME: "openjiuwen-market-test"
+  MARKET_S3_ENDPOINT: "REPLACE_WITH_S3_ENDPOINT"
+  MARKET_S3_REGION: ""
+  MARKET_S3_USE_SSL: "false"
+
+  # OAuth（默认启用 GitCode 登录；需在 Secret 中配置 Client ID/Secret，见安装指导 4.2 节）
+  MARKET_GITCODE_OAUTH_ENABLED: "true"
+  MARKET_GITCODE_OAUTH_REDIRECT_URI: "http://skillhub.local:9002/api/v1/auth/oauth/gitcode/callback"
+  MARKET_GITHUB_OAUTH_ENABLED: "false"
+  MARKET_GITHUB_OAUTH_REDIRECT_URI: "http://skillhub.local:9002/api/v1/auth/oauth/github/callback"
+  MARKET_OAUTH_FRONTEND_ORIGIN: "http://skillhub.local:9002"
+
+  # 审核管理员（部署时按环境填写实际管理员用户名，多个用逗号分隔）
+  MARKET_REVIEW_ADMIN_USERNAMES: ""
+
+  # 在线体验（暂不启用）
+  PLAYGROUND_ENABLED: "false"
+  SKILL_RUNNER_URL: "http://skill-runner.skillhub-system.svc.cluster.local:8900"
+  PLAYGROUND_DAILY_LIMIT: "20"
+  PLAYGROUND_MULTI_INSTANCE: "false"
+
+  # Redis（单实例留空）
+  REDIS_HOST: ""
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # 检索系统（语义搜索；填入 Embedding 服务地址后启用，留空则退化为关键词搜索）
+  MARKET_RETRIEVAL_EMBEDDING_API_BASE_URL: ""
+  MARKET_RETRIEVAL_EMBEDDING_MODEL: ""
+  MARKET_RETRIEVAL_EMBEDDING_BATCH_SIZE: "16"
+  MARKET_RETRIEVAL_BUILD_METHOD: "embedding_bm25"
+  MARKET_RETRIEVAL_SEARCH_METHOD: "embedding"
+  MARKET_RETRIEVAL_REBUILD_CRON: "0 * * * *"
+  MARKET_RETRIEVAL_REBUILD_ON_STARTUP: "true"
+
+  # 分类标签（随检索模块启动；填入对话模型后启用，留空则不分类）
+  MARKET_RETRIEVAL_SKILL_TAG_LLM_MODEL: ""
+  MARKET_RETRIEVAL_SKILL_TAG_LLM_API_BASE_URL: ""
+  MARKET_RETRIEVAL_SKILL_TAG_CRON: "0 * * * *"
+  MARKET_RETRIEVAL_SKILL_TAG_ON_STARTUP: "false"
+
+  # Skill 系统审查（默认关闭；开启前必须配齐模型参数并在 Secret 中配置
+  # MARKET_SKILL_REVIEW_MODEL_API_KEY，否则发布会被拒绝）
+  MARKET_SKILL_REVIEW_ENABLED: "false"
+  MARKET_SKILL_REVIEW_MODEL_BASE_URL: ""
+  MARKET_SKILL_REVIEW_MODEL_NAME: ""
+  MARKET_SKILL_REVIEW_MODEL_TIMEOUT_SECONDS: "300"

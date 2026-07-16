@@ -25,12 +25,20 @@ FROM python:3.11-slim-bookworm AS runtime
 ARG INDEX_URL=https://pypi.org/simple
 ARG TRUSTED_HOST=pypi.org
 ARG TRUSTED_HOST_EXTRA=files.pythonhosted.org
+# 可选：apt 源镜像主机名（不含协议和路径），设置后替换默认的 deb.debian.org
+ARG APT_MIRROR=
 
 RUN echo "INDEX_URL: ${INDEX_URL}"
 RUN echo "TRUSTED_HOST: ${TRUSTED_HOST} ${TRUSTED_HOST_EXTRA}"
+RUN echo "APT_MIRROR: ${APT_MIRROR:-<unset>}"
 
 # Git 源同步依赖 git CLI（见 docs/Git仓库接入SkillHub设计.md）
-RUN apt-get update \
+RUN if [ -n "${APT_MIRROR}" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        [ -f "$f" ] && sed -i "s|deb.debian.org|${APT_MIRROR}|g" "$f"; \
+      done; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

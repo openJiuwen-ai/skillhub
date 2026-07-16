@@ -16,5 +16,8 @@ dependencies = [
     "redis>=5.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["worker*", "executor*", "skill_runner*"]
+
 [tool.uv]
 default-groups = []

@@ -24,7 +24,7 @@
 
 - **市场服务（marketplace）**：Skill 发布与版本治理、列表与详情、预签名下载；可按需启用 **ClawHub 兼容协议**，便于对接既有 CLI 与生态工具。
 - **命令行工具（CLI）**：检索、解析与下载（详见 [`cli/README.md`](cli/README.md)）。
-- **Web 前端（frontend）**：浏览器中检索、解析与下载；开发与容器说明见 [`docker/README.skillhub-frontend.md`](docker/README.skillhub-frontend.md)。
+- **Web 前端（frontend）**：浏览器中检索、解析与下载（详见 [安装指导](docs/zh/3.%20安装指导/README.md)）。
 
 面向需要在团队或产品内集中管理 **Skill** 的开发者与平台运维，本仓库提供 **开源代码与自建方案**。
 
@@ -71,11 +71,11 @@ flowchart LR
 
 ### 1. 官方托管（零部署）
 
-访问 **[swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)** 进行网页检索、解析与下载。
+访问 **[swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)** 进行 Skill 检索、解析与下载。
 
 ### 2. 自建：最短路径（本地开发）
 
-前置条件：已准备好 **MySQL**（须预先建库）、**S3 兼容存储**（如 MinIO）、**鉴权服务**可达。详见 [本地安装指导](docs/zh/安装指导/本地安装/SkillHub安装指导.md)。
+前置条件：已准备好 **MySQL**（须预先建库）、**S3 兼容存储**（如 MinIO）、**鉴权服务**可达。详见 [本地安装指导](docs/zh/3.%20安装指导/本地安装/SkillHub安装指导.md)。
 
 ```powershell
 # 在仓库根目录
@@ -91,7 +91,7 @@ python main.py
 - 服务监听地址由 **`STORE_HOST` / `STORE_PORT`** 决定（示例配置里端口常为 **8100**）。
 - **健康检查**：`http://127.0.0.1:<STORE_PORT>/api/health`
 
-可选启动 Web 界面：
+可选启动 Web 界面（请新开一个 PowerShell 窗口，从仓库根目录执行）：
 
 ```powershell
 cd frontend
@@ -99,15 +99,15 @@ npm install
 npm run dev
 ```
 
-- 开发服默认 **9002**（以终端输出为准）；请保证根目录 `.env` 中 **`BACKEND_URL` / `BACKEND_PORT`** 与 **`STORE_HOST` / `STORE_PORT`** 一致。详细说明见 [本地安装指导 §6](docs/zh/安装指导/本地安装/SkillHub安装指导.md)。
+- 开发服默认 **9002**（以终端输出为准）；`BACKEND_PORT` 应对应后端的 `STORE_PORT`；`BACKEND_URL` 须填写前端进程可访问的后端地址（本机开发通常为 `127.0.0.1`），不要填写后端监听地址 `STORE_HOST=0.0.0.0`。详细说明见 [本地安装指导 §6](docs/zh/3.%20安装指导/本地安装/SkillHub安装指导.md)。
 
 ### 3. 自建：Docker
 
-参阅 [Docker 方式安装（Windows）](docs/zh/安装指导/Docker方式安装/SkillHub安装指导.md)；后端与前端镜像构建见 [`docker/README.skillhub-backend.md`](docker/README.skillhub-backend.md)、[`docker/README.skillhub-frontend.md`](docker/README.skillhub-frontend.md)。
+参阅 [Docker 方式安装（Windows）](docs/zh/3.%20安装指导/Docker方式安装/SkillHub安装指导.md)（含后端与前端镜像构建）。
 
 ### 4. API 与 CLI
 
-- **HTTP API**：[TeamSkillsHub 接口参考](docs/zh/接口文档/v1/TeamSkillsHub-接口参考.md)（推荐）· [OpenAPI YAML](docs/zh/接口文档/v1/TeamSkillsHub.md)
+- **HTTP API**：[TeamSkillsHub 接口参考](docs/zh/7.%20API参考/TeamSkillsHub-接口参考.md)（推荐）· [OpenAPI YAML](docs/zh/7.%20API参考/TeamSkillsHub.md)
 - **CLI**：[`cli/README.md`](cli/README.md)
 
 ### 5. 生态与全栈实践
@@ -121,23 +121,20 @@ npm run dev
 | 主题 | 链接 |
 |------|------|
 | 文档总览 | [docs/zh/README.md](docs/zh/README.md) |
-| 新用户入门 | [新用户入门](docs/zh/用户指南/新用户入门.md) |
-| 前端操作手册 | [前端操作手册](docs/zh/用户指南/前端操作手册.md) |
-| 角色与权限 | [角色与权限](docs/zh/用户指南/角色与权限.md) |
-| 场景化指引与 FAQ | [场景化指引与 FAQ](docs/zh/用户指南/场景化指引与FAQ.md) |
-| 环境配置说明 | [环境配置说明（使用者）](docs/zh/用户指南/环境配置说明.md) |
+| 新用户入门 | [快速开始](docs/zh/2.%20快速开始.md) |
+| 角色与权限 | [角色与权限](docs/zh/4.%20用户指南/角色与权限.md) |
+| 场景化指引与 FAQ | [场景化指引与 FAQ](docs/zh/4.%20用户指南/场景化指引与FAQ.md) |
+| 环境配置说明 | [环境配置说明（使用者）](docs/zh/4.%20用户指南/环境配置说明.md) |
 | 版本变更记录 | [CHANGELOG.md](CHANGELOG.md) |
 
 ### 安装与开发
 
 | 主题 | 链接 |
 |------|------|
-| 本地安装（Windows 为主） | [安装指导](docs/zh/安装指导/本地安装/SkillHub安装指导.md) |
-| Docker 安装（Windows） | [Docker 方式安装](docs/zh/安装指导/Docker方式安装/SkillHub安装指导.md) |
-| SkillHub Backend 镜像 | [README.skillhub-backend](docker/README.skillhub-backend.md) |
-| SkillHub Frontend 镜像 | [README.skillhub-frontend](docker/README.skillhub-frontend.md) |
-| 市场 API（OpenAPI） | [TeamSkillsHub.md](docs/zh/接口文档/v1/TeamSkillsHub.md) |
-| 市场 API 接口参考（推荐） | [TeamSkillsHub-接口参考.md](docs/zh/接口文档/v1/TeamSkillsHub-接口参考.md) |
+| 本地安装（Windows 为主） | [安装指导](docs/zh/3.%20安装指导/本地安装/SkillHub安装指导.md) |
+| Docker 安装（Windows） | [Docker 方式安装](docs/zh/3.%20安装指导/Docker方式安装/SkillHub安装指导.md) |
+| 市场 API（OpenAPI） | [TeamSkillsHub.md](docs/zh/7.%20API参考/TeamSkillsHub.md) |
+| 市场 API 接口参考（推荐） | [TeamSkillsHub-接口参考.md](docs/zh/7.%20API参考/TeamSkillsHub-接口参考.md) |
 | CLI | [cli/README.md](cli/README.md) |
 | 贡献说明 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

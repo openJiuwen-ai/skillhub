@@ -128,7 +128,7 @@ class Settings:
     )
     llm_api_base: str = _env(
         "SKILL_RUNNER_LLM_API_BASE",
-        _env("LLM_API_BASE", os.environ.get("API_BASE", "https://ark.cn-beijing.volces.com/api/coding/v3")),
+        _env("LLM_API_BASE", os.environ.get("API_BASE", "")),
     )
     llm_api_key: str = _env(
         "SKILL_RUNNER_LLM_API_KEY",
@@ -136,11 +136,11 @@ class Settings:
     )
     llm_model_name: str = _env(
         "SKILL_RUNNER_LLM_MODEL_NAME",
-        _env("LLM_MODEL_NAME", os.environ.get("MODEL_NAME", "doubao-seed-2-0-code")),
+        _env("LLM_MODEL_NAME", os.environ.get("MODEL_NAME", "")),
     )
     llm_client_id: str = _env(
         "SKILL_RUNNER_LLM_CLIENT_ID",
-        os.environ.get("LLM_CLIENT_ID", "skill-runner-doubao"),
+        os.environ.get("LLM_CLIENT_ID", "skill-runner"),
     )
     llm_timeout_seconds: float = float(
         _env("SKILL_RUNNER_LLM_TIMEOUT", os.environ.get("LLM_TIMEOUT", "120"))

@@ -1,0 +1,73 @@
+# skill-runner Deployment + Service
+# 依赖：namespace.yaml、skill-runner-config.yaml、Secret skill-runner-llm
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skill-runner
+  namespace: skillhub-system
+  labels:
+    app: skill-runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skill-runner
+  template:
+    metadata:
+      labels:
+        app: skill-runner
+    spec:
+      serviceAccountName: skill-runner
+      containers:
+        - name: skill-runner
+          image: skill-runner:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "uvicorn"]
+          args: ["skill_runner.app:app", "--host", "$(POD_IP)", "--port", "8900"]
+          ports:
+            - containerPort: 8900
+          envFrom:
+            - configMapRef:
+                name: skill-runner-env
+            - secretRef:
+                name: skill-runner-llm
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          startupProbe:
+            httpGet: { path: /health, port: 8900 }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /health, port: 8900 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8900 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: skill-runner
+  namespace: skillhub-system
+spec:
+  type: ClusterIP
+  selector:
+    app: skill-runner
+  ports:
+    - name: http
+      port: 8900
+      targetPort: 8900

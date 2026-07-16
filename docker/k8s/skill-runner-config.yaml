@@ -1,0 +1,46 @@
+# skill-runner 配置
+# 包含：ConfigMap（非敏感配置）
+# 依赖：namespace.yaml
+#
+# 敏感配置请通过 Secret 创建：
+#   kubectl -n skillhub-system create secret generic skill-runner-llm \
+#     --from-literal=SKILL_RUNNER_LLM_API_KEY='REPLACE_WITH_LLM_API_KEY'
+#
+# 多实例时追加 Redis 密码：
+#   --from-literal=SKILL_RUNNER_REDIS_PASSWORD='REPLACE_WITH_REDIS_PASSWORD'
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: skill-runner-env
+  namespace: skillhub-system
+data:
+  SKILL_RUNNER_EXECUTOR: "k8s"
+  SKILL_RUNNER_K8S_NAMESPACE: "skillhub-workers"
+  SKILL_RUNNER_K8S_POD_IMAGE: "skill-agent-worker:latest"
+  SKILL_RUNNER_K8S_IMAGE_PULL_POLICY: "IfNotPresent"
+  # 私有镜像仓库与调度策略（按需填写 JSON）
+  SKILL_RUNNER_K8S_IMAGE_PULL_SECRETS: ""
+  SKILL_RUNNER_K8S_NODE_SELECTOR: ""
+  SKILL_RUNNER_K8S_TOLERATIONS: ""
+  SKILL_RUNNER_K8S_RESOURCES: ""
+  SKILL_RUNNER_K8S_RUNTIME_CLASS: ""
+  SKILL_RUNNER_POD_PRIVILEGED: "false"
+  SKILL_RUNNER_POD_RUN_AS_USER: "10001"
+  SKILL_RUNNER_POD_SECCOMP_PROFILE: "RuntimeDefault"
+  SKILL_RUNNER_POD_READY_TIMEOUT: "120"
+  SKILL_RUNNER_MAX_SESSIONS: "20"
+  SKILL_RUNNER_SESSION_TIMEOUT: "600"
+  SKILL_RUNNER_SESSION_MAX_LIFETIME: "3600"
+  SKILL_RUNNER_POOL_SIZE: "2"
+  SKILL_RUNNER_USER_DAILY_TOKEN_LIMIT: "50000000"
+  SKILL_RUNNER_MULTI_INSTANCE: "false"
+  SKILL_RUNNER_REDIS_HOST: ""
+  SKILL_RUNNER_REDIS_PORT: "6379"
+  SKILL_RUNNER_REDIS_DB: "0"
+  SKILL_RUNNER_PROXY_BASE_URL: "http://skill-runner.skillhub-system.svc.cluster.local:8900"
+  SKILL_RUNNER_LLM_PROVIDER: "OpenAI"
+  # LLM 服务（必填，接口兼容 OpenAI；密钥通过 Secret skill-runner-llm 注入）
+  SKILL_RUNNER_LLM_API_BASE: "REPLACE_WITH_LLM_API_BASE"
+  SKILL_RUNNER_LLM_MODEL_NAME: "REPLACE_WITH_LLM_MODEL_NAME"
+  SKILL_RUNNER_LLM_MAX_TOKENS: "32768"

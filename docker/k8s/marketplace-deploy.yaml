@@ -1,0 +1,65 @@
+# marketplace Deployment + Service
+# 依赖：namespace.yaml、marketplace-config.yaml、Secret skillhub-secrets
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skillhub-backend
+  namespace: skillhub-system
+  labels:
+    app: skillhub-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skillhub-backend
+  template:
+    metadata:
+      labels:
+        app: skillhub-backend
+    spec:
+      containers:
+        - name: marketplace
+          image: skillhub-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8100
+          envFrom:
+            - configMapRef:
+                name: marketplace-env
+            - secretRef:
+                name: skillhub-secrets
+          startupProbe:
+            httpGet: { path: /api/health, port: 8100 }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /api/health, port: 8100 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/health, port: 8100 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: skillhub-backend
+  namespace: skillhub-system
+spec:
+  type: ClusterIP
+  selector:
+    app: skillhub-backend
+  ports:
+    - name: http
+      port: 8100
+      targetPort: 8100
