@@ -110,7 +110,7 @@ See [Docker install (Windows, Chinese)](docs/zh/3.%20安装指导/Docker方式�
 
 ### Ecosystem
 
-[GitCode · openJiuwen](https://gitcode.com/openJiuwen)
+[openJiuwen.com](https://www.openjiuwen.com/en/)
 
 ## Documentation
 
