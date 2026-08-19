@@ -69,9 +69,54 @@ def _category_expr(category_id: str | None) -> str | None:
     cid = (category_id or "").strip()
     if not cid:
         return None
-    # Escape double quotes in category ids (unlikely for fixed taxonomy).
-    safe = cid.replace("\\", "\\\\").replace('"', '\\"')
-    return f'category_id == "{safe}"'
+    return _varchar_eq("category_id", cid)
+
+
+def parse_plugin_types(raw: str | None) -> list[str]:
+    """Normalize comma-separated plugin_type; teamskills -> swarmskill."""
+    out: list[str] = []
+    for part in str(raw or "").split(","):
+        normalized = part.strip().lower()
+        if normalized == "teamskills":
+            normalized = "swarmskill"
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def _varchar_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _varchar_eq(field: str, value: str) -> str:
+    return f"{field} == {_varchar_quote(value)}"
+
+
+def _plugin_type_expr(plugin_type: str | None) -> str | None:
+    types = parse_plugin_types(plugin_type)
+    if not types:
+        return None
+    if len(types) == 1:
+        return _varchar_eq("plugin_type", types[0])
+    quoted = ", ".join(_varchar_quote(t) for t in types)
+    return f"plugin_type in [{quoted}]"
+
+
+def _search_expr(
+    *,
+    category_id: str | None = None,
+    plugin_type: str | None = None,
+) -> str | None:
+    parts: list[str] = []
+    cat = _category_expr(category_id)
+    if cat:
+        parts.append(cat)
+    pt = _plugin_type_expr(plugin_type)
+    if pt:
+        parts.append(pt)
+    if not parts:
+        return None
+    return " and ".join(parts)
 
 
 def search_vectors(
@@ -80,6 +125,7 @@ def search_vectors(
     *,
     top_k: int,
     category_id: str | None = None,
+    plugin_type: str | None = None,
 ) -> list[list[tuple[str, float]]]:
     if isinstance(vectors, np.ndarray):
         data = vectors.astype(np.float32).tolist()
@@ -89,7 +135,7 @@ def search_vectors(
         return []
 
     limit = max(1, int(top_k))
-    expr = _category_expr(category_id)
+    expr = _search_expr(category_id=category_id, plugin_type=plugin_type)
     kwargs: dict[str, Any] = {
         "data": data,
         "anns_field": "embedding",

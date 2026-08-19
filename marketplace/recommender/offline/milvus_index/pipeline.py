@@ -24,10 +24,14 @@ from .embedding import embed_texts, make_embedding_model, upsert_batch
 from .milvus_client import (
     CollectionConfig,
     connect_milvus,
+    create_collection_with_schema,
     create_vector_index_if_needed,
     delete_by_asset_ids,
+    drop_collection_if_exists,
     ensure_collection,
     load_collection_config,
+    new_physical_collection_name,
+    promote_collection_alias,
 )
 from .planner import plan_full, plan_incremental
 from .skill_md import (
@@ -118,6 +122,7 @@ def _index_skills(
 ) -> tuple[int, int, dict[str, IndexedAsset], list[_IndexedItem], list[str]]:
     pending_ids: list[str] = []
     pending_categories: list[str] = []
+    pending_plugin_types: list[str] = []
     pending_texts: list[str] = []
     indexed: dict[str, IndexedAsset] = {}
     items: list[_IndexedItem] = []
@@ -127,7 +132,7 @@ def _index_skills(
     now = datetime.now(timezone.utc).isoformat()
 
     def flush() -> None:
-        nonlocal upserted, pending_ids, pending_categories, pending_texts
+        nonlocal upserted, pending_ids, pending_categories, pending_plugin_types, pending_texts
         if not pending_ids:
             return
         vectors = embed_texts(model, pending_texts)
@@ -136,9 +141,11 @@ def _index_skills(
             pending_ids,
             vectors,
             category_ids=pending_categories,
+            plugin_types=pending_plugin_types,
         )
         pending_ids = []
         pending_categories = []
+        pending_plugin_types = []
         pending_texts = []
 
     for skill in skills:
@@ -150,12 +157,14 @@ def _index_skills(
             extract, source = _resolve_embedding_text(skill, zip_path)
             pending_ids.append(skill.asset_id)
             pending_categories.append(skill.normalized_category_id)
+            pending_plugin_types.append(skill.normalized_plugin_type)
             pending_texts.append(extract.embedding_text)
             indexed[skill.asset_id] = IndexedAsset(
                 version=skill.latest_version,
                 artifact_sha256=skill.artifact_sha256,
                 indexed_at=now,
                 category_id=skill.normalized_category_id,
+                plugin_type=skill.normalized_plugin_type,
             )
             items.append(
                 _IndexedItem(
@@ -188,7 +197,7 @@ def _update_category_only(
     *,
     batch_size: int,
 ) -> tuple[int, dict[str, IndexedAsset], list[str]]:
-    """Reuse existing embeddings; only rewrite category_id."""
+    """Reuse existing embeddings; rewrite category_id / plugin_type."""
     if not skills:
         return 0, {}, []
 
@@ -216,10 +225,11 @@ def _update_category_only(
 
     pending_ids: list[str] = []
     pending_categories: list[str] = []
+    pending_plugin_types: list[str] = []
     pending_vectors: list[list[float]] = []
 
     def flush() -> None:
-        nonlocal upserted, pending_ids, pending_categories, pending_vectors
+        nonlocal upserted, pending_ids, pending_categories, pending_plugin_types, pending_vectors
         if not pending_ids:
             return
         vectors = np.asarray(pending_vectors, dtype=np.float32)
@@ -228,9 +238,11 @@ def _update_category_only(
             pending_ids,
             vectors,
             category_ids=pending_categories,
+            plugin_types=pending_plugin_types,
         )
         pending_ids = []
         pending_categories = []
+        pending_plugin_types = []
         pending_vectors = []
 
     for skill in skills:
@@ -244,12 +256,14 @@ def _update_category_only(
             continue
         pending_ids.append(skill.asset_id)
         pending_categories.append(skill.normalized_category_id)
+        pending_plugin_types.append(skill.normalized_plugin_type)
         pending_vectors.append(emb)
         indexed[skill.asset_id] = IndexedAsset(
             version=skill.latest_version,
             artifact_sha256=skill.artifact_sha256,
             indexed_at=now,
             category_id=skill.normalized_category_id,
+            plugin_type=skill.normalized_plugin_type,
         )
         if len(pending_ids) >= batch_size:
             flush()
@@ -428,22 +442,58 @@ def run_full_rebuild(
         collection_name=collection_name,
         host=host,
         port=port,
-        recreate=True,
+        recreate=False,
     )
     connect_milvus(cfg)
-    collection = ensure_collection(cfg)
-
-    upserted, failed, indexed, items, _failed_ids = _index_skills(
-        collection,
-        model,
-        plan.to_upsert,
-        app_cfg.download_dir,
-        batch_size=batch_size,
-        download_force=download_force,
-        app_cfg=app_cfg,
+    public_name = cfg.collection
+    physical = new_physical_collection_name(public_name)
+    logger.info(
+        "Full rebuild: build physical=%s then swap alias=%s",
+        physical,
+        public_name,
     )
+    collection = create_collection_with_schema(cfg, physical)
+
+    try:
+        upserted, failed, indexed, items, _failed_ids = _index_skills(
+            collection,
+            model,
+            plan.to_upsert,
+            app_cfg.download_dir,
+            batch_size=batch_size,
+            download_force=download_force,
+            app_cfg=app_cfg,
+        )
+        create_vector_index_if_needed(collection)
+        previous = promote_collection_alias(public_name, physical)
+    except Exception:
+        logger.exception(
+            "full rebuild failed before alias swap; drop incomplete %s",
+            physical,
+        )
+        try:
+            drop_collection_if_exists(physical)
+        except Exception:
+            logger.exception("failed to drop incomplete collection %s", physical)
+        raise
+
     replace_state(indexed, state_path)
-    create_vector_index_if_needed(collection)
+    if previous and previous != physical:
+        try:
+            drop_collection_if_exists(previous)
+        except Exception:
+            logger.warning(
+                "full rebuild: left orphan collection %s (alias already points to %s)",
+                previous,
+                physical,
+                exc_info=True,
+            )
+    try:
+        from recommender.online.search import clear_collection_cache
+
+        clear_collection_cache()
+    except Exception:
+        logger.warning("full rebuild: clear_collection_cache failed", exc_info=True)
 
     stats = PipelineStats(
         mode="full",

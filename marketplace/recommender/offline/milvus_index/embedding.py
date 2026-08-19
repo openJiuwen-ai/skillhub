@@ -144,12 +144,16 @@ def upsert_batch(
     vectors: np.ndarray,
     *,
     category_ids: list[str] | None = None,
+    plugin_types: list[str] | None = None,
 ) -> int:
     vectors_list = vectors.tolist()
     categories = category_ids if category_ids is not None else [""] * len(asset_ids)
+    types = plugin_types if plugin_types is not None else [""] * len(asset_ids)
     if len(categories) != len(asset_ids):
         raise ValueError("category_ids length must match asset_ids")
-    payload = [asset_ids, categories, vectors_list]
+    if len(types) != len(asset_ids):
+        raise ValueError("plugin_types length must match asset_ids")
+    payload = [asset_ids, categories, types, vectors_list]
     try:
         collection.upsert(payload)
         return len(asset_ids)

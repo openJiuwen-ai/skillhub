@@ -115,9 +115,9 @@ TTL 默认 7200s。每次 `redis_sync` 会 `SET` 同一 key 并续期；TTL 是�
 
 | 场景 | 行为 |
 |------|------|
-| collection 不存在 | 按当前 embedding 维度建表，并尽量给 `category_id` 建标量索引；向量 HNSW 在首次 `create_vector_index_if_needed()` 时补 |
-| `--mode incremental` / 在线 search | `recreate=False`：没有就建，有就复用 |
-| `--mode full` | `recreate=True`：同名 collection 先 drop 再重建 |
+| collection / alias 不存在 | 按当前 embedding 维度建物理表（名=配置名），并尽量给 `category_id` 建标量索引；向量 HNSW 在首次 `create_vector_index_if_needed()` 时补 |
+| `--mode incremental` / 在线 search | 打开 `MILVUS_COLLECTION`（可为 alias），没有则建同名物理表 |
+| `--mode full` | **先建**新物理表 `skill_index__{ts}_{pid}` 并灌数、建索引、`load`，再用 **alias** 把 `MILVUS_COLLECTION` 切到新表，最后删旧物理表。重建窗口内线上仍读旧库 |
 | 已有 collection 但缺必填字段 | incremental **报错**，必须 full recreate |
 
 服务端若开启 `authorizationEnabled`，配 `MILVUS_USER` / `MILVUS_PASSWORD`；未开鉴权时可留空，行为与原先明文连接一致。
@@ -130,7 +130,7 @@ marketplace 进程内 APScheduler（需推荐开关打开）与手动 CLI **调�
 |------|------|----------|
 | `package_sync` | 拉最新 zip | 每小时第 30 分 |
 | `milvus_index --mode incremental` | 按 state 差量：版本/sha 变则重编码；仅类目变则复用向量改 `category_id`；下架则删除 | 每小时整点 |
-| `milvus_index --mode full` | drop + 全量 upsert | 每天 3:00；换 embedding 维度 / 改 schema 必须跑 |
+| `milvus_index --mode full` | 新物理表灌全量 → alias 切换 → 删旧表 | 每天 3:00；换 embedding 维度 / 改 schema 必须跑 |
 | `redis_sync` | 写 TopK + 用户序列 | 每小时第 15 分 |
 
 启动时若 `MARKET_REC_REBUILD_ON_STARTUP=true`，会立刻异步跑一次 `redis_sync` 再 `milvus_full`（**不含** `package_sync` / incremental）。为 `false` 时启动不跑离线任务，等到 cron。日志关键字：`recommender enabled`、`rebuild_on_startup=`、`redis_sync(startup)` / `milvus_full(startup)`。
@@ -251,7 +251,7 @@ flowchart TD
 
 ## 改代码时的注意点
 
-- 在线 worker 会缓存已 `load()` 的 collection；full drop 重建后需重启 marketplace 或清 `clear_collection_cache()`，否则可能打到旧句柄。
+- 在线 worker 会缓存已 `load()` 的 collection 句柄。日常 incremental 不需要热加载（数据在共享 Milvus）。`milvus_full` 用 **alias 切换**后，多数请求仍经 `MILVUS_COLLECTION` 这个稳定名；换维度后若某实例句柄异常，会回退 Redis TopK。跑 full 的进程会 `clear_collection_cache()`。
 - 列表路径不要再 HTTP 调 `/recommend`，避免套一层鉴权、也避免 `top_k=10` 默认值打首页。侧边栏角标也不要为了数字再打一次 `order_by=recommend`。
 - 错误对客户端不要回 `str(exc)`；API 用结构化 `error` / `error_code`，细节只打服务端日志。
 - 推荐与检索 embedding 配置隔离，避免换检索模型把 Milvus 维度带崩。

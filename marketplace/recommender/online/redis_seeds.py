@@ -14,6 +14,7 @@ from recommender.offline.redis_sync.tasks.user_sequences import (
     user_seq_index_key,
     user_seq_key,
 )
+from recommender.online.search import parse_plugin_types
 from recommender.online.types import RecommendItem
 from recommender.shared.config import RedisConfig, load_config
 
@@ -76,16 +77,18 @@ def load_topk_install_items(
     redis_cfg: RedisConfig | None = None,
     exclude_ids: set[str] | None = None,
     category_id: str | None = None,
+    plugin_type: str | None = None,
 ) -> list[RecommendItem]:
     """Load install-count ranking from Redis.
 
     top_k<=0 means return the full snapshot (tests / explicit dump).
     Online recommend_for_user always passes a positive top_k.
-    category_id filters items that carry category_id in the snapshot.
+    category_id / plugin_type filter items that carry those fields in the snapshot.
     """
     limit = int(top_k)
     exclude = exclude_ids or set()
     cid = (category_id or "").strip()
+    plugin_types = parse_plugin_types(plugin_type)
     client, cfg = _redis(redis_cfg)
     key = cfg.topk_install.key
     raw = client.get(key)
@@ -114,6 +117,12 @@ def load_topk_install_items(
         if cid:
             row_cid = str(row.get("category_id") or "").strip()
             if row_cid != cid:
+                continue
+        if plugin_types:
+            row_pt = str(row.get("plugin_type") or "").strip().lower()
+            if row_pt == "teamskills":
+                row_pt = "swarmskill"
+            if row_pt not in plugin_types:
                 continue
         rank = int(row.get("rank") or (i + 1))
         ranked_rows.append((rank, aid))

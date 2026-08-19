@@ -93,6 +93,7 @@ def recommend(
             request_id=body.request_id,
             timestamp=body.timestamp,
             category_id=body.category_id,
+            plugin_type=body.plugin_type,
         )
     except Exception as exc:
         logger.exception("recommend failed: %s", exc)
@@ -106,6 +107,7 @@ def recommend(
             user_id=user_id,
             source=source,
             category_id=(body.category_id or "").strip(),
+            plugin_type=(body.plugin_type or "").strip(),
             items=[RecommendItemOut(asset_id=x.asset_id, score=x.score) for x in items],
         ),
     )
@@ -115,7 +117,12 @@ def recommend(
 def recommend_by_ids_api(body: ByIdsRequest) -> ResponseModel[RecommendItemsData]:
     _ensure_enabled()
     try:
-        items = run_recommend_by_ids(body.asset_ids, body.top_k, category_id=body.category_id)
+        items = run_recommend_by_ids(
+            body.asset_ids,
+            body.top_k,
+            category_id=body.category_id,
+            plugin_type=body.plugin_type,
+        )
     except Exception as exc:
         logger.exception("recommend by_ids failed: %s", exc)
         raise _recommend_service_error() from exc
@@ -130,7 +137,12 @@ def recommend_by_ids_api(body: ByIdsRequest) -> ResponseModel[RecommendItemsData
 def recommend_by_queries_api(body: ByQueriesRequest) -> ResponseModel[RecommendItemsData]:
     _ensure_enabled()
     try:
-        items = run_recommend_by_queries(body.queries, body.top_k, category_id=body.category_id)
+        items = run_recommend_by_queries(
+            body.queries,
+            body.top_k,
+            category_id=body.category_id,
+            plugin_type=body.plugin_type,
+        )
     except Exception as exc:
         logger.exception("recommend by_queries failed: %s", exc)
         raise _recommend_service_error() from exc

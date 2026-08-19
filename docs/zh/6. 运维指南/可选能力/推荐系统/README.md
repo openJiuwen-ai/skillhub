@@ -60,7 +60,7 @@
    |------|----------------|------|
    | `package_sync` | `30 * * * *` | 每小时的第 30 分：从对象存储拉 Skill zip |
    | `milvus_incremental` | `0 * * * *` | 每小时整点：增量更新向量 |
-   | `milvus_full` | `0 3 * * *` | 每天 03:00：删掉旧 collection 再全量重建 |
+   | `milvus_full` | `0 3 * * *` | 每天 03:00：新物理表灌全量后 alias 切换，再删旧表 |
    | `redis_sync` | `15 * * * *` | 每小时的第 15 分：写 Redis 快照 |
 
 2. **启动补偿**（可选，由 `MARKET_REC_REBUILD_ON_STARTUP` 控制）
@@ -80,7 +80,7 @@
 
 注意：`milvus_full` 要读本地下载目录里的 zip。若从未跑过 `package_sync`、目录是空的，full 会建出空（或几乎空）的 collection，**这不是接口挂了**。首次验收建议：`REBUILD_ON_STARTUP=true` **之前**先手动跑一次 `package_sync`，或启动后再手动补跑拉包 + full。
 
-**Milvus 里没有 collection 时**：跑 `milvus_index`（incremental / full）或第一次在线检索时会按当前 embedding 维度**自动创建** `skill_index`。full 模式若已有同名 collection 会先删再建。
+**Milvus 里没有 collection 时**：跑 `milvus_index`（incremental / full）或第一次在线检索时会按当前 embedding 维度**自动创建** `skill_index`。full 模式会先灌新物理表，再用 alias 把配置名切过去，最后删旧表（重建过程中线上仍可读旧索引）。
 
 ## 怎么验收
 
@@ -182,7 +182,7 @@ python -m recommender.offline.redis_sync
 |------|----------------|------------------|
 | `package_sync` | MySQL + 对象存储 | 下载目录出现 zip；日志 `package_sync done` |
 | `milvus_index --mode incremental` | 上一项 + Embedding + Milvus | collection 没有则自动建；按变更 upsert |
-| `milvus_index --mode full` | 同上 | **先删再建** collection，全量写入；换模型维度必须用这个 |
+| `milvus_index --mode full` | 同上 | 新物理表全量写入 → alias 切换 → 删旧表；换模型维度必须用这个 |
 | `redis_sync` | MySQL + Redis | Redis 出现 `skill_rec:topk:install`；有行为的用户有 `skill_rec:user:{id}:download` 等 |
 
 手动跑时缺哪类配置，就会连错库、连不上 Milvus，或 Embedding 401。推荐 Embedding 必须用 `MARKET_REC_EMBEDDING_*`，填检索那套 `MARKET_RETRIEVAL_EMBEDDING_*` **无效**。

@@ -14,7 +14,7 @@ class IndexPlan:
     active: list[ActiveSkillVersion]
     to_upsert: list[ActiveSkillVersion]
     to_delete: list[str]  # asset_ids removed from catalog / went offline
-    category_only: list[ActiveSkillVersion]  # category changed; reuse embedding
+    category_only: list[ActiveSkillVersion]  # category / plugin_type changed; reuse embedding
 
 
 def content_needs_reindex(skill: ActiveSkillVersion, indexed: IndexedAsset | None) -> bool:
@@ -34,11 +34,22 @@ def category_needs_update(skill: ActiveSkillVersion, indexed: IndexedAsset | Non
     return indexed.category_id != skill.normalized_category_id
 
 
+def plugin_type_needs_update(skill: ActiveSkillVersion, indexed: IndexedAsset | None) -> bool:
+    if indexed is None:
+        return False
+    return (indexed.plugin_type or "").strip().lower() != skill.normalized_plugin_type
+
+
+def scalars_need_update(skill: ActiveSkillVersion, indexed: IndexedAsset | None) -> bool:
+    """True when category_id or plugin_type changed and content fingerprint did not."""
+    return category_needs_update(skill, indexed) or plugin_type_needs_update(skill, indexed)
+
+
 def needs_reindex(skill: ActiveSkillVersion, indexed: IndexedAsset | None) -> bool:
-    """True when content or category requires a Milvus write."""
+    """True when content or scalar metadata requires a Milvus write."""
     if content_needs_reindex(skill, indexed):
         return True
-    return category_needs_update(skill, indexed)
+    return scalars_need_update(skill, indexed)
 
 
 def plan_incremental(
@@ -54,7 +65,7 @@ def plan_incremental(
         indexed = state.get(skill.asset_id)
         if content_needs_reindex(skill, indexed):
             to_upsert.append(skill)
-        elif category_needs_update(skill, indexed):
+        elif scalars_need_update(skill, indexed):
             category_only.append(skill)
 
     to_delete = sorted(asset_id for asset_id in state.assets if asset_id not in active_ids)

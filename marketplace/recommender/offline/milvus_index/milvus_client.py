@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,7 +12,7 @@ from recommender.shared.config import _env, load_config
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_FIELDS = ("asset_id", "category_id", "embedding")
+REQUIRED_FIELDS = ("asset_id", "category_id", "plugin_type", "embedding")
 
 
 @dataclass(frozen=True)
@@ -79,23 +81,10 @@ def _collection_has_required_fields(collection: Any) -> bool:
     return all(name in names for name in REQUIRED_FIELDS)
 
 
-def ensure_collection(cfg: CollectionConfig):
-    from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, utility
+def _build_schema(dim: int):
+    from pymilvus import CollectionSchema, DataType, FieldSchema
 
-    if cfg.recreate and utility.has_collection(cfg.collection):
-        utility.drop_collection(cfg.collection)
-
-    if utility.has_collection(cfg.collection):
-        collection = Collection(cfg.collection)
-        if _collection_has_required_fields(collection):
-            return collection
-        raise RuntimeError(
-            f"Milvus collection {cfg.collection!r} is missing required fields "
-            f"{REQUIRED_FIELDS}; run milvus full rebuild with recreate "
-            "(MARKET_REC_REBUILD_ON_STARTUP or --mode full)."
-        )
-
-    schema = CollectionSchema(
+    return CollectionSchema(
         fields=[
             FieldSchema(
                 name="asset_id",
@@ -109,22 +98,143 @@ def ensure_collection(cfg: CollectionConfig):
                 max_length=64,
             ),
             FieldSchema(
+                name="plugin_type",
+                dtype=DataType.VARCHAR,
+                max_length=32,
+            ),
+            FieldSchema(
                 name="embedding",
                 dtype=DataType.FLOAT_VECTOR,
-                dim=cfg.dim,
+                dim=dim,
             ),
         ],
         description="Swarm skill embeddings",
     )
-    collection = Collection(name=cfg.collection, schema=schema)
-    try:
-        collection.create_index(
-            field_name="category_id",
-            index_params={"index_type": "INVERTED"},
-        )
-    except Exception:
-        logger.warning("failed to create category_id scalar index", exc_info=True)
+
+
+def create_collection_with_schema(cfg: CollectionConfig, name: str):
+    """Create an empty physical collection. Never drops an existing name."""
+    from pymilvus import Collection
+
+    collection = Collection(name=name, schema=_build_schema(cfg.dim))
+    for field_name in ("category_id", "plugin_type"):
+        try:
+            collection.create_index(
+                field_name=field_name,
+                index_params={"index_type": "INVERTED"},
+            )
+        except Exception:
+            logger.warning("failed to create %s scalar index", field_name, exc_info=True)
     return collection
+
+
+def ensure_collection(cfg: CollectionConfig):
+    """Open public name (alias or collection), or create a physical collection with that name.
+
+    Full rebuild no longer uses drop-here; see ``promote_collection_alias``.
+    """
+    from pymilvus import Collection, utility
+
+    if cfg.recreate:
+        logger.warning(
+            "ensure_collection: recreate=True is ignored; full rebuild uses alias swap"
+        )
+
+    if utility.has_collection(cfg.collection):
+        collection = Collection(cfg.collection)
+        if _collection_has_required_fields(collection):
+            return collection
+        raise RuntimeError(
+            f"Milvus collection {cfg.collection!r} is missing required fields "
+            f"{REQUIRED_FIELDS}; run milvus full rebuild with recreate "
+            "(MARKET_REC_REBUILD_ON_STARTUP or --mode full)."
+        )
+
+    return create_collection_with_schema(cfg, cfg.collection)
+
+
+def new_physical_collection_name(public_name: str) -> str:
+    """Unique physical name for a blue/green full rebuild."""
+    base = (public_name or "skill_index").strip() or "skill_index"
+    return f"{base}__{int(time.time())}_{os.getpid()}"
+
+
+def resolve_physical_name(public_name: str) -> str | None:
+    """Physical collection currently backing ``public_name`` (self or via alias)."""
+    from pymilvus import utility
+
+    name = (public_name or "").strip()
+    if not name:
+        return None
+    physicals = list(utility.list_collections() or [])
+    if name in physicals:
+        return name
+    for col in physicals:
+        try:
+            aliases = list(utility.list_aliases(col) or [])
+        except Exception:
+            continue
+        if name in aliases:
+            return col
+    return None
+
+
+def promote_collection_alias(public_name: str, new_physical: str) -> str | None:
+    """Point ``public_name`` at ``new_physical`` without serving an empty collection.
+
+    Returns the previous physical collection name (caller may drop it), or None.
+    """
+    from pymilvus import utility
+
+    alias = (public_name or "").strip()
+    if not alias:
+        raise ValueError("public_name is required")
+    if not (new_physical or "").strip():
+        raise ValueError("new_physical is required")
+    if not utility.has_collection(new_physical):
+        raise RuntimeError(f"new physical collection missing: {new_physical!r}")
+
+    previous = resolve_physical_name(alias)
+
+    if previous == alias:
+        # Existing deployments: live name is a physical collection, not an alias yet.
+        parked = f"{alias}__old_{int(time.time())}_{os.getpid()}"
+        logger.info(
+            "full rebuild: rename live %s -> %s, then alias %s -> %s",
+            alias,
+            parked,
+            alias,
+            new_physical,
+        )
+        utility.rename_collection(alias, parked)
+        previous = parked
+        utility.create_alias(collection_name=new_physical, alias=alias)
+        return previous
+
+    if previous:
+        logger.info(
+            "full rebuild: alter alias %s (%s -> %s)",
+            alias,
+            previous,
+            new_physical,
+        )
+        utility.alter_alias(collection_name=new_physical, alias=alias)
+        return previous if previous != new_physical else None
+
+    logger.info("full rebuild: create alias %s -> %s", alias, new_physical)
+    utility.create_alias(collection_name=new_physical, alias=alias)
+    return None
+
+
+def drop_collection_if_exists(name: str) -> bool:
+    from pymilvus import utility
+
+    target = (name or "").strip()
+    if not target or not utility.has_collection(target):
+        return False
+    utility.drop_collection(target)
+    logger.info("dropped milvus collection %s", target)
+    return True
 
 
 def delete_by_asset_ids(collection: Any, asset_ids: list[str]) -> int:

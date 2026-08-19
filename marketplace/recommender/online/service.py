@@ -38,6 +38,7 @@ def recommend_by_ids(
     collection=None,
     exclude_ids: set[str] | None = None,
     category_id: str | None = None,
+    plugin_type: str | None = None,
 ) -> list[RecommendItem]:
     """
     Use embeddings of seed asset_ids as queries, search Milvus,
@@ -66,6 +67,7 @@ def recommend_by_ids(
         vectors,
         top_k=search_limit,
         category_id=category_id,
+        plugin_type=plugin_type,
     )
     return merge_max_score(hits, exclude_ids=exclude, top_k=top_k)
 
@@ -77,6 +79,7 @@ def recommend_by_queries(
     collection=None,
     model=None,
     category_id: str | None = None,
+    plugin_type: str | None = None,
 ) -> list[RecommendItem]:
     from recommender.offline.milvus_index.embedding import embed_texts
 
@@ -93,6 +96,7 @@ def recommend_by_queries(
         vectors,
         top_k=top_k,
         category_id=category_id,
+        plugin_type=plugin_type,
     )
     return merge_max_score(hits, exclude_ids=None, top_k=top_k)
 
@@ -135,22 +139,25 @@ def recommend_for_user(
     timestamp: int | float | None = None,
     collection=None,
     category_id: str | None = None,
+    plugin_type: str | None = None,
 ) -> tuple[list[RecommendItem], str]:
     """
     Online cascade:
       1) Redis user history -> Milvus by_ids (exclude full history) -> MMR
-      2) else Redis install-count TopK (history filtered, optional category filter)
+      2) else Redis install-count TopK (history filtered, optional category / plugin_type)
     """
     top_k = max(1, int(top_k))
     uid = str(user_id or "").strip()
     cid = (category_id or "").strip() or None
+    ptype = (plugin_type or "").strip() or None
     logger.info(
-        "recommend_for_user request_id=%s user_id=%s timestamp=%s top_k=%s category_id=%s",
+        "recommend_for_user request_id=%s user_id=%s timestamp=%s top_k=%s category_id=%s plugin_type=%s",
         request_id or "",
         uid,
         timestamp,
         top_k,
         cid or "",
+        ptype or "",
     )
 
     history = load_user_seed_ids(uid) if uid else []
@@ -168,6 +175,7 @@ def recommend_for_user(
                 collection=coll,
                 exclude_ids=history_set,
                 category_id=cid,
+                plugin_type=ptype,
             )
         except Exception:
             logger.exception("recommend_for_user: milvus recall failed; fallback topk_install")
@@ -187,6 +195,11 @@ def recommend_for_user(
     # Fallback: install-count ranking (Redis snapshot), capped to requested top_k.
     # Passing 0 used to dump the full catalog into the list hydrate path.
     return (
-        load_topk_install_items(top_k, exclude_ids=history_set, category_id=cid),
+        load_topk_install_items(
+            top_k,
+            exclude_ids=history_set,
+            category_id=cid,
+            plugin_type=ptype,
+        ),
         SOURCE_TOPK_INSTALL,
     )

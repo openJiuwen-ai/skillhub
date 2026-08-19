@@ -26,6 +26,10 @@ class RecommendRequest(BaseModel):
         "",
         description="Optional root category id (e.g. software-development); empty = all",
     )
+    plugin_type: str = Field(
+        "",
+        description="Optional plugin type filter: skill / swarmskill (comma-separated). Empty = all.",
+    )
 
 
 class RecommendItemOut(BaseModel):
@@ -38,6 +42,7 @@ class RecommendData(BaseModel):
     user_id: str
     source: str
     category_id: str = ""
+    plugin_type: str = ""
     items: list[RecommendItemOut]
 
 
@@ -45,6 +50,7 @@ class ByIdsRequest(BaseModel):
     asset_ids: list[str] = Field(..., min_length=1)
     top_k: int = Field(10, ge=1, le=500)
     category_id: str = Field("", description="Optional category filter for Milvus search")
+    plugin_type: str = Field("", description="Optional plugin_type filter for Milvus search")
 
 
 class ByQueriesRequest(BaseModel):
@@ -56,6 +62,7 @@ class ByQueriesRequest(BaseModel):
     )
     top_k: int = Field(10, ge=1, le=500)
     category_id: str = Field("", description="Optional category filter for Milvus search")
+    plugin_type: str = Field("", description="Optional plugin_type filter for Milvus search")
 
 
 class ScoredItem(BaseModel):

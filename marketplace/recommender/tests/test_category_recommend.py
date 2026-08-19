@@ -29,7 +29,14 @@ from recommender.offline.milvus_index.state import IndexedAsset, IndexState, loa
 from recommender.offline.package_sync.db import ActiveSkillVersion
 from recommender.online.mmr import mmr_rerank
 from recommender.online.redis_seeds import load_topk_install_items
-from recommender.online.search import _category_expr, merge_max_score, search_vectors
+from recommender.online.search import (
+    _category_expr,
+    _plugin_type_expr,
+    _search_expr,
+    merge_max_score,
+    parse_plugin_types,
+    search_vectors,
+)
 from recommender.online.service import (
     SOURCE_TOPK_INSTALL,
     SOURCE_USER_HISTORY,
@@ -45,13 +52,14 @@ def _skill(
     version: str = "1.0.0",
     sha: str | None = "abc",
     category_id: str = "",
+    plugin_type: str = "skill",
 ) -> ActiveSkillVersion:
     return ActiveSkillVersion(
         asset_id=asset_id,
         name=asset_id,
         display_name=asset_id,
         short_desc="desc",
-        plugin_type="skill",
+        plugin_type=plugin_type,
         status="ONLINE",
         latest_version=version,
         version_id=f"v-{asset_id}",
@@ -101,9 +109,9 @@ class TestPlannerCategory(unittest.TestCase):
         state = IndexState(
             updated_at="t",
             assets={
-                "keep": IndexedAsset("1.0.0", "abc", "t", "software-development"),
-                "cat": IndexedAsset("1.0.0", "abc", "t", ""),
-                "gone": IndexedAsset("1.0.0", "abc", "t", ""),
+                "keep": IndexedAsset("1.0.0", "abc", "t", "software-development", "skill"),
+                "cat": IndexedAsset("1.0.0", "abc", "t", "", "skill"),
+                "gone": IndexedAsset("1.0.0", "abc", "t", "", "skill"),
             },
         )
         active = [
@@ -113,7 +121,7 @@ class TestPlannerCategory(unittest.TestCase):
             _skill("ver", version="2.0.0", category_id=""),
         ]
         # ver not in state -> content upsert; also add ver to state as old for content path
-        state.assets["ver"] = IndexedAsset("1.0.0", "abc", "t", "")
+        state.assets["ver"] = IndexedAsset("1.0.0", "abc", "t", "", "skill")
 
         plan = plan_incremental(active, state)
         upsert_ids = {s.asset_id for s in plan.to_upsert}
@@ -131,6 +139,35 @@ class TestPlannerCategory(unittest.TestCase):
         self.assertEqual(len(plan.to_upsert), 2)
         self.assertEqual(plan.category_only, [])
         self.assertEqual(plan.to_delete, [])
+
+
+class TestPlannerPluginType(unittest.TestCase):
+    def test_plugin_type_only_change_reuses_embedding_path(self) -> None:
+        from recommender.offline.milvus_index.planner import plugin_type_needs_update, scalars_need_update
+
+        skill = _skill("a1", plugin_type="swarmskill")
+        indexed = IndexedAsset(
+            version="1.0.0",
+            artifact_sha256="abc",
+            indexed_at="t",
+            category_id="",
+            plugin_type="skill",
+        )
+        self.assertFalse(content_needs_reindex(skill, indexed))
+        self.assertTrue(plugin_type_needs_update(skill, indexed))
+        self.assertTrue(scalars_need_update(skill, indexed))
+
+        state = IndexState(updated_at="t", assets={"a1": indexed})
+        plan = plan_incremental([skill], state)
+        self.assertEqual([s.asset_id for s in plan.category_only], ["a1"])
+        self.assertEqual(plan.to_upsert, [])
+
+    def test_teamskills_alias_does_not_trigger_update(self) -> None:
+        from recommender.offline.milvus_index.planner import plugin_type_needs_update
+
+        skill = _skill("a1", plugin_type="teamskills")
+        indexed = IndexedAsset("1.0.0", "abc", "t", "", "swarmskill")
+        self.assertFalse(plugin_type_needs_update(skill, indexed))
 
 
 class TestStateCategory(unittest.TestCase):
@@ -168,6 +205,7 @@ class TestStateCategory(unittest.TestCase):
             )
             loaded = load_state(path)
             self.assertEqual(loaded.get("a1").category_id, "")
+            self.assertEqual(loaded.get("a1").plugin_type, "")
 
 
 class TestSearchCategoryExpr(unittest.TestCase):
@@ -184,6 +222,50 @@ class TestSearchCategoryExpr(unittest.TestCase):
 
     def test_category_expr_escapes_quotes(self) -> None:
         self.assertEqual(_category_expr('a"b'), 'category_id == "a\\"b"')
+
+
+class TestSearchPluginTypeExpr(unittest.TestCase):
+    def test_parse_plugin_types(self) -> None:
+        self.assertEqual(parse_plugin_types(""), [])
+        self.assertEqual(parse_plugin_types("skill"), ["skill"])
+        self.assertEqual(parse_plugin_types("teamskills"), ["swarmskill"])
+        self.assertEqual(parse_plugin_types("skill, swarmskill"), ["skill", "swarmskill"])
+
+    def test_plugin_type_expr_single(self) -> None:
+        self.assertEqual(_plugin_type_expr("skill"), 'plugin_type == "skill"')
+        self.assertIsNone(_plugin_type_expr(""))
+
+    def test_plugin_type_expr_multi(self) -> None:
+        self.assertEqual(
+            _plugin_type_expr("skill,swarmskill"),
+            'plugin_type in ["skill", "swarmskill"]',
+        )
+
+    def test_search_expr_combines(self) -> None:
+        self.assertEqual(
+            _search_expr(category_id="software-development", plugin_type="skill"),
+            'category_id == "software-development" and plugin_type == "skill"',
+        )
+
+    def test_search_vectors_passes_plugin_type_expr(self) -> None:
+        collection = MagicMock()
+        hit = SimpleNamespace(distance=0.9, entity={"asset_id": "x1"}, id="x1")
+        collection.search.return_value = [[hit]]
+        search_vectors(
+            collection,
+            [[0.1, 0.2]],
+            top_k=5,
+            plugin_type="swarmskill",
+        )
+        kwargs = collection.search.call_args.kwargs
+        self.assertEqual(kwargs["expr"], 'plugin_type == "swarmskill"')
+
+    def test_search_vectors_no_expr_when_empty_plugin_type(self) -> None:
+        collection = MagicMock()
+        collection.search.return_value = [[]]
+        search_vectors(collection, [[0.1]], top_k=3, plugin_type="")
+        kwargs = collection.search.call_args.kwargs
+        self.assertNotIn("expr", kwargs)
 
     def test_search_vectors_passes_expr(self) -> None:
         collection = MagicMock()
@@ -257,6 +339,27 @@ class TestRedisTopkCategory(unittest.TestCase):
             )
         self.assertEqual([x.asset_id for x in out], ["b"])
 
+    def test_filter_plugin_type(self) -> None:
+        items = [
+            {"asset_id": "a", "rank": 1, "plugin_type": "skill"},
+            {"asset_id": "b", "rank": 2, "plugin_type": "swarmskill"},
+            {"asset_id": "c", "rank": 3, "plugin_type": "skill"},
+        ]
+        with self._patch_redis(items):
+            out = load_topk_install_items(0, plugin_type="skill")
+        self.assertEqual([x.asset_id for x in out], ["a", "c"])
+
+    def test_plugin_type_fills_limit_from_mixed_pool(self) -> None:
+        items = [
+            {"asset_id": "a", "rank": 1, "plugin_type": "skill"},
+            {"asset_id": "b", "rank": 2, "plugin_type": "swarmskill"},
+            {"asset_id": "c", "rank": 3, "plugin_type": "swarmskill"},
+            {"asset_id": "d", "rank": 4, "plugin_type": "skill"},
+        ]
+        with self._patch_redis(items):
+            out = load_topk_install_items(2, plugin_type="swarmskill")
+        self.assertEqual([x.asset_id for x in out], ["b", "c"])
+
     def test_missing_key_returns_empty(self) -> None:
         client = MagicMock()
         client.get.return_value = None
@@ -288,6 +391,32 @@ class TestRecommendForUserCategory(unittest.TestCase):
         self.assertEqual([i.asset_id for i in items], ["r1"])
         self.assertEqual(by_ids.call_args.kwargs["category_id"], "software-development")
         mmr.assert_called_once()
+
+    def test_history_path_passes_plugin_type(self) -> None:
+        with (
+            patch("recommender.online.service.load_user_seed_ids", return_value=["s1"]),
+            patch("recommender.online.service.get_loaded_collection", return_value=object()),
+            patch(
+                "recommender.online.service.recommend_by_ids",
+                return_value=[RecommendItem("r1", 0.9)],
+            ) as by_ids,
+            patch(
+                "recommender.online.service.rerank_mmr",
+                return_value=[RecommendItem("r1", 0.9)],
+            ),
+        ):
+            recommend_for_user(user_id="u1", top_k=5, plugin_type="swarmskill")
+        self.assertEqual(by_ids.call_args.kwargs["plugin_type"], "swarmskill")
+
+    def test_no_user_goes_topk_with_plugin_type(self) -> None:
+        with patch(
+            "recommender.online.service.load_topk_install_items",
+            return_value=[RecommendItem("t1", 1.0)],
+        ) as topk:
+            items, source = recommend_for_user(user_id="", top_k=3, plugin_type="skill")
+        self.assertEqual(source, SOURCE_TOPK_INSTALL)
+        self.assertEqual(topk.call_args.kwargs["plugin_type"], "skill")
+        self.assertEqual(len(items), 1)
 
     def test_history_empty_falls_back_topk_with_category(self) -> None:
         with (
@@ -363,6 +492,21 @@ class TestRecommendForUserCategory(unittest.TestCase):
         self.assertEqual([i.asset_id for i in items], ["r1"])
         self.assertEqual(search.call_args.kwargs["category_id"], "software-development")
 
+    def test_recommend_by_ids_uses_plugin_type_in_search(self) -> None:
+        collection = MagicMock()
+        with (
+            patch(
+                "recommender.online.service.fetch_embeddings_by_ids",
+                return_value={"s1": [0.1, 0.2]},
+            ),
+            patch(
+                "recommender.online.service.search_vectors",
+                return_value=[[("r1", 0.9), ("s1", 0.8)]],
+            ) as search,
+        ):
+            recommend_by_ids(["s1"], 5, collection=collection, plugin_type="skill")
+        self.assertEqual(search.call_args.kwargs["plugin_type"], "skill")
+
 
 class TestMmrNoAssert(unittest.TestCase):
     def test_mmr_basic(self) -> None:
@@ -393,12 +537,23 @@ class TestUpsertBatchPayload(unittest.TestCase):
             ["a", "b"],
             vectors,
             category_ids=["software-development", ""],
+            plugin_types=["skill", "swarmskill"],
         )
         self.assertEqual(n, 2)
         payload = collection.upsert.call_args.args[0]
         self.assertEqual(payload[0], ["a", "b"])
         self.assertEqual(payload[1], ["software-development", ""])
-        self.assertEqual(len(payload[2]), 2)
+        self.assertEqual(payload[2], ["skill", "swarmskill"])
+        self.assertEqual(len(payload[3]), 2)
+
+    def test_upsert_plugin_type_length_mismatch(self) -> None:
+        import numpy as np
+        from recommender.offline.milvus_index.embedding import upsert_batch
+
+        collection = MagicMock()
+        vectors = np.asarray([[0.1, 0.2]], dtype=np.float32)
+        with self.assertRaises(ValueError):
+            upsert_batch(collection, ["a"], vectors, plugin_types=["x", "y"])
 
     def test_upsert_category_length_mismatch(self) -> None:
         import numpy as np
@@ -430,6 +585,97 @@ class TestEnsureCollectionSchema(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 ensure_collection(cfg)
         self.assertIn("category_id", str(ctx.exception))
+
+    def test_existing_missing_plugin_type_raises(self) -> None:
+        from recommender.offline.milvus_index.milvus_client import (
+            CollectionConfig,
+            ensure_collection,
+        )
+
+        cfg = CollectionConfig("h", 19530, "skill_index", 4, recreate=False)
+        fake_collection = MagicMock()
+        fake_collection.schema.fields = [
+            SimpleNamespace(name="asset_id"),
+            SimpleNamespace(name="category_id"),
+            SimpleNamespace(name="embedding"),
+        ]
+        with (
+            patch("pymilvus.utility.has_collection", return_value=True),
+            patch("pymilvus.Collection", return_value=fake_collection),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                ensure_collection(cfg)
+        self.assertIn("plugin_type", str(ctx.exception))
+
+
+class TestPromoteCollectionAlias(unittest.TestCase):
+    def test_first_install_creates_alias(self) -> None:
+        from recommender.offline.milvus_index.milvus_client import promote_collection_alias
+
+        with (
+            patch("pymilvus.utility.has_collection", return_value=True),
+            patch(
+                "recommender.offline.milvus_index.milvus_client.resolve_physical_name",
+                return_value=None,
+            ),
+            patch("pymilvus.utility.create_alias") as create_alias,
+            patch("pymilvus.utility.alter_alias") as alter_alias,
+            patch("pymilvus.utility.rename_collection") as rename,
+        ):
+            previous = promote_collection_alias("skill_index", "skill_index__new")
+        self.assertIsNone(previous)
+        create_alias.assert_called_once_with(
+            collection_name="skill_index__new",
+            alias="skill_index",
+        )
+        alter_alias.assert_not_called()
+        rename.assert_not_called()
+
+    def test_existing_physical_renames_then_aliases(self) -> None:
+        from recommender.offline.milvus_index.milvus_client import promote_collection_alias
+
+        with (
+            patch("pymilvus.utility.has_collection", return_value=True),
+            patch(
+                "recommender.offline.milvus_index.milvus_client.resolve_physical_name",
+                return_value="skill_index",
+            ),
+            patch("pymilvus.utility.rename_collection") as rename,
+            patch("pymilvus.utility.create_alias") as create_alias,
+            patch("pymilvus.utility.alter_alias") as alter_alias,
+        ):
+            previous = promote_collection_alias("skill_index", "skill_index__new")
+        self.assertTrue(str(previous).startswith("skill_index__old_"))
+        rename.assert_called_once()
+        self.assertEqual(rename.call_args.args[0], "skill_index")
+        self.assertEqual(rename.call_args.args[1], previous)
+        create_alias.assert_called_once_with(
+            collection_name="skill_index__new",
+            alias="skill_index",
+        )
+        alter_alias.assert_not_called()
+
+    def test_existing_alias_is_altered(self) -> None:
+        from recommender.offline.milvus_index.milvus_client import promote_collection_alias
+
+        with (
+            patch("pymilvus.utility.has_collection", return_value=True),
+            patch(
+                "recommender.offline.milvus_index.milvus_client.resolve_physical_name",
+                return_value="skill_index__old",
+            ),
+            patch("pymilvus.utility.alter_alias") as alter_alias,
+            patch("pymilvus.utility.create_alias") as create_alias,
+            patch("pymilvus.utility.rename_collection") as rename,
+        ):
+            previous = promote_collection_alias("skill_index", "skill_index__new")
+        self.assertEqual(previous, "skill_index__old")
+        alter_alias.assert_called_once_with(
+            collection_name="skill_index__new",
+            alias="skill_index",
+        )
+        create_alias.assert_not_called()
+        rename.assert_not_called()
 
 
 class TestListRecommendGate(unittest.TestCase):

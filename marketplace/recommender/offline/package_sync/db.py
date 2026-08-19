@@ -37,6 +37,11 @@ class ActiveSkillVersion:
     def normalized_category_id(self) -> str:
         return (self.category_id or "").strip()
 
+    @property
+    def normalized_plugin_type(self) -> str:
+        raw = (self.plugin_type or "").strip().lower()
+        return "swarmskill" if raw == "teamskills" else raw
+
 
 def fetch_active_latest_skills(cfg: AppConfig) -> list[ActiveSkillVersion]:
     """

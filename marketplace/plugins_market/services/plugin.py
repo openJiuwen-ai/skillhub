@@ -1318,6 +1318,7 @@ def list_plugins_service(
             rec_items, rec_source = run_recommend_for_user(
                 user_id=viewer.user_id or "",
                 top_k=settings.rec_list_top_k,
+                plugin_type=plugin_type,
             )
             item_ids = [it.asset_id for it in rec_items][: settings.rec_list_top_k]
             if item_ids:
