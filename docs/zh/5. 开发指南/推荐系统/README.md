@@ -225,7 +225,7 @@ flowchart TD
 
 「全部」与分类页签不走上表左侧路径，直接 MySQL `install_count`。列表 hydrate 会过滤 `OFFLINE`、plugin_type；置顶 `pin_order` 插到未置顶前面。
 
-市场前端侧边栏「推荐精选」数量 **不调** `order_by=recommend`：未进入该 Tab 时用 `min(已上架数, rec_list_top_k)`（`GET /site/config`）；进入后用列表 `total`。
+市场前端侧边栏「推荐精选」数量 **不调** `order_by=recommend`：始终 `min(已上架数, rec_list_top_k)`（`GET /site/config`），进入该 Tab 后也不改成列表 `total`。
 
 ### HTTP 与身份
 

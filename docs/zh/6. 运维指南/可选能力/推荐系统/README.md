@@ -121,7 +121,7 @@ Bearer 调用时：body 里的 `user_id` 必须空着，或等于登录用户，
 
 - 「全部」和各个分类页签：按 MySQL `install_count` 排（老逻辑），**不走推荐**。
 - 「推荐精选」：`GET /api/v1/plugins?order_by=recommend`（不带 `category_id`），一次最多 `MARKET_REC_LIST_TOP_K` 条，再按页切片。hydrate 会丢掉 `OFFLINE` / 类型不符的 ID，所以 `total` 可能 **小于该上限**。
-- 侧边栏「推荐精选」旁的数字：**不调推荐接口**。未点进该 Tab 时显示 `min(已上架数, rec_list_top_k)`（`rec_list_top_k` 来自 `GET /site/config`，对应 `MARKET_REC_LIST_TOP_K`）；点进去后改用当前列表真实 `total`。
+- 侧边栏「推荐精选」旁的数字：**不调推荐接口**，始终显示 `min(已上架数, rec_list_top_k)`（`rec_list_top_k` 来自 `GET /site/config`）。点进该 Tab 后也不改成列表 `total`。
 - 搜索框有关键词时走检索，**不会**走推荐。
 - 带 `category_id` 再传 `order_by=recommend` 会回退成下载量排序（分类下暂不展示推荐）。
 

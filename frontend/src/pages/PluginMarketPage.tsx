@@ -716,9 +716,7 @@ export default function PluginMarketPage() {
       out.newest = approvedSkillMarketTotal
       out.all = approvedSkillMarketTotal
     }
-    if (isFeaturedCategory && typeof total === 'number') {
-      out.featured = total
-    } else if (
+    if (
       typeof approvedSkillMarketTotal === 'number'
       && typeof featuredListTopK === 'number'
       && featuredListTopK > 0
@@ -731,7 +729,7 @@ export default function PluginMarketPage() {
       if (key != null && typeof n === 'number') out[key] = n
     }
     return out
-  }, [approvedSkillMarketTotal, categoryTotalSignature, featuredListTopK, isFeaturedCategory, total])
+  }, [approvedSkillMarketTotal, categoryTotalSignature, featuredListTopK])
 
   const marketAssetIds = useMemo(() => marketPlugins.map(plugin => plugin.assetId).filter(Boolean), [marketPlugins])
   const interactionViewerKey = isAuthenticated ? `user:${user?.id ? String(user.id) : 'token'}` : 'guest'

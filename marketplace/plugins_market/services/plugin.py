@@ -1320,15 +1320,8 @@ def list_plugins_service(
                 top_k=settings.rec_list_top_k,
             )
             item_ids = [it.asset_id for it in rec_items][: settings.rec_list_top_k]
-            logger.info(
-                "recommend path: source=%s user_id=%s hits=%d top_k=%s",
-                rec_source,
-                viewer.user_id or "",
-                len(item_ids),
-                settings.rec_list_top_k,
-            )
             if item_ids:
-                # Lightweight meta filter first; hydrate only the current page.
+                # Lightweight meta filter first (OFFLINE + plugin_type).
                 meta_rows = (
                     db.query(
                         MarketAssetDB.asset_id,
@@ -1358,12 +1351,24 @@ def list_plugins_service(
                 unpinned = [aid for aid in ordered_ids if meta[aid].pin_order is None]
                 ordered_ids = pinned + unpinned
 
+                # Same ACL/moderation as the card hydrate. Counting only OFFLINE
+                # left total ahead of items (e.g. 6 records, 4 cards).
+                rows_with_path = repo.get_assets_with_file_paths(ordered_ids, viewer=viewer)
+                rows_map = {asset.asset_id: (asset, fp, hi) for asset, fp, hi in rows_with_path}
+                ordered_ids = [aid for aid in ordered_ids if aid in rows_map]
+                logger.info(
+                    "recommend path: source=%s user_id=%s ranked=%d visible=%d top_k=%s",
+                    rec_source,
+                    viewer.user_id or "",
+                    len(item_ids),
+                    len(ordered_ids),
+                    settings.rec_list_top_k,
+                )
+
                 total = len(ordered_ids)
                 start = (query.page - 1) * query.page_size
                 page_asset_ids = ordered_ids[start:start + query.page_size]
-                rows_with_path = repo.get_assets_with_file_paths(page_asset_ids, viewer=viewer)
-                rows_map = {asset.asset_id: (asset, fp, hi) for asset, fp, hi in rows_with_path}
-                page_slice = [rows_map[aid] for aid in page_asset_ids if aid in rows_map]
+                page_slice = [rows_map[aid] for aid in page_asset_ids]
                 vrows = version_repo.list_all_by_asset_ids(page_asset_ids)
                 vmap: Dict[str, List[MarketAssetVersionDB]] = defaultdict(list)
                 for r in vrows:
