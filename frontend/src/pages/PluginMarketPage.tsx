@@ -663,7 +663,7 @@ export default function PluginMarketPage() {
       ? 'install_count'
       : isNewestCategory
         ? 'create_time'
-        : isFeaturedCategory
+        : isFeaturedCategory && !searchKeyword
           ? 'recommend'
           : undefined,
     desc: isHotCategory || isNewestCategory ? true : undefined,
