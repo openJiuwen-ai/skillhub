@@ -346,6 +346,7 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
         params: PluginListQuery,
         *,
         viewer: "ViewerContext",
+        asset_ids: Optional[List[str]] = None,
     ) -> Tuple[List[Tuple[MarketAssetDB, Optional[str], bool]], int]:
         """
         分页查询插件列表，默认排除 status=OFFLINE 的资源。
@@ -354,10 +355,15 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
         plugin_type（精确匹配）、
         search_keyword（对 name/display_name/short_desc/detail_desc 做 OR 模糊）过滤，
         按 order_by 排序。
+        asset_ids 为内部白名单（精选搜索与推荐 ID 交集），在分页前过滤。
         返回每行 (asset, file_path, has_icon)。
         """
         q_assets = self.query().filter(MarketAssetDB.status != "OFFLINE")
 
+        if asset_ids is not None:
+            if not asset_ids:
+                return [], 0
+            q_assets = q_assets.filter(MarketAssetDB.asset_id.in_(asset_ids))
         if params.asset_id:
             q_assets = q_assets.filter(MarketAssetDB.asset_id == params.asset_id)
         if params.asset_type:
