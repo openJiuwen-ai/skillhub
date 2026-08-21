@@ -574,11 +574,11 @@
   "auth": {
     "login": {
       "title": "登录",
-      "subtitle": "使用 GitCode 或 GitHub 账号登录插件市场。若浏览器已在对应平台登录，授权将自动完成。",
+      "subtitle": "使用第三方账号登录插件市场。若浏览器已在对应平台登录，授权将自动完成。",
       "gitcodeButton": "使用 GitCode 登录",
       "githubButton": "使用 GitHub 登录",
       "agentosButton": "使用 AgentOS 登录",
-      "hintOAuthSession": "登录态与访问令牌由 GitCode 或 GitHub 管理，本站不保存密码，也不维护 refresh_token。"
+      "hintOAuthSession": "登录态与访问令牌由第三方网站管理，本站不保存密码，也不维护 refresh_token。"
     },
     "oauth": {
       "exchanging": "正在完成登录…",

@@ -574,11 +574,11 @@
   "auth": {
     "login": {
       "title": "Sign in",
-      "subtitle": "Sign in with your GitCode or GitHub account. If you are already signed in on the provider site, authorization usually completes immediately.",
+      "subtitle": "Sign in to the marketplace with a third-party account. If you are already signed in on the provider site, authorization will complete automatically.",
       "gitcodeButton": "Continue with GitCode",
       "githubButton": "Continue with GitHub",
       "agentosButton": "Continue with AgentOS",
-      "hintOAuthSession": "Session and access tokens are managed by GitCode or GitHub. We do not store passwords or maintain refresh tokens."
+      "hintOAuthSession": "Session and access tokens are managed by third-party sites. We do not store passwords or maintain refresh tokens."
     },
     "oauth": {
       "exchanging": "Completing sign-in…",
