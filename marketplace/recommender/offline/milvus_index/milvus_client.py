@@ -172,7 +172,8 @@ def resolve_physical_name(public_name: str) -> str | None:
     for col in physicals:
         try:
             aliases = list(utility.list_aliases(col) or [])
-        except Exception:
+        except Exception as exc:
+            logger.warning("list_aliases failed for collection %s: %s", col, exc)
             continue
         if name in aliases:
             return col
