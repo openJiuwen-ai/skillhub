@@ -687,7 +687,7 @@ export default function PluginMarketPage() {
         ? 'install_count'
         : isNewestCategory
           ? 'create_time'
-          : isFeaturedCategory && !searchKeyword
+          : isFeaturedCategory
             ? 'recommend'
             : undefined,
     desc: isHotCategory || isNewestCategory ? true : undefined,

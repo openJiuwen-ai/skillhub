@@ -714,6 +714,51 @@ class TestListRecommendGate(unittest.TestCase):
     def test_other_order(self) -> None:
         self.assertFalse(self.use_recommend(order_by="install_count", keyword="", enabled=True))
 
+    @staticmethod
+    def featured_search_allowlist(
+        *,
+        order_by: str,
+        keyword: str,
+        enabled: bool,
+        category_id: str = "",
+    ) -> bool:
+        return (
+            (order_by or "").strip() == "recommend"
+            and bool((keyword or "").strip())
+            and not (category_id or "").strip()
+            and enabled
+        )
+
+    def test_featured_search_uses_allowlist(self) -> None:
+        self.assertTrue(
+            self.featured_search_allowlist(order_by="recommend", keyword="foo", enabled=True)
+        )
+
+    def test_featured_search_allowlist_skips_category(self) -> None:
+        self.assertFalse(
+            self.featured_search_allowlist(
+                order_by="recommend",
+                keyword="foo",
+                enabled=True,
+                category_id="software-development",
+            )
+        )
+
+    def test_featured_search_allowlist_requires_enabled(self) -> None:
+        self.assertFalse(
+            self.featured_search_allowlist(order_by="recommend", keyword="foo", enabled=False)
+        )
+
+    def test_all_tab_search_no_allowlist(self) -> None:
+        self.assertFalse(
+            self.featured_search_allowlist(order_by="install_count", keyword="foo", enabled=True)
+        )
+
+    def test_intersect_keeps_retrieval_order(self) -> None:
+        hits = ["a", "b", "c", "d"]
+        allow = {"d", "b", "x"}
+        self.assertEqual([iid for iid in hits if iid in allow], ["b", "d"])
+
 
 if __name__ == "__main__":
     unittest.main()
