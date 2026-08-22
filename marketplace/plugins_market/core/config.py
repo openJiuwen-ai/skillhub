@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # 用户信息接口：GitCode，query 参数 access_token；默认地址见 DEFAULT_AUTH_USER_API_URL
     auth_user_api_url: str = Field(default=DEFAULT_AUTH_USER_API_URL, validation_alias="AUTH_USER_API_URL")
 
+    # 市场搜索框下方标签筛选：运营配置优先展示的标签（逗号分隔），
+    # 其余标签按使用次数自动推荐；为空则纯按热门度推荐
+    market_featured_tags: str = Field(default="", validation_alias="MARKET_FEATURED_TAGS")
+
     # OAuth 回调后浏览器重定向到此前缀下的 /login?oauth_session=...（须与前端访问前缀一致；根路径默认无 /hub）
     oauth_frontend_origin: str = Field(
         default="http://localhost:9002",
@@ -149,11 +153,40 @@ class Settings(BaseSettings):
         default=DEFAULT_GITHUB_USER_API_URL,
         validation_alias=AliasChoices("MARKET_GITHUB_AUTH_USER_API_URL", "GITHUB_AUTH_USER_API_URL"),
     )
-
     # 一键标星功能开关：false 时前端不显示按钮、后端 POST /github/watch 返回 404
     github_star_enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("MARKET_GITHUB_STAR_ENABLED", "GITHUB_STAR_ENABLED"),
+    )
+
+    # AgentOS OAuth2（Control Panel）
+    agentos_oauth_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_ENABLED", "AGENTOS_OAUTH_ENABLED"),
+    )
+    agentos_oauth_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_CLIENT_ID", "AGENTOS_OAUTH_CLIENT_ID"),
+    )
+    agentos_oauth_client_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_CLIENT_SECRET", "AGENTOS_OAUTH_CLIENT_SECRET"),
+    )
+    agentos_oauth_redirect_uri: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_REDIRECT_URI", "AGENTOS_OAUTH_REDIRECT_URI"),
+    )
+    agentos_oauth_authorize_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_AUTHORIZE_URL", "AGENTOS_OAUTH_AUTHORIZE_URL"),
+    )
+    agentos_oauth_token_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_TOKEN_URL", "AGENTOS_OAUTH_TOKEN_URL"),
+    )
+    agentos_auth_user_api_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_AUTH_USER_API_URL", "AGENTOS_AUTH_USER_API_URL"),
     )
 
     # 发布页「下载模板」zip：桶内对象 Key（私有桶）；为空则 GET /plugins/publish-template 返回 503

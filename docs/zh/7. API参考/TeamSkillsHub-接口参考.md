@@ -21,7 +21,8 @@
 | POST | `/auth/oauth/{provider}/session` | Body：`oauth_session`✱ | — | — |
 | GET | `/auth/me` | Header：`Authorization`✱ | Bearer | 登录用户 |
 | **Skill 核心** | | | | |
-| GET | `/plugins` | Query：`page`、`page_size`、`asset_id`、`publisher_id`、`publisher_name`、`category_id`、`plugin_type`、`plugin_type_exclude`、`search_keyword`、`moderation_status`、`order_by`、`desc` | 可选 Bearer | — |
+| GET | `/plugins` | Query：`page`、`page_size`、`asset_id`、`publisher_id`、`publisher_name`、`category_id`、`plugin_type`、`plugin_type_exclude`、`search_keyword`、`moderation_status`、`tags`、`tags_match`、`order_by`、`desc` | 可选 Bearer | — |
+| GET | `/plugins/tags` | Query：`plugin_type`、`limit`（1–100，默认 20） | — | — |
 | GET | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version` | 可选 Bearer | — |
 | GET | `/plugins/{asset_id}/versions/{version}/files` | 路径：`asset_id`、`version`；Query：`with_content` | 可选 Bearer | — |
 | GET | `/artifacts/{id}` | 路径：`id`；Query：`version`、`is_cli_download` | 可选 Bearer | — |
@@ -247,7 +248,7 @@ X-OAuth-Provider: gitcode
 
 ### `GET /plugins`
 
-返回 Skill / Swarm Skill 分页列表。传入 `search_keyword` 时走语义检索；未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 时即使 `order_by=recommend` 也按 `install_count` 查表。市场前端侧边栏精选数量不调用本参数，用已上架数与 `GET /site/config` 的 `rec_list_top_k` 的较小值。可选 Bearer 用于发布者/审核员个性化字段。
+返回 Skill / Swarm Skill 分页列表。传入 `search_keyword` 时走语义检索（检索文本已拼接标签，输入标签文字即可命中）；未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 时即使 `order_by=recommend` 也按 `install_count` 查表。市场前端侧边栏精选数量不调用本参数，用已上架数与 `GET /site/config` 的 `rec_list_top_k` 的较小值。可选 Bearer 用于发布者/审核员个性化字段。
 
 **Query 参数**
 
@@ -263,6 +264,8 @@ X-OAuth-Provider: gitcode
 | `plugin_type_exclude` | string | — | 排除某类型 |
 | `search_keyword` | string | — | 语义搜索关键词 |
 | `moderation_status` | string | — | `PENDING` \| `APPROVED` \| `REJECTED` |
+| `tags` | string | - | 按标签过滤，逗号分隔（如 `python,cli`）；标签内不能含逗号（发布校验同口径）。长度上限 512 字符（超出 422），超过 20 个标签静默截断 |
+| `tags_match` | string | `all` | 标签匹配模式：`all`=同时包含全部标签（子集）；`any`=包含任一标签（交集） |
 | `order_by` | string | `install_count` | 排序字段；`recommend` 仅无 `category_id`、无搜索词且 `MARKET_RECOMMENDER_ENABLED=true` 时生效，否则回退 `install_count` |
 | `desc` | bool | `true` | 是否降序 |
 
@@ -277,6 +280,12 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins?plugin_type=skill,swarms
 ```bash
 curl "https://swarmskills.openjiuwen.com/api/v1/plugins?publisher_id=YOUR_USER_ID&plugin_type=skill" \
   -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**示例 - 按标签过滤（同时含 python 和 cli）**
+
+```bash
+curl "https://swarmskills.openjiuwen.com/api/v1/plugins?plugin_type=skill&tags=python,cli&tags_match=all"
 ```
 
 **响应 `200` — `data` 结构**
@@ -305,6 +314,36 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins?publisher_id=YOUR_USER_I
 ```
 
 发布者/审核员在 `items` 中可能额外看到 `all_versions`、`version_moderation_map` 等字段；匿名用户不会暴露待审新版本号。
+
+---
+
+### `GET /plugins/tags`
+
+市场标签筛选 chips 数据源：按使用次数返回热门标签 `(tag, count)` 列表。可见性与市场列表同口径（排除 OFFLINE，匿名访客仅公开可见资产），`count=0` 的标签不返回，避免点击后空结果。
+
+运营可通过 `MARKET_FEATURED_TAGS`（逗号分隔）配置优先展示的标签：配置中的标签按配置顺序排前，其余按使用次数降序补齐至 `limit`。
+
+**Query 参数**
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `plugin_type` | string | - | 限定插件类型（如 `skill` / `swarmskill`），缺省为全部类型 |
+| `limit` | int | `20` | 返回的标签数量上限（1–100） |
+
+**示例**
+
+```bash
+curl "https://swarmskills.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&limit=20"
+```
+
+**响应 `200` - `data` 结构**
+
+```json
+[
+  { "tag": "python", "count": 12 },
+  { "tag": "cli", "count": 7 }
+]
+```
 
 ---
 

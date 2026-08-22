@@ -46,7 +46,8 @@
 | 方法 | 路径 | 鉴权 | 摘要 |
 |------|------|------|------|
 | POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；请求头 **`X-Checksum-SHA256`** | 发布 Skill（multipart zip） [#核心资源] |
-| GET | `/api/v1/plugins` | **无需**（可选 Bearer 用于个性化展示） | Skill 分页列表 [#核心资源] |
+| GET | `/api/v1/plugins` | **无需**（可选 Bearer 用于个性化展示） | Skill 分页列表；`tags` + `tags_match` 按标签过滤 [#核心资源] |
+| GET | `/api/v1/plugins/tags` | **无需** | 标签聚合选项 `(tag, count)`，市场标签筛选 chips 数据源 [#核心资源] |
 | GET | `/api/v1/plugins/publish-template` | Bearer **`或`** `X-System-Token` | 发布页 Skill 模板 zip 预签名 GET [#核心资源] |
 | GET | `/api/v1/plugins/{asset_id}/versions/{version}` | **无需**（可选 Bearer） | 指定版本详情 [#核心资源] |
 | GET | `/api/v1/plugins/{asset_id}/versions/{version}/files` | **无需**（可选 Bearer） | 版本 zip 包内文件列表；`with_content=<path>` 可附带单个文本文件内容 [#核心资源] |
@@ -561,7 +562,9 @@ paths:
         - name: search_keyword
           in: query
           required: false
-          description: 搜索关键词，传入时走检索引擎语义搜索
+          description: |
+            搜索关键词，传入时走检索引擎语义搜索。检索不可用（索引未就绪/出错）时回退 DB 子串匹配，覆盖索引未重建的空窗期；
+            检索确认无命中时返回空页，不退化为子串匹配，避免召回语义无关结果拉低精度。
           schema:
             type: string
         - name: moderation_status
@@ -571,6 +574,26 @@ paths:
           schema:
             type: string
             enum: [PENDING, APPROVED, REJECTED]
+        - name: tags
+          in: query
+          required: false
+          description: |
+            按标签过滤，逗号分隔多个标签（如 `python,cli`）。语义由 tags_match 决定：
+            all=同时包含全部标签（子集），any=包含任一标签（交集）。
+            参数长度上限 512 字符（超出 422）；标签个数超过 20 个时静默截断。
+            可与 search_keyword 叠加：检索路径为索引内 Python 集合过滤，DB 兜底路径为 JSON_CONTAINS。
+          schema:
+            type: string
+            maxLength: 512
+            example: "python,cli"
+        - name: tags_match
+          in: query
+          required: false
+          description: "标签匹配模式: all=同时包含全部标签（默认）, any=包含任一标签"
+          schema:
+            type: string
+            enum: [all, any]
+            default: all
         - name: order_by
           in: query
           required: false
@@ -603,6 +626,86 @@ paths:
                     example: ok
                   data:
                     $ref: '#/components/schemas/SkillListResponse'
+        '422':
+          description: 请求验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/plugins/tags:
+    get:
+      summary: 标签聚合选项
+      description: |
+        市场标签筛选 chips 数据源：按使用次数推荐热门标签，返回 (tag, count) 列表。
+        可见性与市场列表同口径（排除 OFFLINE，匿名访客仅公开可见资产），count=0 的标签不返回。
+        运营可通过 `MARKET_FEATURED_TAGS`（逗号分隔）配置优先展示的标签，配置中的标签按配置顺序排前，
+        其余按使用次数降序补齐至 limit。
+        提供 keyword 时进入子串搜索模式：在全量标签上 ilike 匹配，按使用次数降序返回前 limit 个，
+        跳过运营置顶--用于覆盖长尾标签（低 count 但名字匹配）。
+      operationId: listPluginTags
+      tags:
+        - Skill 管理
+      parameters:
+        - name: plugin_type
+          in: query
+          required: false
+          description: 限定插件类型（如 skill / swarmskill），缺省为全部类型
+          schema:
+            type: string
+            example: skill
+        - name: limit
+          in: query
+          required: false
+          description: 返回的标签数量上限（1-100）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: keyword
+          in: query
+          required: false
+          description: |
+            标签子串搜索；提供时进入子串模式：在全量标签上 ilike 匹配，按使用次数降序返回前 limit 个，
+            跳过运营置顶。缺省时走运营置顶 + 热门度推荐模式。
+          schema:
+            type: string
+            example: py
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                    example: ok
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [tag, count]
+                      properties:
+                        tag:
+                          type: string
+                          example: python
+                        count:
+                          type: integer
+                          minimum: 0
+                          example: 12
         '422':
           description: 请求验证失败
           content:

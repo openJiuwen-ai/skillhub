@@ -9,7 +9,7 @@ from typing import Any
 from shared.limits import MAX_TEXT_FILE_BYTES, read_text_file
 
 from .base import BaseScanner, ScannedItem, console
-from .common import clean_first_paragraph, parse_frontmatter, read_text_if_exists
+from .common import clean_first_paragraph, extract_tags_from_metadata, parse_frontmatter, read_text_if_exists
 
 
 class PluginScanner(BaseScanner):
@@ -51,8 +51,10 @@ class PluginScanner(BaseScanner):
             content = readme_text.strip()
             metadata = payload.get("metadata")
             author = ""
+            tags: list[str] = []
             if isinstance(metadata, dict):
                 author = str(metadata.get("author") or "").strip()
+                tags = extract_tags_from_metadata(metadata)
             if not author:
                 author = str(payload.get("author") or "").strip()
             display_name = str(payload.get("display_name") or "").strip()
@@ -64,6 +66,7 @@ class PluginScanner(BaseScanner):
                 item_path=str(plugin_file.resolve()),
                 content=content,
                 author=author,
+                tags=tags,
             )
 
         skill_file = next(

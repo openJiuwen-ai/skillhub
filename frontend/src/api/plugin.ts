@@ -30,6 +30,10 @@ export interface MarketplacePluginListRequest {
   plugin_type_exclude?: string
   /** 与后端 `category_id`：按类别筛选（如 software-development / office-productivity） */
   category_id?: string
+  /** 与后端 `tags`：逗号分隔多标签精确过滤 */
+  tags?: string
+  /** 与后端 `tags_match`：all=同时包含全部标签，any=包含任一标签 */
+  tags_match?: 'all' | 'any'
   order_by?: MarketplacePluginOrderBy
   desc?: boolean
 }
@@ -132,6 +136,39 @@ export interface MarketplacePluginListResponse {
   code: number
   message: string
   data: MarketplacePluginListData
+}
+
+/** GET /plugins/tags 返回的标签选项 */
+export interface PluginTagOption {
+  tag: string
+  count: number
+}
+
+export interface PluginTagOptionsResponse {
+  code: number
+  message: string
+  data: PluginTagOption[]
+}
+
+/** 拉取市场标签筛选选项：热门标签自动推荐 + 运营配置优先展示 */
+export async function getPluginTagOptions(
+  request: { plugin_type?: string; limit?: number; keyword?: string } = {}
+): Promise<PluginTagOption[]> {
+  const client = getApiClient()
+  const { data } = await client.get<PluginTagOptionsResponse>(API_ENDPOINTS.PLUGINS.TAGS, {
+    params: {
+      plugin_type: request.plugin_type || undefined,
+      limit: request.limit ?? 20,
+      keyword: request.keyword || undefined,
+    },
+  })
+  if (data == null || typeof data !== 'object') {
+    throw new MarketplaceApiError('标签选项响应无效')
+  }
+  if (data.code !== 200 || !Array.isArray(data.data)) {
+    throw new MarketplaceApiError(data.message || '标签选项拉取失败', data.code)
+  }
+  return data.data
 }
 
 /** GET /api/v1/artifacts/{id} 响应 data */
@@ -302,6 +339,8 @@ export async function getPlugins(
       moderation_status: request.moderation_status || undefined,
       plugin_type_exclude: request.plugin_type_exclude || undefined,
       category_id: request.category_id || undefined,
+      tags: request.tags || undefined,
+      tags_match: request.tags_match || undefined,
       order_by: request.order_by ?? 'install_count',
       desc: request.desc ?? true,
     },

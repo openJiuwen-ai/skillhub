@@ -43,7 +43,24 @@
       "skill": "Skill",
       "swarmskill": "Swarm Skills"
     },
-    "searchPlaceholder": "Search names, descriptions",
+    "searchPlaceholder": "Search names, descriptions, tags",
+    "searchDisabledHint": "Search is disabled while tags are selected. Clear tags to search.",
+    "sidebarViewSwitchAria": "Switch between categories and tags",
+    "sidebarViewCategory": "Categories",
+    "sidebarViewTag": "Tags",
+    "tagNavAria": "Filter skills by tag",
+    "tagListEmpty": "No tags yet",
+    "tagSearchPlaceholder": "Search tags",
+    "tagSearchRecent": "Recent",
+    "tagSearchNoMatch": "No matching tags",
+    "tagSearchEmptyHistory": "No recent tags",
+    "tagSearchListAria": "Tag search results",
+    "tagSearchLoading": "Searching…",
+    "tagSearchClearAria": "Clear",
+    "tagSelectedHeader": "Selected",
+    "tagSelectedAria": "Selected tags",
+    "tagSelectedRemoveAria": "Remove tag",
+    "tagRecommendedHeader": "Recommended",
     "tabs": {
       "market": "Plugin Market"
     },
@@ -51,12 +68,6 @@
       "plugin": "Plugins",
       "skill": "Skills"
     },
-    "searchStatus": {
-      "searching": "Searching...",
-      "found": "\"{{keyword}}\" · {{total}} result(s) found",
-      "empty": "\"{{keyword}}\" · No results found"
-    },
-    "categoryTitle": "SwarmSkillsHub Categories",
     "categoryNavAria": "Filter skills by category",
     "category": {
       "hot": "Hot",
@@ -566,6 +577,7 @@
       "subtitle": "Sign in with your GitCode or GitHub account. If you are already signed in on the provider site, authorization usually completes immediately.",
       "gitcodeButton": "Continue with GitCode",
       "githubButton": "Continue with GitHub",
+      "agentosButton": "Continue with AgentOS",
       "hintOAuthSession": "Session and access tokens are managed by GitCode or GitHub. We do not store passwords or maintain refresh tokens."
     },
     "oauth": {

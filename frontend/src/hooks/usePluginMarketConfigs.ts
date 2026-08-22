@@ -48,6 +48,10 @@ export interface UsePluginMarketConfigsParams {
   pluginTypeExclude?: string
   /** 类别 ID（如 software-development / office-productivity） */
   categoryId?: string
+  /** 逗号分隔多标签精确过滤（与后端 tags 参数一致） */
+  tags?: string
+  /** 标签匹配模式：all=同时包含全部，any=任一命中 */
+  tagsMatch?: 'all' | 'any'
   orderBy?: MarketplacePluginListRequest['order_by']
   desc?: boolean
 }
@@ -123,6 +127,8 @@ export function usePluginMarketConfigs(params: UsePluginMarketConfigsParams): Us
     plugin_type: params.pluginType || undefined,
     plugin_type_exclude: params.pluginTypeExclude || undefined,
     category_id: params.categoryId || undefined,
+    tags: params.tags || undefined,
+    tags_match: params.tags ? (params.tagsMatch ?? 'all') : undefined,
     order_by: params.orderBy ?? 'install_count',
     desc: params.desc ?? true,
   })

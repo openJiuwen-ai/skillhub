@@ -45,6 +45,7 @@ router = APIRouter()
 class OAuthProvider(str, Enum):
     gitcode = "gitcode"
     github = "github"
+    agentos = "agentos"
 
 
 class OAuthSessionBody(BaseModel):
@@ -90,7 +91,11 @@ def _redirect_error(
 
 
 def _provider_label(provider: OAuthProvider) -> str:
-    return "GitHub" if provider == OAuthProvider.github else "GitCode"
+    if provider == OAuthProvider.agentos:
+        return "AgentOS"
+    if provider == OAuthProvider.github:
+        return "GitHub"
+    return "GitCode"
 
 
 def _safe_oauth_meta(provider: OAuthProvider, *, upstream_status: int | None = None) -> dict[str, str | int]:
@@ -123,6 +128,32 @@ def _oauth_log_fields(
 
 def _assert_oauth_ready(provider: OAuthProvider) -> None:
     label = _provider_label(provider)
+    if provider == OAuthProvider.agentos:
+        if not settings.agentos_oauth_enabled:
+            raise BusinessError(
+                code=status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
+                error="oauth_disabled",
+                message="AgentOS OAuth 未启用",
+                error_code="SKILLHUB_OAUTH_DISABLED",
+                error_class="auth",
+            )
+        endpoint_urls_set = all([
+            settings.agentos_oauth_authorize_url,
+            settings.agentos_oauth_token_url,
+            settings.agentos_auth_user_api_url,
+        ])
+        if not settings.agentos_oauth_client_id \
+        or not settings.agentos_oauth_redirect_uri or not endpoint_urls_set:
+            raise BusinessError(
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                error="oauth_not_configured",
+                message="AgentOS OAuth 未正确配置",
+                error_code="SKILLHUB_OAUTH_NOT_CONFIGURED",
+                error_class="upstream",
+            )
+        return
     if provider == OAuthProvider.gitcode:
         if not settings.gitcode_oauth_enabled:
             raise BusinessError(
@@ -228,7 +259,30 @@ def _oauth_redirect_error(
 
 
 async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAuthProvider, code: str) -> dict:
-    if provider == OAuthProvider.gitcode:
+    if provider == OAuthProvider.agentos:
+        logger.info(
+            "oauth token exchange request",
+            url=settings.agentos_oauth_token_url,
+            client_id=settings.agentos_oauth_client_id,
+            redirect_uri=settings.agentos_oauth_redirect_uri,
+            code_len=len(code),
+        )
+        token_res = await client.post(
+            settings.agentos_oauth_token_url,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": settings.agentos_oauth_client_id,
+                "client_secret": settings.agentos_oauth_client_secret,
+                "redirect_uri": settings.agentos_oauth_redirect_uri,
+            },
+        )
+        # 注意：响应头可能含 Set-Cookie 等敏感信息，响应正文可能含 access_token 等敏感字段，均不打印
+        logger.info(
+            "oauth token exchange response",
+            status=token_res.status_code,
+        )
+    elif provider == OAuthProvider.gitcode:
         token_res = await client.post(
             settings.gitcode_oauth_token_url,
             data={
@@ -286,7 +340,15 @@ async def oauth_start(provider: OAuthProvider):
         store = get_oauth_str_store()
         store.set_ex(_state_key(provider, state), "1", 600)
 
-        if provider == OAuthProvider.gitcode:
+        if provider == OAuthProvider.agentos:
+            params = {
+                "client_id": settings.agentos_oauth_client_id,
+                "redirect_uri": settings.agentos_oauth_redirect_uri,
+                "response_type": "code",
+                "state": state,
+            }
+            authorize_url = settings.agentos_oauth_authorize_url
+        elif provider == OAuthProvider.gitcode:
             params = {
                 "client_id": settings.gitcode_oauth_client_id,
                 "redirect_uri": settings.gitcode_oauth_redirect_uri,

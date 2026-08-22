@@ -17,6 +17,7 @@ async def get_site_config():
     return {
         "playground_enabled": settings.playground_enabled,
         "github_star_enabled": settings.github_star_enabled,
+        "agentos_oauth_enabled": settings.agentos_oauth_enabled,
         "rec_list_top_k": settings.rec_list_top_k,
     }
 

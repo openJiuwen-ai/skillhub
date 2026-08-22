@@ -2,12 +2,14 @@
 
 import asyncio
 import hashlib
+import json
 import tempfile
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path as FsPath
-from typing import Annotated, Any, Optional, Tuple
+from typing import Annotated, Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import (
@@ -45,6 +47,7 @@ from plugins_market.core.context import (
     get_user_name,
 )
 from plugins_market.core.viewer_context import ViewerContext
+from plugins_market.core.cache import cache_get, cache_set
 from plugins_market.core.config import settings
 from plugins_market.core.database import get_db
 from plugins_market.core.errors import (
@@ -87,8 +90,10 @@ from plugins_market.schemas.plugin import (
     SkillModerationRequest,
     SkillModerationResult,
     SkillModerationAuditListResponse,
+    TagOption,
     VersionFilesData,
 )
+from plugins_market.repositories import MarketAssetRepository
 from plugins_market.services import (
     PublishError,
     delete_plugin_version_service,
@@ -1084,6 +1089,79 @@ async def list_plugins(
     viewer: ViewerContext = Depends(resolve_viewer_context),
 ):
     data = list_plugins_service(query=query, db=db, storage=storage, viewer=viewer)
+    return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
+
+
+# 标签热度变化慢；按 (type, keyword, limit) 缓存 30s，挡住搜索框每键/跨用户的重复子串扫描。
+# 无 Redis 时 cache_get 返回 None、cache_set 静默跳过，端点照常回源计算。
+_TAG_OPTIONS_CACHE_TTL = 30
+
+
+@plugin_router.get(
+    "/tags",
+    response_model=ResponseModel[List[TagOption]],
+)
+async def list_plugin_tags(
+    db: Session = Depends(get_db),
+    plugin_type: Optional[str] = Query(None, description="限定插件类型（如 skill / swarmskill）"),
+    limit: int = Query(20, ge=1, le=100, description="返回的标签数量上限"),
+    keyword: Optional[str] = Query(None, description="标签子串搜索；提供时按子串匹配返回热门度前 N，跳过运营置顶"),
+):
+    """市场搜索框下方的标签筛选选项：按使用次数自动推荐热门标签。
+
+    运营可通过 MARKET_FEATURED_TAGS 配置优先展示的标签（逗号分隔），
+    配置中的标签按配置顺序排前，其余按使用次数降序补齐。
+    数据库中无可见资产使用的标签（count=0）不展示，避免点击后空结果。
+
+    keyword 非空时进入子串搜索模式：在全量标签上 ilike 匹配，按使用次数降序
+    返回前 limit 个，跳过运营置顶--用于覆盖长尾标签（低 count 但名字匹配）。
+    """
+    repo = MarketAssetRepository(db)
+    pt = (plugin_type or "").strip() or None
+    # keyword 在直接调用（单测未走 FastAPI 解析）时默认是 Query 哨兵（truthy），须按 str 判定。
+    kw = (keyword if isinstance(keyword, str) else "").strip()
+
+    # 命中缓存直接返回；手动构造 dict 序列化，绕开 pydantic v1/v2 的 dump API 差异。
+    cache_key = f"plugins:tags:v1:{pt or '-'}:{kw or '-'}:{limit}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        try:
+            return ResponseModel(
+                code=status.HTTP_200_OK,
+                message="ok",
+                data=[TagOption(tag=x["tag"], count=x["count"]) for x in json.loads(hit)],
+            )
+        except Exception:
+            pass  # 缓存值损坏（反序列化失败）-> 回退重新计算，不阻断请求
+
+    if kw:
+        rows = repo.list_tag_options(plugin_type=pt, keyword=kw, limit=limit)
+        data = [TagOption(tag=t, count=c) for t, c in rows]
+    else:
+        count_map = dict(repo.list_tag_options(plugin_type=pt, limit=1000))
+        featured: List[str] = []
+        raw = getattr(settings, "market_featured_tags", "") or ""
+        for t in raw.split(","):
+            # 与发布校验侧同口径归一化：count_map 键来自 DB（已 NFKC + casefold），
+            # 配置值不归一化会因大小写/全半角不一致而字典查找失败，置顶标签被静默跳过。
+            t = unicodedata.normalize("NFKC", t.strip()).casefold()
+            if t and t not in featured:
+                featured.append(t)
+        ordered: List[TagOption] = [
+            TagOption(tag=tag_name, count=count_map[tag_name])
+            for tag_name in featured
+            if tag_name in count_map
+        ]
+        ordered_names = {opt.tag for opt in ordered}
+        for tag, cnt in sorted(count_map.items(), key=lambda kv: (-kv[1], kv[0])):
+            if len(ordered) >= limit:
+                break
+            if tag not in ordered_names:
+                ordered.append(TagOption(tag=tag, count=cnt))
+                ordered_names.add(tag)
+        data = ordered[:limit]
+
+    cache_set(cache_key, json.dumps([{"tag": opt.tag, "count": opt.count} for opt in data]), _TAG_OPTIONS_CACHE_TTL)
     return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
 
 

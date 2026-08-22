@@ -23,6 +23,7 @@ import {
   Sparkles,
   Star,
   Tag,
+  ChevronDown,
   X,
   BookOpen,
   AlignLeft,
@@ -49,11 +50,15 @@ import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
 import { AppHeader } from '@/components/Common/AppHeader'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
 import { Empty } from '@/components/Common/Empty'
+import { TagSearchBox } from '@/components/Marketplace/TagSearchBox'
+import { SelectedTagsBar } from '@/components/Marketplace/SelectedTagsBar'
+import { saveRecentTag } from '@/utils/recentTags'
 import axios from 'axios'
 import { pinyin } from 'pinyin-pro'
 import {
   getPluginArtifactDownload,
   getPluginInteractionsBatch,
+  getPluginTagOptions,
   getPluginVersionDetail,
   togglePluginInteract,
   type AssetInteractionState,
@@ -558,6 +563,10 @@ export default function PluginMarketPage() {
   const { user, isAuthenticated } = useGitCodeAuth()
   const [searchInput, setSearchInput] = useState('')
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  // 左栏视图：分类 / 标签 二选一。切换即互斥--切到分类清已选标签，
+  // 切到标签清分类回 all。标签与分类都是「浏览态导航」，同一时刻只一个生效。
+  const [sidebarView, setSidebarView] = useState<'category' | 'tag'>('category')
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [noticeDismissed, setNoticeDismissed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
@@ -636,6 +645,12 @@ export default function PluginMarketPage() {
 
   const handleSetCategory = useCallback(
     (key: CategoryKey) => {
+      // 选分类 = 切回分类视图 + 清标签 + 清搜索（标签/分类互斥，同时只一个生效）。
+      setSidebarView('category')
+      setSelectedTags([])
+      setSearchInput('')
+      setSearchKeyword('')
+      setCurrentPage(1)
       setSearchParams(
         prev => {
           const next = new URLSearchParams(prev)
@@ -653,19 +668,28 @@ export default function PluginMarketPage() {
   const isFeaturedCategory = activeCategory === 'featured'
   const activeCategoryId = isSpecialCategoryKey(activeCategory) ? undefined : activeCategory
 
+  // 互斥模式：选了任一标签即进入过滤态——搜索框置灰、关键词清空。
+  // 反向置灰：因果直接（点标签的直接后果就是禁搜索），无需额外模式切换器命名当前态。
+  // selectedTags 为空时搜索恢复，searchKeyword 在标签激活期间恒为 ''，二者天然不同时下发。
+  const searchDisabled = selectedTags.length > 0
+
   const { marketPlugins, total, page, loading, fetching, error, refreshMarketPlugins } = usePluginMarketConfigs({
     page: currentPage,
     pageSize,
     searchKeyword,
     pluginType: activeType,
     categoryId: activeCategoryId,
-    orderBy: isHotCategory
+    tags: selectedTags.length ? selectedTags.join(',') : undefined,
+    tagsMatch: 'all',
+    orderBy: selectedTags.length > 0
       ? 'install_count'
-      : isNewestCategory
-        ? 'create_time'
-        : isFeaturedCategory && !searchKeyword
-          ? 'recommend'
-          : undefined,
+      : isHotCategory
+        ? 'install_count'
+        : isNewestCategory
+          ? 'create_time'
+          : isFeaturedCategory && !searchKeyword
+            ? 'recommend'
+            : undefined,
     desc: isHotCategory || isNewestCategory ? true : undefined,
   })
 
@@ -681,6 +705,67 @@ export default function PluginMarketPage() {
     staleTime: 60_000,
   })
   const featuredListTopK = siteConfigQuery.data?.rec_list_top_k
+
+  // 标签筛选选项：热门自动推荐 + 运营配置优先展示
+  const tagOptionsQuery = useQuery(
+    ['plugins', 'tag-options', activeType],
+    () => getPluginTagOptions({ plugin_type: activeType, limit: 20 }),
+    { staleTime: 60_000, keepPreviousData: true },
+  )
+  const tagOptions = useMemo(() => tagOptionsQuery.data ?? [], [tagOptionsQuery.data])
+
+  const toggleSelectedTag = useCallback((tag: string) => {
+    // 点标签 = 进入标签视图 + 清分类回 all + 清搜索。标签/分类互斥，
+    // 同一时刻只一个生效，避免 AND 交集把「标签下所有 skill」被分类截断。
+    setSidebarView('tag')
+    setSearchParams(
+      prev => {
+        const next = new URLSearchParams(prev)
+        if (next.get('category') && next.get('category') !== 'all') {
+          next.set('category', 'all')
+        }
+        return next
+      },
+      { replace: true },
+    )
+    // 加选时记入「最近选过的标签」历史（取消选不记），供标签搜索框空输入回显。
+    const willAdd = !selectedTags.includes(tag)
+    if (willAdd) {
+      saveRecentTag(activeType, tag)
+    }
+    setSearchInput('')
+    setSearchKeyword('')
+    setSelectedTags(prev => (willAdd ? [...prev, tag] : prev.filter(t => t !== tag)))
+    setCurrentPage(1)
+  }, [activeType, selectedTags, setSearchParams])
+
+  // 切左栏视图（纯 tab 点击）：切到分类清已选标签；切到标签清分类回 all。
+  const handleSidebarViewChange = useCallback((view: 'category' | 'tag') => {
+    if (view === 'category') {
+      setSidebarView('category')
+      setSelectedTags([])
+      setSearchInput('')
+      setSearchKeyword('')
+      setCurrentPage(1)
+    } else {
+      setSidebarView('tag')
+      setSearchParams(
+        prev => {
+          const next = new URLSearchParams(prev)
+          if (next.get('category') && next.get('category') !== 'all') {
+            next.set('category', 'all')
+          }
+          return next
+        },
+        { replace: true },
+      )
+      setCurrentPage(1)
+    }
+  }, [setSearchParams])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [selectedTags.join(',')])
 
   const categoryTotalsQueries = useQueries(
     CONCRETE_CATEGORY_KEYS.map(categoryId => ({
@@ -1200,14 +1285,137 @@ export default function PluginMarketPage() {
     )
   }, [defaultDownloadVersion, downloadingAssetId, handleDownloadPlugin, handleToggleInteract, handleViewPlugin, interactionStateMap, interactingKey, isOwnSkill, marketPlugins, searchKeyword, t])
 
+  // 推荐区：从热门标签里去掉已选，已选只显示在已选区，两区不重复。
+  const availableTagOptions = useMemo(
+    () => tagOptions.filter(opt => !selectedTags.includes(opt.tag)),
+    [tagOptions, selectedTags],
+  )
+
   const sidebar = useMemo(
     () => (
       <aside className="hidden w-[248px] shrink-0 xl:block">
-        <div className="mb-4 flex h-7 items-center">
-          <h2 className="text-[16px] font-semibold leading-[22px] text-[#191919]">{t('plugins.categoryTitle')}</h2>
+        {/* 顶部分段切换器：分类 / 标签 二选一。切到另一个即清当前选择（互斥）。
+            工具栏已上移横跨，左栏从分段切换器开始，与右栏第一排卡片顶部对齐。 */}
+        <div className="mb-4 grid grid-cols-2 gap-1 rounded-[8px] bg-[#F1F3F9] p-1" role="tablist" aria-label={t('plugins.sidebarViewSwitchAria')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarView === 'category'}
+            onClick={() => handleSidebarViewChange('category')}
+            className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
+              sidebarView === 'category' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+            }`}
+          >
+            {t('plugins.sidebarViewCategory')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarView === 'tag'}
+            onClick={() => handleSidebarViewChange('tag')}
+            className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
+              sidebarView === 'tag' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+            }`}
+          >
+            {t('plugins.sidebarViewTag')}
+          </button>
         </div>
-        <nav aria-label={t('plugins.categoryNavAria')}>
-          <div>
+        {sidebarView === 'category' ? (
+          <nav aria-label={t('plugins.categoryNavAria')}>
+            <div>
+              {CATEGORY_KEYS.map(key => {
+                const isActive = activeCategory === key
+                const count = categorySkillCount[key]
+                const label = t(`plugins.category.${key}`)
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => handleSetCategory(key)}
+                    aria-label={count != null ? `${label}, ${count.toLocaleString(locale)}` : label}
+                    className={`flex h-10 w-full items-center justify-between rounded-[4px] px-3 text-[16px] leading-[22px] transition-colors ${
+                      isActive ? 'bg-[linear-gradient(90deg,rgba(221,233,255,0.76)_0%,rgba(244,235,255,0.76)_100%)] text-[#191919]' : 'bg-transparent text-[#191919] hover:bg-black/[0.03]'
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <CategoryIcon category={key} active={isActive} />
+                      <span className="truncate text-left font-normal">{label}</span>
+                    </span>
+                    {count != null && <span className="shrink-0 text-[13px] tabular-nums text-[#777]">{count.toLocaleString(locale)}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          </nav>
+        ) : (
+          <nav aria-label={t('plugins.tagNavAria')} className="flex flex-col gap-3">
+            <TagSearchBox activeType={activeType} selectedTags={selectedTags} onToggle={toggleSelectedTag} />
+            <SelectedTagsBar variant="desktop" selectedTags={selectedTags} onToggle={toggleSelectedTag} />
+            <div className="flex flex-col gap-1.5">
+              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-[#999]">
+                {t('plugins.tagRecommendedHeader')}
+              </p>
+              <div className="max-h-[calc(100vh-340px)] overflow-y-auto pr-1">
+                {availableTagOptions.length === 0 ? (
+                  tagOptions.length === 0 ? (
+                    <p className="px-3 py-4 text-[14px] text-[#999]">{t('plugins.tagListEmpty')}</p>
+                  ) : null
+                ) : (
+                  availableTagOptions.map(opt => (
+                    <button
+                      key={opt.tag}
+                      type="button"
+                      onClick={() => toggleSelectedTag(opt.tag)}
+                      className="flex h-10 w-full items-center justify-between rounded-[4px] px-3 text-[15px] leading-[22px] transition-colors bg-transparent text-[#191919] hover:bg-black/[0.03]"
+                    >
+                      <span className="truncate text-left font-normal">{opt.tag}</span>
+                      <span className="shrink-0 text-[13px] tabular-nums text-[#777]">{opt.count.toLocaleString(locale)}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </nav>
+        )}
+      </aside>
+    ),
+    [activeCategory, activeType, categorySkillCount, handleSetCategory, handleSidebarViewChange, locale, selectedTags, sidebarView, tagOptions, availableTagOptions, toggleSelectedTag, t],
+  )
+
+  const categoryMobileNav = useMemo(
+    () => (
+      <div className="xl:hidden">
+        {/* 顶部分段切换器：与桌面左栏同构 */}
+        <div className="mb-2 grid grid-cols-2 gap-1 rounded-[8px] bg-[#F1F3F9] p-1" role="tablist" aria-label={t('plugins.sidebarViewSwitchAria')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarView === 'category'}
+            onClick={() => handleSidebarViewChange('category')}
+            className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
+              sidebarView === 'category' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+            }`}
+          >
+            {t('plugins.sidebarViewCategory')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sidebarView === 'tag'}
+            onClick={() => handleSidebarViewChange('tag')}
+            className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
+              sidebarView === 'tag' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+            }`}
+          >
+            {t('plugins.sidebarViewTag')}
+          </button>
+        </div>
+        {sidebarView === 'category' ? (
+          <nav
+            className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+            aria-label={t('plugins.categoryNavAria')}
+          >
             {CATEGORY_KEYS.map(key => {
               const isActive = activeCategory === key
               const count = categorySkillCount[key]
@@ -1218,55 +1426,49 @@ export default function PluginMarketPage() {
                   type="button"
                   onClick={() => handleSetCategory(key)}
                   aria-label={count != null ? `${label}, ${count.toLocaleString(locale)}` : label}
-                  className={`flex h-10 w-full items-center justify-between rounded-[4px] px-3 text-[16px] leading-[22px] transition-colors ${
-                    isActive ? 'bg-[linear-gradient(90deg,rgba(221,233,255,0.76)_0%,rgba(244,235,255,0.76)_100%)] text-[#191919]' : 'bg-transparent text-[#191919] hover:bg-black/[0.03]'
+                  className={`flex shrink-0 items-center gap-2 rounded-full border px-[14px] py-[6px] text-[14px] font-medium shadow-[0_2px_8px_rgba(15,23,42,0.03)] transition-colors ${
+                    isActive ? 'border-[#c8d9ff] bg-[#EEF3FF] text-[#1E54F9]' : 'border-slate-200 bg-white/90 text-slate-600'
                   }`}
                 >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <CategoryIcon category={key} active={isActive} />
-                    <span className="truncate text-left font-normal">{label}</span>
-                  </span>
-                  {count != null && <span className="shrink-0 text-[13px] tabular-nums text-[#777]">{count.toLocaleString(locale)}</span>}
+                  <CategoryIcon category={key} active={isActive} />
+                  <span className="whitespace-nowrap">{label}</span>
+                  {count != null && <span className="shrink-0 text-[12px] tabular-nums opacity-70">{count.toLocaleString(locale)}</span>}
                 </button>
               )
             })}
-          </div>
-        </nav>
-      </aside>
-    ),
-    [activeCategory, categorySkillCount, handleSetCategory, locale, t],
-  )
-
-  const categoryMobileNav = useMemo(
-    () => (
-      <nav
-        className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 xl:hidden"
-        style={{ WebkitOverflowScrolling: 'touch' }}
-        aria-label={t('plugins.categoryNavAria')}
-      >
-        {CATEGORY_KEYS.map(key => {
-          const isActive = activeCategory === key
-          const count = categorySkillCount[key]
-          const label = t(`plugins.category.${key}`)
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => handleSetCategory(key)}
-              aria-label={count != null ? `${label}, ${count.toLocaleString(locale)}` : label}
-              className={`flex shrink-0 items-center gap-2 rounded-full border px-[14px] py-[6px] text-[14px] font-medium shadow-[0_2px_8px_rgba(15,23,42,0.03)] transition-colors ${
-                isActive ? 'border-[#c8d9ff] bg-[#EEF3FF] text-[#1E54F9]' : 'border-slate-200 bg-white/90 text-slate-600'
-              }`}
+          </nav>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <TagSearchBox activeType={activeType} selectedTags={selectedTags} onToggle={toggleSelectedTag} />
+            <SelectedTagsBar variant="mobile" selectedTags={selectedTags} onToggle={toggleSelectedTag} />
+            <nav
+              className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+              aria-label={t('plugins.tagNavAria')}
             >
-              <CategoryIcon category={key} active={isActive} />
-              <span className="whitespace-nowrap">{label}</span>
-              {count != null && <span className="shrink-0 text-[12px] tabular-nums opacity-70">{count.toLocaleString(locale)}</span>}
-            </button>
-          )
-        })}
-      </nav>
+              {availableTagOptions.length === 0 ? (
+                tagOptions.length === 0 ? (
+                  <span className="px-1 py-1 text-[13px] text-[#999]">{t('plugins.tagListEmpty')}</span>
+                ) : null
+              ) : (
+                availableTagOptions.map(opt => (
+                  <button
+                    key={opt.tag}
+                    type="button"
+                    onClick={() => toggleSelectedTag(opt.tag)}
+                    className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white/90 px-[14px] py-[6px] text-[14px] font-medium shadow-[0_2px_8px_rgba(15,23,42,0.03)] text-slate-600 transition-colors"
+                  >
+                    <span className="whitespace-nowrap">{opt.tag}</span>
+                    <span className="shrink-0 text-[12px] tabular-nums opacity-70">{opt.count.toLocaleString(locale)}</span>
+                  </button>
+                ))
+              )}
+            </nav>
+          </div>
+        )}
+      </div>
     ),
-    [activeCategory, categorySkillCount, handleSetCategory, locale, t],
+    [activeCategory, activeType, categorySkillCount, handleSetCategory, handleSidebarViewChange, locale, selectedTags, sidebarView, tagOptions, availableTagOptions, toggleSelectedTag, t],
   )
 
   return (
@@ -1342,7 +1544,11 @@ export default function PluginMarketPage() {
             <div className="mt-16 h-px sm:mt-[71px]" />
 
             <div className="mx-auto flex max-w-[1000px] justify-center">
-              <div className="relative w-full rounded-[99px] bg-white px-6 py-0 shadow-[0_4px_45px_rgba(0,0,0,0.10)]">
+              <div
+                className={`relative w-full rounded-[99px] px-6 py-0 shadow-[0_4px_45px_rgba(0,0,0,0.10)] transition-opacity ${
+                  searchDisabled ? 'bg-slate-100 opacity-60' : 'bg-white'
+                }`}
+              >
                 <div className="pointer-events-none absolute left-6 top-1/2 -translate-y-1/2 text-[#A3A3A3]">
                   <Search className="h-5 w-5" />
                 </div>
@@ -1350,6 +1556,7 @@ export default function PluginMarketPage() {
                   type="text"
                   placeholder={t('plugins.searchPlaceholder')}
                   value={searchInput}
+                  disabled={searchDisabled}
                   onChange={e => {
                     const val = e.target.value
                     setSearchInput(val)
@@ -1361,9 +1568,9 @@ export default function PluginMarketPage() {
                   onKeyDown={e => {
                     if (e.key === 'Enter') handleSearch()
                   }}
-                  className="h-14 w-full rounded-full bg-transparent pl-10 pr-24 text-[16px] leading-[22px] text-[#191919] outline-none placeholder:text-[#A3A3A3] sm:pr-[104px]"
+                  className="h-14 w-full rounded-full bg-transparent pl-10 pr-24 text-[16px] leading-[22px] text-[#191919] outline-none placeholder:text-[#A3A3A3] disabled:cursor-not-allowed sm:pr-[104px]"
                 />
-                {(searchInput || searchKeyword) && (
+                {(searchInput || searchKeyword) && !searchDisabled && (
                   <button
                     type="button"
                     onClick={() => {
@@ -1379,13 +1586,19 @@ export default function PluginMarketPage() {
                 <button
                   type="button"
                   onClick={handleSearch}
-                  disabled={fetching}
-                  className="absolute right-3 top-1/2 inline-flex h-[30px] w-[30px] -translate-y-1/2 items-center justify-center rounded-full text-[#8A98AC] transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-70 sm:h-8 sm:w-8"
+                  disabled={fetching || searchDisabled}
+                  className="absolute right-3 top-1/2 inline-flex h-[30px] w-[30px] -translate-y-1/2 items-center justify-center rounded-full text-[#8A98AC] transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-70 sm:h-8 sm:w-8"
                 >
                   {fetching && searchKeyword ? <RefreshCw className="h-[14px] w-[14px] animate-spin" /> : <Search className="h-[14px] w-[14px]" />}
                 </button>
               </div>
             </div>
+
+            {searchDisabled && (
+              <p className="mx-auto mt-2 max-w-[1000px] text-center text-xs text-slate-400">
+                {t('plugins.searchDisabledHint')}
+              </p>
+            )}
           </section>
 
           {!noticeDismissed && (
@@ -1414,10 +1627,28 @@ export default function PluginMarketPage() {
 
           <section className="pb-2 pt-16 lg:pt-[64px]">
             {categoryMobileNav}
+            {/* 工具栏横跨两栏上方，右对齐：左栏分段切换器与右栏第一排卡片同处 grid 第一行，
+                二者顶部自然对齐；工具栏不再压在右栏卡片之上。 */}
+            <div className="mb-4 hidden h-7 items-center justify-end gap-1.5 xl:flex">
+              <div className="flex shrink-0 items-center gap-1.5">
+                <ViewToggle value={viewMode} onChange={setViewMode} t={t} />
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  disabled={loading || fetching}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#EEF0F4] bg-white text-slate-400 transition-colors hover:border-[#DCE3EE] hover:text-slate-600 disabled:opacity-60"
+                  title={t('plugins.actions.refresh')}
+                  aria-label={t('plugins.actions.refresh')}
+                >
+                  <RefreshCw className={`h-[14px] w-[14px] ${loading || fetching ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
             <div className="mt-[6px] flex flex-col gap-3 xl:grid xl:grid-cols-[248px_minmax(0,1fr)] xl:items-start xl:gap-6">
               {sidebar}
               <div className="min-w-0">
-                <div className="mb-4 flex h-7 items-center justify-end gap-1.5">
+                {/* 移动端工具栏：横滚分段下方右对齐（桌面版已在上方横跨） */}
+                <div className="mb-4 flex h-7 items-center justify-end gap-1.5 xl:hidden">
                   <div className="flex shrink-0 items-center gap-1.5">
                     <ViewToggle value={viewMode} onChange={setViewMode} t={t} />
                     <button

@@ -110,6 +110,13 @@ PLUGIN_YAML_DESCRIPTION_MAX_LEN = 4096
 SKILL_DESC_MAX_LEN = 4096
 PLUGIN_TAGS_MAX_COUNT = 32
 PLUGIN_TAG_MAX_LEN = 64
+# 查询参数侧：tags 过滤参数（逗号分隔）的长度上限。
+# 发布侧单资产最多 32 个标签，查询侧留同量级余量；过长的参数直接 422 拒绝，
+# 避免构造数百个 JSON_CONTAINS 条件拖垮查询计划。
+QUERY_TAGS_MAX_LEN = 512
+# parse_tag_filter 解析后的标签数量上限（截断，不报错）：正常前端最多选十几个 chip，
+# 与 GET /plugins/tags 的 limit 同量级。
+QUERY_TAGS_MAX_COUNT = 20
 # 与 models.market_assets.MarketAssetDB.short_desc 列宽一致；较长文案走 detail_desc（Text）
 MARKET_ASSET_SHORT_DESC_MAX_LEN = 4096
 

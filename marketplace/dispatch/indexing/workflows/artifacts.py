@@ -204,6 +204,8 @@ def build_catalog_records_from_nodes(
         select_when = str(raw_node.get("select_when") or "").strip()
         dont_select_when = str(raw_node.get("dont_select_when") or "").strip()
         skill_path = str(scanned.get("path") or "")
+        raw_tags = scanned.get("tags")
+        tags = tuple(str(t).strip() for t in raw_tags if isinstance(t, str) and t.strip()) if isinstance(raw_tags, list) else ()
         records.append(
             CatalogRecord(
                 worker_id=worker_id,
@@ -219,6 +221,7 @@ def build_catalog_records_from_nodes(
                     description=description,
                     content=content,
                     cid=cid,
+                    tags=list(tags),
                 ),
                 metadata={
                     "content": content,
@@ -226,6 +229,7 @@ def build_catalog_records_from_nodes(
                     "select_when": select_when,
                     "dont_select_when": dont_select_when,
                 },
+                tags=tags,
             )
         )
     return sorted(records, key=lambda item: item.cid)
@@ -244,6 +248,7 @@ def write_catalog(records: Sequence[CatalogRecord], path: Path) -> None:
                 "category": record.category,
                 "retrieval_text": record.retrieval_text,
                 "metadata": record.metadata,
+                "tags": list(record.tags),
             },
             ensure_ascii=False,
         )
@@ -273,13 +278,22 @@ def build_fallback_tree_nodes(*, aggregate_dir: Path) -> List[Dict[str, object]]
     return nodes
 
 
-def build_retrieval_text(*, worker_id: str, name: str, description: str, content: str, cid: str) -> str:
+def build_retrieval_text(
+    *,
+    worker_id: str,
+    name: str,
+    description: str,
+    content: str,
+    cid: str,
+    tags: list[str] | None = None,
+) -> str:
     parts = [
         compact_text(name, limit=200),
         compact_text(description, limit=400),
         compact_text(content, limit=1200),
         compact_text(worker_id, limit=120),
         compact_text(cid, limit=200),
+        compact_text(" ".join(tags or []), limit=200),
     ]
     return "\n".join(part for part in parts if part)
 

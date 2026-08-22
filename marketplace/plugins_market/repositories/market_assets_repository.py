@@ -2,9 +2,12 @@
 
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+import json
 import time
+import unicodedata
 
-from sqlalchemy import and_, asc, desc, func, or_, case, exists, select, not_
+from sqlalchemy import and_, asc, desc, func, or_, case, exists, select, not_, cast, Text, text, literal_column
+from sqlalchemy.sql.sqltypes import CHAR
 from sqlalchemy.orm import Session
 
 from plugins_market.models.market_assets import (
@@ -23,13 +26,91 @@ from plugins_market.core.moderation import (
     is_skill_like_plugin_type,
 )
 from plugins_market.schemas.plugin import AssetCreate, AssetVersionCreate, PluginListQuery
+from plugins_market.validation.constants import QUERY_TAGS_MAX_COUNT
 from .base_repository import MarketBaseRepository
 
 if TYPE_CHECKING:
     from plugins_market.core.viewer_context import ViewerContext
 
+
+def _tags_text_column():
+    """tags JSON 列的文本投影：cast 为文本后剥离 JSON 结构字符并还原转义，标签间归一为单空格。
+
+    MySQL 存 JSON 数组为 ["a", "b"]，且按 JSON 规范转义值内特殊字符：
+    双引号 -> \\"，反斜线 -> \\\\。处理顺序必须是「先转义占位、再剥结构、最后还原」：
+    1. 把转义序列 \\\\ 和 \\" 先替换为占位符（此时剩余引号必为结构性引号）；
+    2. 剥离数组括号/分隔逗号/结构性引号，标签间归一为单空格，跨标签关键词可命中；
+    3. 占位符还原为真实字符——否则含双引号/反斜线的标签会被损坏
+       （如 say"hello 投影成 say\\hello，关键词再也无法命中）。
+    SQL NULL 的行 cast 后仍为 NULL，ilike 不匹配。
+    显式 CAST(... AS CHAR(4096))：tags 上限为 32 个 x 64 字符（发布校验限制），
+    4096 足够容纳；不带长度的 CAST AS CHAR 在部分 MySQL 版本/中间件上可能截断。
+    """
+    json_text_type = Text().with_variant(CHAR(4096), "mysql", "mariadb")
+    col = cast(MarketAssetDB.tags, json_text_type)
+    # 1) JSON 转义序列 -> 控制字符占位符（若先剥引号，\" 会残留反斜线且无法再区分）
+    decoded = func.replace(col, "\\\\", "\x01")
+    decoded = func.replace(decoded, '\\"', "\x02")
+    # 2) 剥离结构性引号/逗号
+    stripped = func.replace(decoded, '", "', " ")
+    stripped = func.replace(stripped, '",', " ")
+    stripped = func.replace(stripped, ',"', " ")
+    stripped = func.replace(stripped, '["', "")
+    stripped = func.replace(stripped, '"]', "")
+    stripped = func.replace(stripped, '"', "")
+    # 3) 占位符 -> 真实字符
+    restored = func.replace(stripped, "\x01", "\\")
+    restored = func.replace(restored, "\x02", '"')
+    return func.replace(func.replace(restored, "  ", " "), "  ", " ")
+
 # SQL IN()/NOT IN() 时需要列表形式
 _SKILL_LIKE_PLUGIN_TYPES_LIST = tuple(SKILL_LIKE_PLUGIN_TYPES)
+
+
+def parse_tag_filter(tags: str | None) -> list[str]:
+    """逗号分隔的标签参数 -> 去重后的标签列表（保序，最多 QUERY_TAGS_MAX_COUNT 个）。
+
+    与发布校验侧（validation/plugin_yaml.py）同口径归一化：NFKC 折全角->半角、
+    casefold 统一大小写。DB 标签已按归一化形式存入，此处不归一化会让 tags=AI、
+    tags=ＡＩ（全角）等直接 API 调用因 JSON_CONTAINS 大小写/全半角不匹配而静默空结果。
+    含逗号的标签无法在该协议下表达（发布校验已拒收），此处剔除以防旁路数据。
+    数量截断（不报错）：每个标签会生成一个 JSON_CONTAINS 条件，数百个会拖垮查询计划；
+    正常前端最多选十几个 chip，QUERY_TAGS_MAX_COUNT 与标签聚合接口的 limit 同量级。
+    """
+    if not tags:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in tags.split(","):
+        t = unicodedata.normalize("NFKC", part.strip()).casefold()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+            if len(out) >= QUERY_TAGS_MAX_COUNT:
+                break
+    return out
+
+
+def _prepare_tag_keyword_for_like(keyword: str | None) -> str:
+    """归一化并转义标签搜索 keyword，供 ilike 模式内插（配合 escape='\\'）。
+
+    与发布校验/parse_tag_filter 同口径 NFKC 折全角->半角：全角字母（如 ＰＹ）在
+    utf8mb4_general_ci 下不等价于半角，ilike 直查会空。ilike 已不区分大小写，故不做
+    casefold（与 parse_tag_filter 的 JSON_CONTAINS 精确匹配路径不同）。
+    标签名可含 _ 或 %（发布校验仅禁逗号），它们在 LIKE 中是通配符，须转义为字面量：
+    反斜杠先转义，避免把后续引入的 \\% \\_ 再转一次。空白/None -> ''（调用方据此跳过过滤）。
+    """
+    kw = unicodedata.normalize("NFKC", (keyword or "").strip())
+    if not kw:
+        return ""
+    return kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _anonymous_viewer() -> "ViewerContext":
+    """聚合接口按匿名访客口径计数（避免 TYPE_CHECKING 循环导入，函数内导入）。"""
+    from plugins_market.core.viewer_context import ViewerContext
+
+    return ViewerContext(user_id=None, user_login=None, is_system_admin=False)
 
 
 def pending_moderation_version_filter():
@@ -189,6 +270,70 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
     def __init__(self, db: Session):
         super().__init__(db, MarketAssetDB)
 
+    def _dialect_supports_json_contains(self) -> bool:
+        """JSON_CONTAINS/JSON_TABLE 仅 MySQL 提供；SQLite（单测内存库）走检索路径的 Python 过滤。"""
+        return self.db.get_bind().dialect.name in ("mysql", "mariadb")
+
+    def list_tag_options(
+        self,
+        *,
+        plugin_type: str | None = None,
+        keyword: str | None = None,
+        limit: int = 20,
+    ) -> List[Tuple[str, int]]:
+        """聚合可见资产的 tags，按使用次数降序返回 (tag, count)。
+
+        MySQL 8 用 JSON_TABLE 展开 + GROUP BY 在库内聚合，仅返回 limit 行；
+        不支持的方言（SQLite 单测）返回空。
+        可见性与匿名访客的市场列表完全同口径（skill_moderation_list_clause +
+        OFFLINE 排除），保证 chip 上的 count 与点击后的列表结果一致。
+        keyword 非空时按子串（ilike %kw%）在 GROUP BY 前过滤，使低频长尾标签
+        也能被搜到；limit 仍作用于匹配后集合，按使用次数降序。kw 先做 NFKC 归一
+        化（全角->半角，与发布校验同口径）再转义 %/_ 通配符（escape='\\'，令其
+        按字面量匹配），见 _prepare_tag_keyword_for_like。
+        """
+        if not self._dialect_supports_json_contains():
+            return []
+        # JSON_TABLE 展开 tags（varchar(255)：发布限制单标签 <=64 字符，宽裕覆盖；
+        # 超限标签得 NULL 行，isnot(None) 剔除，避免混入计数键）。
+        # JOIN ... ON 1 是 MySQL JSON_TABLE 的标准行转列写法（逗号连表会触发笛卡尔积告警）
+        tags_table = func.json_table(
+            MarketAssetDB.tags,
+            literal_column("'$[*]' COLUMNS (tag VARCHAR(255) PATH '$')"),
+        ).table_valued("tag")
+        expanded = (
+            select(tags_table.c.tag, MarketAssetDB.asset_id.label("asset_id"))
+            .select_from(MarketAssetDB.__table__.join(tags_table, literal_column("1")))
+            .where(MarketAssetDB.status != "OFFLINE")
+            .where(MarketAssetDB.tags.isnot(None))
+            .where(tags_table.c.tag.isnot(None))
+        )
+        pt = (plugin_type or "").strip()
+        if pt:
+            expanded = expanded.where(MarketAssetDB.plugin_type == pt)
+        # 子串过滤须在 GROUP BY 前：否则 count 预排序 + limit 会先把低频长尾标签剔除，搜不到。
+        # kw 与发布校验/parse_tag_filter 同口径 NFKC 归一 + 转义 LIKE 通配符（_/%），
+        # escape='\\' 令其按字面量匹配；详见 _prepare_tag_keyword_for_like。
+        kw_escaped = _prepare_tag_keyword_for_like(keyword)
+        if kw_escaped:
+            expanded = expanded.where(tags_table.c.tag.ilike(f"%{kw_escaped}%", escape="\\"))
+        expanded = expanded.subquery()
+        # 可见资产子查询：与市场列表同口径（匿名访客），IN 半连接
+        visible_assets = select(MarketAssetDB.asset_id)
+        mod_clause = skill_moderation_list_clause(_anonymous_viewer())
+        if mod_clause is not None:
+            visible_assets = visible_assets.where(mod_clause)
+        visible_assets = visible_assets.subquery()
+        q = (
+            select(expanded.c.tag, func.count(func.distinct(expanded.c.asset_id)).label("cnt"))
+            .where(expanded.c.asset_id.in_(select(visible_assets.c.asset_id)))
+            .group_by(expanded.c.tag)
+            .order_by(desc("cnt"), expanded.c.tag.asc())
+            .limit(limit)
+        )
+        rows = self.db.execute(q).fetchall()
+        return [(r.tag, int(r.cnt)) for r in rows]
+
     @staticmethod
     def _is_publisher_scoped_list(params: PluginListQuery, viewer: "ViewerContext") -> bool:
         """个人「我的 Skills」：publisher_id 筛选且为当前用户本人。"""
@@ -334,6 +479,7 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
                     MarketAssetDB.name.ilike(kw),
                     MarketAssetDB.display_name.ilike(kw),
                     MarketAssetDB.short_desc.ilike(kw),
+                    _tags_text_column().ilike(kw),
                 )
             )
         q = q.order_by(MarketAssetDB.update_time.desc(), MarketAssetDB.asset_id.asc())
@@ -395,14 +541,28 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
                 )
         if params.search_keyword and params.search_keyword.strip():
             kw = f"%{params.search_keyword.strip()}%"
+            # 关键词搜索命中标签文本（tags JSON 列归一化投影）
             q_assets = q_assets.filter(
                 or_(
                     MarketAssetDB.name.ilike(kw),
                     MarketAssetDB.display_name.ilike(kw),
                     MarketAssetDB.short_desc.ilike(kw),
                     MarketAssetDB.detail_desc.ilike(kw),
+                    _tags_text_column().ilike(kw),
                 )
             )
+
+        # 标签精确过滤（tags 参数）：JSON_CONTAINS 仅 MySQL 支持；
+        # SQLite（单测内存库）无此函数，跳过——由检索路径的 Python 集合过滤兜住。
+        tag_filter = parse_tag_filter(params.tags)
+        if tag_filter and self._dialect_supports_json_contains():
+            json_contains = [
+                func.json_contains(MarketAssetDB.tags, json.dumps(t)) for t in tag_filter
+            ]
+            if params.tags_match == "any":
+                q_assets = q_assets.filter(or_(*json_contains))
+            else:
+                q_assets = q_assets.filter(*json_contains)
 
         publisher_scoped = self._is_publisher_scoped_list(params, viewer) or self._is_direct_asset_access(
             params, viewer

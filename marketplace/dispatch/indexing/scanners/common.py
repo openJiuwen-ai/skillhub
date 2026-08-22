@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,36 @@ def read_text_if_exists(path: Path) -> str:
     if not path.exists() or not path.is_file():
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def extract_tags_from_metadata(metadata: Any) -> list[str]:
+    """从 plugin.yaml 的 metadata.tags 提取并清洗标签列表。
+
+    与发布校验侧（validation/plugin_yaml.py）同口径归一化：NFKC + casefold、
+    剔除含逗号标签、去重变体。即便发布时已校验，索引文本仍须与 DB 入库形式一致，
+    否则关键词检索路径与 DB LIKE 路径对同一标签会匹配到不同结果。
+    与 retrieval/indexing/scanners/common.py 的同名实现保持同口径。
+    """
+    if not isinstance(metadata, dict):
+        return []
+    raw_tags = metadata.get("tags")
+    if not isinstance(raw_tags, list):
+        return []
+    tags: list[str] = []
+    for item in raw_tags:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        # 与发布校验侧同口径：NFKC 折全角->半角、casefold 统一大小写；
+        # 归一化后查逗号（全角逗号被折成半角一并挡住）并去重变体，
+        # 保证索引文本与 DB 入库形式一致。
+        normalized = unicodedata.normalize("NFKC", stripped).casefold()
+        if not normalized or "," in normalized:
+            continue
+        if any(normalized == t for t in tags):
+            continue
+        tags.append(normalized)
+    return tags
 
 
 def _safe_load_frontmatter(text: str) -> dict[str, Any]:

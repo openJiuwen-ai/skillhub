@@ -30,6 +30,8 @@ export const API_ENDPOINTS = {
   },
   PLUGINS: {
     LIST: '/plugins',
+    /** GET /api/v1/plugins/tags - 标签筛选选项（热门自动推荐 + 运营配置优先） */
+    TAGS: '/plugins/tags',
     MY_STARS: '/plugins/my/stars',
     MY_LIKES: '/plugins/my/likes',
     interactionsBatch: '/plugins/interactions/batch',

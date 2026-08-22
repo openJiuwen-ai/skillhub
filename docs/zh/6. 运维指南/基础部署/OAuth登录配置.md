@@ -1,6 +1,6 @@
 # OAuth 登录配置
 
-SkillHub Web 登录支持 GitCode 和 GitHub OAuth。如需使用 Web 登录，至少启用一种；同时启用时，登录页会显示两个入口。浏览公开内容无需配置 OAuth。
+SkillHub Web 登录支持 GitCode、GitHub 和 AgentOS OAuth。如需使用 Web 登录，至少启用一种；同时启用时，登录页会显示三个入口。浏览公开内容无需配置 OAuth。
 
 ## 确定访问地址
 
@@ -14,6 +14,8 @@ Windows 用户须先使用管理员权限编辑 `C:\Windows\System32\drivers\etc
 
 ```text
 127.0.0.1 skillhub.local
+# 如果需要使用agentos登录，取消如下注释，agentos.local为agentos前端域名
+# 127.0.0.1 agentos.local
 ```
 
 应用主页和回调地址统一填写为：
@@ -22,6 +24,7 @@ Windows 用户须先使用管理员权限编辑 `C:\Windows\System32\drivers\etc
 应用主页：http://skillhub.local:9002
 GitCode 回调：http://skillhub.local:9002/api/v1/auth/oauth/gitcode/callback
 GitHub 回调：http://skillhub.local:9002/api/v1/auth/oauth/github/callback
+AgentOS 回调：http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
 ```
 
 应用主页、回调地址、浏览器访问地址和 `MARKET_OAUTH_FRONTEND_ORIGIN` 必须使用同一域名。不要混用 `localhost`、`127.0.0.1` 和 `skillhub.local`。
@@ -71,6 +74,32 @@ MARKET_OAUTH_FRONTEND_ORIGIN=http://skillhub.local:9002
 ```
 
 GitHub OAuth App 的注册步骤见 [GitHub 官方文档](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app)。
+
+## AgentOS OAuth
+
+1. 目前AgentOS通过环境变量配置OAuth认证能力。需要在`AgentOS`的`.env`中填写：
+
+```ini
+OAUTH2_CLIENT_ID=你的AgentOS客户端ID
+OAUTH2_CLIENT_SECRET=你的AgentOS客户端密钥
+OAUTH2_REDIRECT_URI=http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
+# 默认ACESS_TOKEN有效期为一天
+OAUTH2_ACCESS_TOKEN_EXPIRE_MINUTES=1440
+OAUTH2_FRONTEND_ORIGIN=http://agentos.local:8090
+```
+
+2. 在`SkillHub`的`.env` 中填写：
+
+```ini
+MARKET_AGENTOS_OAUTH_ENABLED=true
+MARKET_AGENTOS_OAUTH_CLIENT_ID=你的AgentOS客户端ID
+MARKET_AGENTOS_OAUTH_CLIENT_SECRET=你的AgentOS客户端密钥
+MARKET_AGENTOS_OAUTH_REDIRECT_URI=http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
+MARKET_AGENTOS_OAUTH_AUTHORIZE_URL=http://agentos.local:8090/api/v1/oauth2/authorize
+MARKET_AGENTOS_OAUTH_TOKEN_URL=http://agentos.local:8090/api/v1/oauth2/token
+MARKET_AGENTOS_AUTH_USER_API_URL=http://agentos.local:8090/api/v1/oauth2/userinfo
+MARKET_OAUTH_FRONTEND_ORIGIN=http://skillhub.local:9002
+```
 
 ## 配置审核管理员
 

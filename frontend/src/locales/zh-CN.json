@@ -43,7 +43,24 @@
       "skill": "Skill",
       "swarmskill": "Swarm Skills"
     },
-    "searchPlaceholder": "搜索名称、描述",
+    "searchPlaceholder": "搜索名称、描述、标签",
+    "searchDisabledHint": "已选标签时搜索暂不可用，清空标签即可恢复搜索",
+    "sidebarViewSwitchAria": "切换分类与标签视图",
+    "sidebarViewCategory": "分类",
+    "sidebarViewTag": "标签",
+    "tagNavAria": "按标签筛选技能",
+    "tagListEmpty": "暂无标签",
+    "tagSearchPlaceholder": "搜索标签",
+    "tagSearchRecent": "最近使用",
+    "tagSearchNoMatch": "无匹配标签",
+    "tagSearchEmptyHistory": "暂无历史标签",
+    "tagSearchListAria": "标签搜索结果",
+    "tagSearchLoading": "搜索中…",
+    "tagSearchClearAria": "清除",
+    "tagSelectedHeader": "已选",
+    "tagSelectedAria": "已选标签",
+    "tagSelectedRemoveAria": "移除标签",
+    "tagRecommendedHeader": "推荐",
     "tabs": {
       "market": "插件市场"
     },
@@ -51,12 +68,6 @@
       "plugin": "插件",
       "skill": "技能"
     },
-    "searchStatus": {
-      "searching": "搜索中...",
-      "found": "「{{keyword}}」· 找到 {{total}} 个结果",
-      "empty": "「{{keyword}}」· 无匹配结果"
-    },
-    "categoryTitle": "SwarmSkillsHub 分类",
     "categoryNavAria": "按分类筛选技能",
     "category": {
       "hot": "热门",
@@ -566,6 +577,7 @@
       "subtitle": "使用 GitCode 或 GitHub 账号登录插件市场。若浏览器已在对应平台登录，授权将自动完成。",
       "gitcodeButton": "使用 GitCode 登录",
       "githubButton": "使用 GitHub 登录",
+      "agentosButton": "使用 AgentOS 登录",
       "hintOAuthSession": "登录态与访问令牌由 GitCode 或 GitHub 管理，本站不保存密码，也不维护 refresh_token。"
     },
     "oauth": {

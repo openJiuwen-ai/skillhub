@@ -6,6 +6,8 @@ from typing import Any, Dict, Literal, List, Optional
 from fastapi import UploadFile
 from pydantic import BaseModel, Field, field_validator
 
+from plugins_market.validation.constants import QUERY_TAGS_MAX_LEN
+
 
 @dataclass
 class PluginPublishForm:
@@ -248,6 +250,15 @@ class PluginListQuery(BaseModel):
         None,
         description="按 Skill 审核状态筛选：PENDING | APPROVED | REJECTED；常配合 plugin_type=skill",
     )
+    tags: Optional[str] = Field(
+        None,
+        max_length=QUERY_TAGS_MAX_LEN,
+        description=(
+            "按标签过滤：逗号分隔多个标签；与 tags_match 组合决定 all(子集)/any(交集) 语义；"
+            f"参数长度上限 {QUERY_TAGS_MAX_LEN} 字符，超出返回 422"
+        ),
+    )
+    tags_match: str = Field("all", description="标签匹配模式: all=同时包含全部标签, any=包含任一标签")
     order_by: str = Field(
         "install_count",
         description=(
@@ -292,6 +303,21 @@ class PluginListQuery(BaseModel):
         if s in ("PENDING", "APPROVED", "REJECTED"):
             return s
         raise ValueError("moderation_status must be one of: PENDING, APPROVED, REJECTED")
+
+    @field_validator("tags_match", mode="before")
+    @classmethod
+    def normalize_tags_match(cls, v: object) -> str:
+        s = str(v or "all").strip().lower()
+        if s not in ("all", "any"):
+            raise ValueError("tags_match must be one of: all, any")
+        return s
+
+
+class TagOption(BaseModel):
+    """GET /plugins/tags 返回的标签选项。"""
+
+    tag: str = Field(..., description="标签文本")
+    count: int = Field(..., ge=0, description="使用该标签的可见资产数")
 
 
 class SkillModerationRequest(BaseModel):

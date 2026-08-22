@@ -21,6 +21,7 @@ class CatalogRecord:
     category: str
     retrieval_text: str
     metadata: Dict[str, object]
+    tags: tuple[str, ...] = ()
 
 
 __all__ = [

@@ -63,6 +63,7 @@ from plugins_market.repositories import (
     MarketSkillReviewRepository,
     PluginFetchRecordRepository,
 )
+from plugins_market.repositories.market_assets_repository import parse_tag_filter
 from plugins_market.schemas.plugin import (
     PluginDownloadData,
     PluginListItem,
@@ -82,7 +83,7 @@ from plugins_market.services.site_notifications import (
 )
 from plugins_market.core.config import settings
 from plugins_market.retrieval.index_manager import get_index_manager
-from plugins_market.retrieval.search import retrieval_search
+from plugins_market.retrieval.search import retrieval_search  # noqa: F401  (被测试 monkeypatch)
 from plugins_market.validation import extract_plugin_metadata
 from plugins_market.validation.constants import (
     MARKET_ASSET_SHORT_DESC_MAX_LEN,
@@ -1299,11 +1300,14 @@ def list_plugins_service(
         query = query.model_copy(update={"plugin_type": "skill,swarmskill"})
     plugin_type = (query.plugin_type or "").strip()
 
-    # Personalized recommend path: homepage「推荐精选」only (no category_id).
+    # Personalized recommend path: homepage「推荐精选」only (no keyword/category_id/tags).
     # 「全部」and category tabs use MySQL install_count. POST /api/v1/recommend is unchanged.
     category_id = (query.category_id or "").strip()
     use_recommend = (
-        (query.order_by or "").strip() == "recommend" and not keyword and not category_id
+        (query.order_by or "").strip() == "recommend"
+        and not keyword
+        and not category_id
+        and not parse_tag_filter(query.tags)
     )
     if use_recommend and not settings.recommender_enabled:
         query = query.model_copy(update={"order_by": "install_count"})
@@ -1403,6 +1407,11 @@ def list_plugins_service(
     if (query.order_by or "").strip() == "recommend":
         query = query.model_copy(update={"order_by": "install_count"})
 
+    # 标签是浏览态过滤器，不与关键词搜索组合：搜索时忽略 tags。
+    # 前端已置灰标签行，此处保证直接调 API 的客户端同样是「搜索不看标签」。
+    if keyword and parse_tag_filter(query.tags):
+        query = query.model_copy(update={"tags": None})
+
     if keyword and plugin_type and use_retrieval_search:
         item_ids = retrieval_search(
             get_index_manager(),
@@ -1412,6 +1421,11 @@ def list_plugins_service(
             query.page_size,
             method=settings.retrieval_search_method,
         )
+        # 守 retrieval_search 契约：None=检索不可用/出错 -> 回退 DB LIKE（下方 repo.list_plugins）；
+        # []=检索确认无命中 -> 用空结果（下方 if not ordered 返回空页，不退化为子串 LIKE）。
+        # tags 已拼进检索文本（build_retrieval_text），标签名当关键词 BM25 正常命中，故
+        # "索引搜不到"基本只剩索引未重建的空窗期--召回缺口应在索引层补，而非搜索层 LIKE 兜底，
+        # 否则所有真无匹配的关键词搜索都会翻出子串命中但语义无关的资产，拉低精度。
         if item_ids is not None:
             logger.info("retrieval path: plugin_type=%s keyword=%r hits=%d", plugin_type, keyword, len(item_ids))
             rows_with_path = repo.get_assets_with_file_paths(item_ids, viewer=viewer)
@@ -1443,34 +1457,51 @@ def list_plugins_service(
                 ordered = [row for row in ordered if (row[0].category_id or "") == category_id]
             ordered = _rows_pin_order_first(ordered)
 
-            total = len(ordered)
-            start = (query.page - 1) * query.page_size
-            page_slice = ordered[start:start + query.page_size]
-            page_asset_ids = [a.asset_id for a, _, _ in page_slice]
-            vrows = version_repo.list_all_by_asset_ids(page_asset_ids)
-            vmap: Dict[str, List[MarketAssetVersionDB]] = defaultdict(list)
-            for r in vrows:
-                vmap[r.asset_id].append(r)
-            items = []
-            for asset, latest_file_path, has_icon in page_slice:
-                items.append(
-                    _list_item_from_asset(
-                        asset,
-                        latest_file_path,
-                        has_icon,
-                        storage,
-                        vmap.get(asset.asset_id, []),
-                        viewer,
-                        market_public_scoped=market_public_scoped,
-                        db=db,
-                    )
+            if not ordered:
+                # 检索确认无命中（[]），或命中全被 plugin_type/类目/审核合法过滤掉。
+                # 过滤是用户筛选条件所致，属合法结果：返回空页，不退化为子串 LIKE 跨过滤召回，
+                # 否则可能在他类目/他类型召回不相关结果（见评审意见）。
+                logger.info(
+                    "retrieval no hits after filter: plugin_type=%s keyword=%r hits=%d",
+                    plugin_type,
+                    keyword,
+                    len(item_ids),
                 )
-            return PluginListResponse(
-                page=query.page,
-                page_size=query.page_size,
-                total=total,
-                items=items,
-            )
+                return PluginListResponse(
+                    page=query.page,
+                    page_size=query.page_size,
+                    total=0,
+                    items=[],
+                )
+            else:
+                total = len(ordered)
+                start = (query.page - 1) * query.page_size
+                page_slice = ordered[start:start + query.page_size]
+                page_asset_ids = [a.asset_id for a, _, _ in page_slice]
+                vrows = version_repo.list_all_by_asset_ids(page_asset_ids)
+                vmap: Dict[str, List[MarketAssetVersionDB]] = defaultdict(list)
+                for r in vrows:
+                    vmap[r.asset_id].append(r)
+                items = []
+                for asset, latest_file_path, has_icon in page_slice:
+                    items.append(
+                        _list_item_from_asset(
+                            asset,
+                            latest_file_path,
+                            has_icon,
+                            storage,
+                            vmap.get(asset.asset_id, []),
+                            viewer,
+                            market_public_scoped=market_public_scoped,
+                            db=db,
+                        )
+                    )
+                return PluginListResponse(
+                    page=query.page,
+                    page_size=query.page_size,
+                    total=total,
+                    items=items,
+                )
         logger.info("retrieval unavailable for plugin_type=%s, fallback to DB LIKE", plugin_type)
 
     rows, total = repo.list_plugins(query, viewer=viewer)

@@ -88,11 +88,11 @@ def normalize_oauth_provider_header(raw: Optional[str]) -> str:
     if raw is None or not str(raw).strip():
         return "gitcode"
     p = str(raw).strip().lower()
-    if p in ("gitcode", "github"):
+    if p in ("gitcode", "github", "agentos"):
         return p
     raise _http_exception(
         status.HTTP_400_BAD_REQUEST,
-        "Invalid X-OAuth-Provider; allowed: gitcode, github",
+        "Invalid X-OAuth-Provider; allowed: gitcode, github, agentos",
         error="invalid_oauth_provider",
     )
 

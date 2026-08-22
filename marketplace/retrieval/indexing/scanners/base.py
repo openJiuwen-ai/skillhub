@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from shared.rich_compat import BarColumn, Console, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -29,6 +29,7 @@ class ScannedItem:
     stars: int = 0
     is_official: bool = False
     author: str = ""
+    tags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -46,6 +47,7 @@ class ScannedItem:
             "stars": self.stars,
             "is_official": self.is_official,
             "author": self.author,
+            "tags": self.tags,
         }
 
 

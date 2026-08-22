@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import IntFlag
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 try:
     from openai import OpenAI
@@ -264,6 +264,10 @@ def build_catalog_records_from_nodes(
         market_short_desc = str(scanned.get("market_short_desc") or "").strip()
         market_detail_desc = str(scanned.get("market_detail_desc") or "").strip()
         skill_path = str(scanned.get("path") or "")
+        raw_tags = scanned.get("tags")
+        tags: Tuple[str, ...] = ()
+        if isinstance(raw_tags, list):
+            tags = tuple(str(t).strip() for t in raw_tags if isinstance(t, str) and t.strip())
         records.append(
             CatalogRecord(
                 skill_id=worker_id,
@@ -284,6 +288,7 @@ def build_catalog_records_from_nodes(
                     description=description,
                     content=content,
                     cid=cid,
+                    tags=list(tags),
                 ),
                 metadata={
                     "content": content,
@@ -292,6 +297,7 @@ def build_catalog_records_from_nodes(
                     "market_short_desc": market_short_desc,
                     "market_detail_desc": market_detail_desc,
                 },
+                tags=tags,
             )
         )
     return sorted(records, key=lambda item: item.cid)
@@ -311,6 +317,7 @@ def write_catalog(records: Sequence[CatalogRecord], path: Path) -> None:
                 "category": record.category,
                 "retrieval_text": record.retrieval_text,
                 "metadata": record.metadata,
+                "tags": list(record.tags),
             },
             ensure_ascii=False,
         )
@@ -541,6 +548,7 @@ def build_retrieval_text(
     description: str,
     content: str,
     cid: str,
+    tags: list[str] | None = None,
 ) -> str:
     parts = [
         compact_text(name, limit=200),
@@ -550,6 +558,7 @@ def build_retrieval_text(
         compact_text("" if market_short_desc else description, limit=400),
         compact_text(skill_id, limit=120),
         compact_text(cid, limit=200),
+        compact_text(" ".join(tags or []), limit=200),
     ]
     return "\n".join(part for part in parts if part)
 

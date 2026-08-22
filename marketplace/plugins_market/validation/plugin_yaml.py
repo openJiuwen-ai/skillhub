@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -242,11 +243,22 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
             raise_invalid_config(
                 f"plugin.yaml 中 metadata.tags[{i}] strip 后不得为空字符串"
             )
-        if len(stripped) > PLUGIN_TAG_MAX_LEN:
+        # 归一化：NFKC 折叠全角->半角（防中文输入法全角模式产生的变体），
+        # casefold 统一大小写。两者对纯中文恒等、无副作用；归一后去重，
+        # 挡住大小写/全半角变体造成的重复垃圾标签。
+        normalized = unicodedata.normalize("NFKC", stripped).casefold()
+        if len(normalized) > PLUGIN_TAG_MAX_LEN:
             raise_invalid_config(
                 f"plugin.yaml 中 metadata.tags[{i}] 长度不得超过 {PLUGIN_TAG_MAX_LEN} 个字符"
             )
-        tags.append(stripped)
+        if "," in normalized:
+            # tags 查询参数以逗号分隔多标签，标签本身含逗号会破坏该协议
+            raise_invalid_config(
+                f"plugin.yaml 中 metadata.tags[{i}] 不得包含逗号（多标签过滤参数以逗号分隔）"
+            )
+        if any(normalized == t for t in tags):
+            continue  # 重复（含大小写/全半角变体）静默跳过，不占名额
+        tags.append(normalized)
 
     # skill: extra slug + length validation
     if runtime_type == RUNTIME_SKILL:

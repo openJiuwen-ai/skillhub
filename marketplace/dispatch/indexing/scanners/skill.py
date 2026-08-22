@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from .base import BaseScanner, ScannedItem, console
-from .common import clean_first_paragraph, parse_frontmatter
+from .common import clean_first_paragraph, extract_tags_from_metadata, parse_frontmatter
 
 
 class SkillScanner(BaseScanner):
@@ -66,6 +67,9 @@ class SkillScanner(BaseScanner):
         if not description:
             description = clean_first_paragraph(body)
 
+        plugin_payload = self._load_plugin_payload_for_root(item_root)
+        tags = extract_tags_from_metadata(plugin_payload.get("metadata")) if plugin_payload else []
+
         return ScannedItem(
             id=item_id,
             name=name,
@@ -76,4 +80,40 @@ class SkillScanner(BaseScanner):
             stars=int(meta.get("stars") or 0),
             is_official=bool(meta.get("is_official")),
             author=str(meta.get("author") or ""),
+            tags=tags,
         )
+
+    @classmethod
+    def _plugin_metadata_candidates(cls, path: Path) -> tuple[Path, ...]:
+        candidates: list[Path] = []
+        for parent in (path / ".codex-plugin", path, path.parent):
+            for filename in ("plugin.yaml", "plugin.yml", "plugin.json"):
+                candidates.append(parent / filename)
+        return tuple(candidates)
+
+    @classmethod
+    def _load_plugin_payload_for_root(cls, item_root: Path) -> dict[str, Any] | None:
+        """Locate and parse plugin.yaml/yml/json for an item root (single read+parse)."""
+        plugin_file = next(
+            (candidate for candidate in cls._plugin_metadata_candidates(item_root) if candidate.exists()),
+            None,
+        )
+        if plugin_file is None:
+            return None
+        try:
+            text = plugin_file.read_text(encoding="utf-8")
+            if plugin_file.suffix.lower() == ".json":
+                payload = json.loads(text)
+            else:
+                try:
+                    import yaml  # type: ignore
+                except ModuleNotFoundError:
+                    payload = {}
+                else:
+                    payload = yaml.safe_load(text) or {}
+        except Exception as exc:
+            console.print(f"[yellow]Failed to read {plugin_file}: {exc}[/yellow]")
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
