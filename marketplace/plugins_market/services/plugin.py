@@ -1310,6 +1310,19 @@ def _empty_plugin_list_response(query: PluginListQuery) -> PluginListResponse:
     )
 
 
+def _use_featured_search_allowlist(
+    *,
+    order_by: str,
+    keyword: str,
+    category_id: str,
+    enabled: bool,
+) -> bool:
+    """Featured + keyword (no category): constrain retrieval to recommend IDs."""
+    if not keyword or order_by != "recommend":
+        return False
+    return not category_id and enabled
+
+
 def list_plugins_service(
     query: PluginListQuery,
     db: Session,
@@ -1450,7 +1463,12 @@ def list_plugins_service(
     # Featured + keyword: same retrieval chain as other tabs, then intersect recommend IDs
     # (mirrors category_id). None = do not constrain (other tabs / recommender off).
     recommend_allow_ids: Optional[set[str]] = None
-    if keyword and order_by == "recommend" and not category_id and settings.recommender_enabled:
+    if _use_featured_search_allowlist(
+        order_by=order_by,
+        keyword=keyword,
+        category_id=category_id,
+        enabled=settings.recommender_enabled,
+    ):
         recommend_allow_ids = _featured_search_allow_ids(
             user_id=viewer.user_id or "",
             plugin_type=plugin_type,
