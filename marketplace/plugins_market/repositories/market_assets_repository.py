@@ -607,6 +607,10 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
             )
 
         total = q_assets.count()
+        # 热门 top_k 截断：total 封顶，分页查询同步收紧
+        top_k = params.top_k
+        if top_k is not None and top_k > 0:
+            total = min(total, top_k)
 
         order_col = getattr(
             MarketAssetDB,
@@ -624,6 +628,14 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
         page = max(1, params.page)
         page_size = max(1, min(params.page_size, 200))
         offset = (page - 1) * page_size
+        # top_k 截断：超出窗口的页返回空，有效行数收紧到窗口剩余
+        if top_k is not None and top_k > 0:
+            remaining = top_k - offset
+            if remaining <= 0:
+                return [], total
+            effective_limit = min(page_size, remaining)
+        else:
+            effective_limit = page_size
         q = (
             q_assets.outerjoin(
                 MarketAssetVersionDB,
@@ -638,7 +650,7 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
             )
             .add_columns(MarketAssetVersionDB.file_path, MarketAssetVersionDB.has_icon)
         )
-        rows: List[Tuple[MarketAssetDB, Optional[str], bool]] = q.offset(offset).limit(page_size).all()
+        rows: List[Tuple[MarketAssetDB, Optional[str], bool]] = q.offset(offset).limit(effective_limit).all()
 
         return rows, total
 

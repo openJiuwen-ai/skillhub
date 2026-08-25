@@ -28,6 +28,7 @@ import {
   BookOpen,
   AlignLeft,
   Pin,
+  User,
 } from 'lucide-react'
 import {
   Button,
@@ -673,6 +674,12 @@ export default function PluginMarketPage() {
   // selectedTags 为空时搜索恢复，searchKeyword 在标签激活期间恒为 ''，二者天然不同时下发。
   const searchDisabled = selectedTags.length > 0
 
+  const siteConfigQuery = useQuery(['site-config'], getSiteConfig, {
+    staleTime: 60_000,
+  })
+  const featuredListTopK = siteConfigQuery.data?.rec_list_top_k
+  const hotListTopK = siteConfigQuery.data?.hot_list_top_k
+
   const { marketPlugins, total, page, loading, fetching, error, refreshMarketPlugins } = usePluginMarketConfigs({
     page: currentPage,
     pageSize,
@@ -684,13 +691,17 @@ export default function PluginMarketPage() {
     orderBy: selectedTags.length > 0
       ? 'install_count'
       : isHotCategory
-        ? 'install_count'
+        ? 'hot_score'
         : isNewestCategory
           ? 'create_time'
           : isFeaturedCategory
             ? 'recommend'
-            : undefined,
+            : 'hot_score',
     desc: isHotCategory || isNewestCategory ? true : undefined,
+    // 热门 tab 无搜索/无标签时截断到 top_k，只展示最火爆的；搜索和标签态走全量
+    topK: isHotCategory && !searchKeyword && selectedTags.length === 0
+      ? hotListTopK
+      : undefined,
   })
 
   const approvedSkillMarketTotalQuery = usePluginListQuery({
@@ -700,11 +711,6 @@ export default function PluginMarketPage() {
     moderation_status: 'APPROVED',
   })
   const approvedSkillMarketTotal = approvedSkillMarketTotalQuery.data?.data?.total
-
-  const siteConfigQuery = useQuery(['site-config'], getSiteConfig, {
-    staleTime: 60_000,
-  })
-  const featuredListTopK = siteConfigQuery.data?.rec_list_top_k
 
   // 标签筛选选项：热门自动推荐 + 运营配置优先展示
   const tagOptionsQuery = useQuery(
@@ -1107,6 +1113,10 @@ export default function PluginMarketPage() {
           <Eye className="h-4 w-4 shrink-0 text-[#777777]" />
           {plugin.viewCount}
         </span>
+        <span className={itemClass} title={t('plugins.detail.hotScore')}>
+          <Flame className="h-4 w-4 shrink-0 text-orange-500" />
+          {Math.round(plugin.hotScore)}
+        </span>
       </div>
     )
   }
@@ -1154,12 +1164,16 @@ export default function PluginMarketPage() {
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-1 flex min-w-0 items-center gap-1.25 overflow-hidden">
-                    {plugin.tags?.slice(0, 2).map((tag, i) => (
-                      <span key={`${tag}-${i}`} className="truncate max-w-[84px] rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-[#191919]">
-                        {tag}
+                  <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden">
+                      <span className="inline-flex shrink-0 items-center gap-0.5 truncate rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-[#191919]">
+                        <User className="h-3 w-3 shrink-0 text-[#7B7B7B]" />
+                        {plugin.publisherName}
                       </span>
-                    ))}
+                      {plugin.tags?.slice(0, 2).map((tag, i) => (
+                        <span key={`${tag}-${i}`} className="truncate max-w-[84px] rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-[#191919]">
+                          {tag}
+                        </span>
+                      ))}
                     {plugin.tags && plugin.tags.length > 2 && (
                       <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(2).join(' · ')}>
                         <span className="shrink-0 rounded-sm bg-[#F7F8FC] px-1.5 py-0.5 text-[11px] font-medium leading-none text-slate-400">+{plugin.tags.length - 2}</span>
@@ -1251,13 +1265,17 @@ export default function PluginMarketPage() {
                           {t('plugins.pinnedBadge')}
                         </span>
                       )}
+                      <span className="inline-flex shrink-0 items-center gap-0.5 truncate rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[11px] font-normal leading-[18px] text-[#191919]">
+                        <User className="h-3 w-3 shrink-0 text-[#7B7B7B]" />
+                        {plugin.publisherName}
+                      </span>
                       {plugin.latestVersion && (
                         <span className="rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-[11px] font-medium leading-none text-[#5D6B85]">
                           {formatMarketSkillVersionLabel(plugin.latestVersion, plugin)}
                         </span>
                       )}
                     </div>
-                    <p className="mt-0 truncate text-[14px] leading-[22px] text-[#808080]" title={intro.truncated ? intro.full : undefined}>
+                    <p className="mt-1 truncate text-[14px] leading-[22px] text-[#808080]" title={intro.truncated ? intro.full : undefined}>
                       {intro.display}
                     </p>
                   </div>
@@ -1385,6 +1403,7 @@ export default function PluginMarketPage() {
   const categoryMobileNav = useMemo(
     () => (
       <div className="xl:hidden">
+        <h2 className="mb-3 text-[16px] font-semibold leading-none text-[#191919]">Swarm Skills Hub</h2>
         {/* 顶部分段切换器：与桌面左栏同构 */}
         <div className="mb-2 grid grid-cols-2 gap-1 rounded-[8px] bg-[#F1F3F9] p-1" role="tablist" aria-label={t('plugins.sidebarViewSwitchAria')}>
           <button
@@ -1627,10 +1646,10 @@ export default function PluginMarketPage() {
 
           <section className="pb-2 pt-16 lg:pt-[64px]">
             {categoryMobileNav}
-            {/* 工具栏横跨两栏上方，右对齐：左栏分段切换器与右栏第一排卡片同处 grid 第一行，
-                二者顶部自然对齐；工具栏不再压在右栏卡片之上。 */}
-            <div className="mb-4 hidden h-7 items-center justify-end gap-1.5 xl:flex">
-              <div className="flex shrink-0 items-center gap-1.5">
+            {/* 桌面端标题与视图切换按钮同行：左栏标题（248px）与右栏右对齐工具栏高度对齐 */}
+            <div className="mb-4 hidden items-center xl:grid xl:grid-cols-[248px_minmax(0,1fr)] xl:gap-6">
+              <h2 className="text-[16px] font-semibold leading-none text-[#191919]">Swarm Skills Hub</h2>
+              <div className="flex h-7 items-center justify-end gap-1.5">
                 <ViewToggle value={viewMode} onChange={setViewMode} t={t} />
                 <button
                   type="button"

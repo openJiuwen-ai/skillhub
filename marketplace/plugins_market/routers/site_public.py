@@ -19,6 +19,7 @@ async def get_site_config():
         "github_star_enabled": settings.github_star_enabled,
         "agentos_oauth_enabled": settings.agentos_oauth_enabled,
         "rec_list_top_k": settings.rec_list_top_k,
+        "hot_list_top_k": settings.hot_list_top_k,
     }
 
 

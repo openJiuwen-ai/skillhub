@@ -105,6 +105,7 @@ export interface SiteConfig {
   github_star_enabled: boolean
   agentos_oauth_enabled: boolean
   rec_list_top_k: number
+  hot_list_top_k: number
 }
 
 export async function getSiteConfig(): Promise<SiteConfig> {

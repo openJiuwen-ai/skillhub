@@ -4,6 +4,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Float,
     Integer,
     String,
     Text,
@@ -55,6 +56,8 @@ class MarketAssetDB(Base):
     average_rating = Column(Numeric(3, 2), nullable=False, default=8.00)
     # 置顶顺序：NULL 表示不置顶；手动填 1、2、3… 数字越小越靠前
     pin_order = Column(Integer, nullable=True)
+    # 火爆值：近期下载+累计下载+浏览+互动+评分的加权对数综合分（离线定时重算，用于"热门"排序）
+    hot_score = Column(Float, nullable=False, default=0.0)
 
     # Git 接入：见 sql/incremental/v0.0.2.B001/openjiuwen_market/DDL/market_assets.sql
     storage_mode = Column(String(32), nullable=True)
@@ -84,6 +87,7 @@ class MarketAssetDB(Base):
         Index("idx_star_count", star_count),
         Index("idx_category_id", category_id),
         Index("idx_pin_order", pin_order),
+        Index("idx_hot_score", hot_score),
         Index("idx_moderation_status", moderation_status),
         Index("idx_publish_result", publish_result),
         Index("idx_market_assets_visibility", visibility),
@@ -130,6 +134,8 @@ class PluginFetchRecordDB(Base):
     __table_args__ = (
         Index("idx_asset_id", asset_id),
         Index("idx_fetch_user_id", fetch_user_id),
+        # 复合索引优化近期下载聚合查询：按 create_time 过滤 + asset_id 分组
+        Index("idx_create_time_asset_id", create_time, asset_id),
     )
 
 
