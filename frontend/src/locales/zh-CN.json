@@ -578,7 +578,8 @@
       "gitcodeButton": "使用 GitCode 登录",
       "githubButton": "使用 GitHub 登录",
       "agentosButton": "使用 AgentOS 登录",
-      "hintOAuthSession": "登录态与访问令牌由第三方网站管理，本站不保存密码，也不维护 refresh_token。"
+      "hintOAuthSession": "登录态与访问令牌由第三方网站管理，本站不保存密码，也不维护 refresh_token。",
+      "noProviderError": "未配置任何登录方式，请联系管理员配置至少一个 OAuth provider。"
     },
     "oauth": {
       "exchanging": "正在完成登录…",

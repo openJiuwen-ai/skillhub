@@ -578,7 +578,8 @@
       "gitcodeButton": "Continue with GitCode",
       "githubButton": "Continue with GitHub",
       "agentosButton": "Continue with AgentOS",
-      "hintOAuthSession": "Session and access tokens are managed by third-party sites. We do not store passwords or maintain refresh tokens."
+      "hintOAuthSession": "Session and access tokens are managed by third-party sites. We do not store passwords or maintain refresh tokens.",
+      "noProviderError": "No login provider is configured. Please contact the administrator to configure at least one OAuth provider."
     },
     "oauth": {
       "exchanging": "Completing sign-in…",

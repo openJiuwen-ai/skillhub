@@ -103,6 +103,8 @@ export async function endPlaygroundSession(sessionId: string): Promise<void> {
 export interface SiteConfig {
   playground_enabled: boolean
   github_star_enabled: boolean
+  gitcode_oauth_enabled: boolean
+  github_oauth_enabled: boolean
   agentos_oauth_enabled: boolean
   rec_list_top_k: number
 }
