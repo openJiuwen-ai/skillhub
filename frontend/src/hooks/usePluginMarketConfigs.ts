@@ -27,6 +27,7 @@ export interface MarketPlugin {
   starCount: number
   reviewCount: number
   averageRating: number
+  hotScore: number
   createTime?: number | null
   updateTime?: number | null
   /** 与后端 pin_order 一致；非空表示置顶 */
@@ -54,6 +55,8 @@ export interface UsePluginMarketConfigsParams {
   tagsMatch?: 'all' | 'any'
   orderBy?: MarketplacePluginListRequest['order_by']
   desc?: boolean
+  /** 热门 tab 截断：只返回前 top_k 条（total 同步封顶） */
+  topK?: number
 }
 
 export interface UsePluginMarketConfigsReturn {
@@ -107,6 +110,7 @@ function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
     starCount: item.star_count ?? 0,
     reviewCount: item.review_count,
     averageRating: item.average_rating,
+    hotScore: item.hot_score ?? 0,
     createTime: item.create_time ?? item.createTime ?? null,
     updateTime: item.update_time ?? item.updateTime ?? null,
     pinOrder: item.pin_order ?? item.pinOrder ?? null,
@@ -131,6 +135,7 @@ export function usePluginMarketConfigs(params: UsePluginMarketConfigsParams): Us
     tags_match: params.tags ? (params.tagsMatch ?? 'all') : undefined,
     order_by: params.orderBy ?? 'install_count',
     desc: params.desc ?? true,
+    top_k: params.topK || undefined,
   })
 
   const listPayload = query.data?.data

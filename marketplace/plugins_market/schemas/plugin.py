@@ -257,10 +257,19 @@ PLUGIN_ORDER_BY_OPTIONS = (
     "update_time",
     "review_count",
     "recommend",
+    "hot_score",
 )
 
 
-OrderByField = Literal["install_count", "like_count", "view_count", "create_time", "update_time", "review_count"]
+OrderByField = Literal[
+    "install_count",
+    "like_count",
+    "view_count",
+    "create_time",
+    "update_time",
+    "review_count",
+    "hot_score",
+]
 
 
 class PluginListQuery(BaseModel):
@@ -299,11 +308,18 @@ class PluginListQuery(BaseModel):
         "install_count",
         description=(
             "排序字段: install_count, like_count, view_count, create_time, update_time, "
-            "review_count, recommend（推荐精选；带 category_id 时回退 install_count；"
+            "review_count, hot_score（火爆值；离线定时重算的加权对数综合分）, "
+            "recommend（推荐精选；带 category_id 时回退 install_count；"
             "需 MARKET_RECOMMENDER_ENABLED）"
         ),
     )
     desc: bool = Field(True, description="排序方向: true=降序, false=升序")  # True=降序，False=升序
+    # 热门 tab 截断：只返回前 top_k 条（total 同步封顶）。仅前端「热门」页签无搜索/无标签时传入。
+    top_k: Optional[int] = Field(
+        None,
+        ge=1,
+        description="截断上限：只返回前 top_k 条，total 同步封顶。用于「热门」页签只展示最火爆的 N 个",
+    )
 
     @field_validator("plugin_type", "plugin_type_exclude", mode="before")
     @classmethod
@@ -451,6 +467,7 @@ class PluginListItem(BaseModel):
     star_count: int = 0
     review_count: int = 0
     average_rating: float = 8.0
+    hot_score: float = 0.0
     create_time: Optional[int] = None
     update_time: Optional[int] = None
     pin_order: Optional[int] = Field(

@@ -237,6 +237,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # 火爆值（hot_score）定时重算 cron（标准 5 字段，默认每 2 小时整点触发）。
+    # 近期下载使用 7 天滚动窗口（业界 marketplace trending 标准），评分本身滞后，2 小时内排名几乎无变化；频繁重算只增 DB 负载无收益。
+    # 属于核心市场功能，不受 recommender_enabled 控制。
+    hot_score_recompute_cron: str = Field(
+        default="0 */2 * * *",
+        validation_alias=AliasChoices("MARKET_HOT_SCORE_RECOMPUTE_CRON", "HOT_SCORE_RECOMPUTE_CRON"),
+    )
+    # 启动时是否立即重算一次 hot_score（默认 true，确保首次加载即有火爆值）
+    hot_score_recompute_on_startup: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MARKET_HOT_SCORE_RECOMPUTE_ON_STARTUP", "HOT_SCORE_RECOMPUTE_ON_STARTUP"),
+    )
+    # 「热门」页签只展示最火爆的前 N 个（total 同步封顶，不暴露全量列表）
+    hot_list_top_k: int = Field(
+        default=100,
+        ge=1,
+        le=2000,
+        validation_alias=AliasChoices("MARKET_HOT_LIST_TOP_K", "HOT_LIST_TOP_K"),
+    )
+
     # 检索模块：直接指定 skill / plugin 索引的 OBS URI（obs://bucket/path 格式）
     # 设置后跳过 list_index_dirs 自动发现，优先用于测试或手动指定已有索引
     retrieval_skill_index_path: str = Field(

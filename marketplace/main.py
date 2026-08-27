@@ -390,6 +390,28 @@ async def lifespan(app: FastAPI):
         except asyncio.TimeoutError:
             logger.error("retrieval skill-tag refresh timed out after 39.2 minutes")
 
+    def _run_hot_score_recompute() -> None:
+        started = time.monotonic()
+        logger.info("hot_score recompute run begin")
+        from plugins_market.services.hot_score import recompute_hot_scores
+
+        result = recompute_hot_scores(SessionLocal)
+        elapsed = time.monotonic() - started
+        logger.info(
+            "hot_score recompute run end [updated=%s elapsed=%.1fs]",
+            result.get("updated"),
+            elapsed,
+        )
+
+    async def _hot_score_job() -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(loop.run_in_executor(None, _run_hot_score_recompute), timeout=2350)
+        except asyncio.TimeoutError:
+            logger.error("hot_score recompute timed out after 39.2 minutes")
+        except Exception as exc:
+            logger.exception("hot_score recompute failed: %s", exc)
+
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         _index_rebuild_job,
@@ -406,13 +428,21 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
             misfire_grace_time=60,
         )
+    scheduler.add_job(
+        _hot_score_job,
+        CronTrigger.from_crontab(settings.hot_score_recompute_cron),
+        id="hot_score_recompute",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
     scheduler.start()
     app.state.retrieval_scheduler = scheduler
     app.state.retrieval_redis = redis_client
     logger.info(
-        "retrieval startup complete — index_cron=%s skill_tag_cron=%s",
+        "retrieval startup complete - index_cron=%s skill_tag_cron=%s hot_score_cron=%s",
         settings.retrieval_rebuild_cron,
         settings.retrieval_skill_tag_cron,
+        settings.hot_score_recompute_cron,
     )
 
     if settings.retrieval_rebuild_on_startup:
@@ -458,6 +488,28 @@ async def lifespan(app: FastAPI):
                 logger.info("retrieval startup skill-tag refresh end [elapsed=%.1fs]", elapsed)
 
         app.state.startup_skill_tag_task = asyncio.create_task(_startup_skill_tag_refresh())
+
+    if settings.hot_score_recompute_on_startup:
+        logger.info("hot_score: RECOMPUTE_ON_STARTUP=true, scheduling immediate recompute")
+
+        async def _startup_hot_score_recompute() -> None:
+            logger.info("hot_score startup recompute begin")
+            loop = asyncio.get_running_loop()
+            started = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, _run_hot_score_recompute),
+                    timeout=2350,
+                )
+            except asyncio.TimeoutError:
+                logger.error("hot_score startup recompute timed out after 39.2 minutes")
+            except Exception as exc:
+                logger.exception("hot_score startup recompute failed: %s", exc)
+            finally:
+                elapsed = time.monotonic() - started
+                logger.info("hot_score startup recompute end [elapsed=%.1fs]", elapsed)
+
+        app.state.startup_hot_score_task = asyncio.create_task(_startup_hot_score_recompute())
 
     if settings.recommender_enabled:
         from plugins_market.recommender.bootstrap import apply_recommender_settings_to_env
