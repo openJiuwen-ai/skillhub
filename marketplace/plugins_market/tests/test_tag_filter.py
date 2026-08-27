@@ -286,6 +286,39 @@ def test_tags_match_query_validation():
         PluginListQuery(tags="python", tags_match="maybe")
 
 
+def test_tags_match_invalid_query_returns_422():
+    """非法 tags_match 通过 FastAPI 查询参数解析时应返回 422，而不是 500。"""
+    from typing import Annotated
+
+    from fastapi import FastAPI, Query
+    from fastapi.testclient import TestClient
+
+    from plugins_market.core.http_error_logging import register_exception_handlers
+    from plugins_market.core.logging import get_logger
+
+    app = FastAPI()
+
+    @app.get("/plugins")
+    def list_plugins(query: Annotated[PluginListQuery, Query()]):
+        return {"tags_match": query.tags_match}
+
+    register_exception_handlers(app, logger=get_logger("test_tag_match_validation"))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/plugins?tags=python&tags_match=invalid")
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["detail"]["error"] == "validation_error"
+    assert body["detail"]["error_code"] == "SKILLHUB_VALIDATION_FAILED"
+    assert any(detail["loc"][-1] == "tags_match" for detail in body["detail"]["details"])
+
+    # Case-insensitive compatibility remains supported for valid values.
+    valid_response = client.get("/plugins?tags=python&tags_match=ANY")
+    assert valid_response.status_code == 200
+    assert valid_response.json() == {"tags_match": "any"}
+
+
 def test_retrieval_path_ignores_tags_when_keyword_present(monkeypatch):
     """搜索时不感知 tags：检索路径返回混合标签/无标签资产，不做标签过滤。
 
@@ -838,4 +871,3 @@ def test_recommend_path_with_tags_falls_back_to_db(monkeypatch):
     resp = list_plugins_service(query, db, None, viewer=_viewer(user_id="u1"))
     # install_count 降序：s2(9) 在前；推荐未被调用
     assert [it.asset_id for it in resp.items] == ["s2", "s1"]
-
