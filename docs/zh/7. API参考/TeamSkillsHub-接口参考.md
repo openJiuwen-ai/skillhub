@@ -1293,6 +1293,9 @@ curl "https://swarmskills.openjiuwen.com/api/v1/site/config"
 {
   "playground_enabled": false,
   "github_star_enabled": false,
+  "gitcode_oauth_enabled": false,
+  "github_oauth_enabled": false,
+  "agentos_oauth_enabled": false,
   "rec_list_top_k": 50
 }
 ```
@@ -1301,6 +1304,9 @@ curl "https://swarmskills.openjiuwen.com/api/v1/site/config"
 |------|------|------|
 | `playground_enabled` | boolean | 在线体验功能开关 |
 | `github_star_enabled` | boolean | 一键标星功能开关（`MARKET_GITHUB_STAR_ENABLED`，默认 `false`） |
+| `gitcode_oauth_enabled` | boolean | GitCode 登录开关（`MARKET_GITCODE_OAUTH_ENABLED`，默认 `false`） |
+| `github_oauth_enabled` | boolean | GitHub 登录开关（`MARKET_GITHUB_OAUTH_ENABLED`，默认 `false`） |
+| `agentos_oauth_enabled` | boolean | AgentOS 登录开关（`MARKET_AGENTOS_OAUTH_ENABLED`，默认 `false`） |
 | `rec_list_top_k` | int | 「推荐精选」一次召回上限（`MARKET_REC_LIST_TOP_K`） |
 
 ---

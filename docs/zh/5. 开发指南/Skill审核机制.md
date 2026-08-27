@@ -66,6 +66,21 @@ MARKET_REVIEW_ADMIN_USERNAMES=alice,bob
 
 登录后调用 `/api/v1/auth/me`，若返回 `is_market_moderation_admin: true`，前端侧栏即显示审核菜单。
 
+## 允许审核员审核自己发布的 Skill
+
+默认禁止审核员审核自己发布的 Skill，避免自审自批。如需在内部测试、单人维护仓库等场景放行此限制，在 `.env` 中设置：
+
+```env
+MARKET_ALLOW_SELF_MODERATION=true
+```
+
+注意事项：
+
+- **不绕过权限校验**：发布者仍须本身是审核管理员（已配置在 `MARKET_REVIEW_ADMIN_USERNAMES` 中），系统不会隐式授予审核资格；未配置者置 `true` 也不会获得审核能力。
+- **安全优先**：默认值为 `false`，生产环境不建议开启，避免利益冲突与合规风险。
+- **仅影响 `self_moderation_forbidden` 单一拦截**：其余审核状态、阶段、可见性规则保持不变。
+- 修改后须 **重启 marketplace 服务** 才能生效。
+
 ## 相关文档
 
 - [角色与权限](../4.%20用户指南/角色与权限.md)

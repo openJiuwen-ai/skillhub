@@ -423,6 +423,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_SKILL_REVIEW_ENABLED", "SKILL_REVIEW_ENABLED"),
     )
 
+    # 开关：允许审核员审核自己发布的 Skill。默认关闭（安全优先）；如需自审自审场景，置
+    # MARKET_ALLOW_SELF_MODERATION=true。仅当发布者同时也是拥有审核权限的市场审核员时才生效，
+    # 不会绕过 is_market_moderation_admin 权限校验。
+    allow_self_moderation: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_ALLOW_SELF_MODERATION", "ALLOW_SELF_MODERATION"),
+    )
+
     # 开关：开启后服务端拒绝发布非 skill-like 类型（tools / mcp-stdio / restful-api 等会执行代码的插件），
     # 仅允许 skill / swarmskill 上架。用于从发布入口直接关闭“可执行非 skill 插件”的上架，消除任意代码执行风险。
     # 默认开启（安全优先）；如需放开，置 MARKET_BLOCK_NONSKILL_PLUGIN_PUBLISH=false。
