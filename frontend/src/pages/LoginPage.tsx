@@ -29,8 +29,9 @@ export default function LoginPage() {
   const [commonError, setCommonError] = useState('')
   const [exchanging, setExchanging] = useState(false)
 
-  // AgentOS 登录按钮是否显示：由后端 /site/config 返回的 agentos_oauth_enabled 控制
-  // （环境变量 MARKET_AGENTOS_OAUTH_ENABLED），默认 false 不显示
+  // 各 OAuth provider 是否启用：由后端 /site/config 实时返回，默认 false
+  const [gitcodeOAuthEnabled, setGitcodeOAuthEnabled] = useState(false)
+  const [githubOAuthEnabled, setGithubOAuthEnabled] = useState(false)
   const [agentosOAuthEnabled, setAgentosOAuthEnabled] = useState(false)
 
   // 是否从标星按钮跳来：从 URL 参数同步读取，惰性初始化避免闪烁
@@ -38,7 +39,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     getSiteConfig()
-      .then(cfg => setAgentosOAuthEnabled(Boolean(cfg.agentos_oauth_enabled)))
+      .then(cfg => {
+        setGitcodeOAuthEnabled(Boolean(cfg.gitcode_oauth_enabled))
+        setGithubOAuthEnabled(Boolean(cfg.github_oauth_enabled))
+        setAgentosOAuthEnabled(Boolean(cfg.agentos_oauth_enabled))
+      })
       .catch(() => { /* 获取失败按未启用处理 */ })
   }, [])
 
@@ -171,8 +176,8 @@ export default function LoginPage() {
               </div>
             ) : null}
 
-            {/* 标星入口只显示 GitHub 登录；正常入口显示 GitCode + GitHub */}
-            {fromStar ? null : (
+            {/* 正常入口按后端启用情况显示各 provider；标星入口只显示 GitHub 登录 */}
+            {fromStar || !gitcodeOAuthEnabled ? null : (
               <button
                 type="button"
                 disabled={exchanging}
@@ -204,6 +209,7 @@ export default function LoginPage() {
                 <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
               </button>
             )}
+            {fromStar || githubOAuthEnabled ? (
             <button
               type="button"
               disabled={exchanging}
@@ -224,6 +230,13 @@ export default function LoginPage() {
               <span className="relative">{t('auth.login.githubButton')}</span>
               <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
             </button>
+            ) : null}
+            {!fromStar && !gitcodeOAuthEnabled && !githubOAuthEnabled && !agentosOAuthEnabled ? (
+              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200/80 bg-red-50/80 px-3 py-2.5 text-sm text-red-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden />
+                <span className="leading-relaxed">{t('auth.login.noProviderError')}</span>
+              </div>
+            ) : null}
 
             <div className="mt-5 flex items-start gap-2 rounded-xl bg-slate-50/80 px-3 py-2.5">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden />

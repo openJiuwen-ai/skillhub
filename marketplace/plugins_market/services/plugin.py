@@ -2472,7 +2472,10 @@ def moderate_skill_asset_service(
             error_code="SKILLHUB_PLUGIN_NOT_SKILL",
             error_class="validation",
         )
-    if (auth.acting_user_id or "").strip() == (asset.publisher_id or "").strip():
+    if (
+        not settings.allow_self_moderation
+        and (auth.acting_user_id or "").strip() == (asset.publisher_id or "").strip()
+    ):
         raise BusinessError(
             code=403,
             error="self_moderation_forbidden",
