@@ -340,6 +340,42 @@ def test_mixed_asset_collection_returns_precise_types_and_uses_system_token(
     assert all(call["is_system_token"] is True for call in calls)
 
 
+def test_asset_import_reports_idempotent_reuse_as_skipped_with_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_raw_agent_plugin(tmp_path / "wellness-plugin")
+
+    def fake_publish(**kwargs: object) -> PluginPublishResult:
+        result = _fake_publish_result(kwargs["content"])  # type: ignore[arg-type]
+        object.__setattr__(result, "_import_disposition", "skipped")
+        return result
+
+    monkeypatch.setattr("plugins_market.imports.skill_import_service.publish", fake_publish)
+    result = skill_import_from_staging_dir(
+        tmp_path,
+        user_id="system_admin",
+        db=SimpleNamespace(rollback=lambda: None),
+        storage=SimpleNamespace(),
+        is_system_token=True,
+        publisher_name_override="system_admin",
+        allow_multi_asset=True,
+    )
+
+    assert result.summary.model_dump() == {"total": 1, "ok": 0, "failed": 0, "skipped": 1}
+    assert result.results[0].model_dump() == {
+        "entry": "wellness-plugin",
+        "status": "skipped",
+        "plugin_id": "id-wellness-plugin",
+        "name": "wellness-plugin",
+        "version": "1.0.0",
+        "error": None,
+        "message": None,
+        "asset_id": "id-wellness-plugin",
+        "asset_type": "agent-plugin",
+        "plugin_type": "agent-plugin",
+    }
+
+
 def test_mcp_builtin_index_supplies_per_asset_market_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

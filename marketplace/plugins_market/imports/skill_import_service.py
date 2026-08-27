@@ -380,10 +380,11 @@ def skill_import_from_staging_dir(
                     asset_type=pr.asset_type,
                     plugin_type=pr.plugin_type,
                 )
+            is_skipped = pr._import_disposition == "skipped"
             results.append(
                 item_result_model(
                     entry=entry_name,
-                    status="ok",
+                    status="skipped" if is_skipped else "ok",
                     plugin_id=pr.plugin_id,
                     name=pr.name,
                     version=pr.version,
@@ -392,7 +393,7 @@ def skill_import_from_staging_dir(
             )
             _log_skill_import_entry(
                 stage="entry_complete",
-                result="success",
+                result="skipped" if is_skipped else "success",
                 entry=entry_name,
                 resource_type=(pr.asset_type or "plugin") if allow_multi_asset else "skill",
                 resource_id=pr.plugin_id,

@@ -917,7 +917,9 @@ def publish(
             asset_id,
             version,
         )
-        return _make_publish_result(asset_for_result, existing_version, zip_key)
+        result = _make_publish_result(asset_for_result, existing_version, zip_key)
+        result._import_disposition = "skipped"
+        return result
 
     if existing_version and not force:
         raise PublishError(
