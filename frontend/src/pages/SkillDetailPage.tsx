@@ -8,6 +8,8 @@ import { ArrowLeft, Download, Heart, Star, Eye, Play } from 'lucide-react'
 import { CircularProgress, Tooltip } from '@mui/material'
 import axios from 'axios'
 import { AppHeader } from '@/components/Common/AppHeader'
+import { pluginCardTooltipProps } from '@/components/Common/pluginCardTooltip'
+import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
 import { Breadcrumbs } from '@/components/Common/Breadcrumbs'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
 import { isTextFile } from '@/utils/fileTypeUtils'
@@ -28,6 +30,7 @@ import {
   type MarketplacePluginItem,
   type VersionFileEntry,
   type PluginVersionDetailData,
+  getPluginTagOptions,
 } from '@/api/plugin'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { getSiteConfig } from '@/api/playground'
@@ -710,6 +713,12 @@ export default function SkillDetailPage() {
     },
     { enabled: Boolean(skill?.assetId), retry: 1 },
   )
+  const hotTagQuery = useQuery(
+    ['plugins', 'tag-options', skillRaw?.plugin_type],
+    () => getPluginTagOptions({ plugin_type: skillRaw?.plugin_type ?? undefined, limit: 20 }),
+    { enabled: Boolean(skillRaw?.plugin_type), staleTime: 60_000 },
+  )
+  const hotTagSet = useMemo(() => buildHotTagSet(hotTagQuery.data ?? []), [hotTagQuery.data])
   const interactionState: UserInteractionState | null = interactionsQuery.data ?? null
   const liked = interactionState?.liked ?? false
   const starred = interactionState?.starred ?? false
@@ -981,14 +990,25 @@ export default function SkillDetailPage() {
                       </h1>
                       {displayTags.length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-1.5">
-                          {displayTags.map(tag => (
-                            <span
-                              key={tag}
-                              className="inline-flex items-center rounded-[3px] bg-[#F5F5F5] px-2 py-0.5 text-[12px] font-normal text-[#5F5F5F]"
-                            >
-                              {tag}
-                            </span>
-                          ))}
+                          {displayTags.slice(0, TAG_MAX_VISIBLE).map((tag) => {
+                            const c = getTagColor(tag, hotTagSet.has(tag))
+                            return (
+                              <span
+                                key={tag}
+                                className="inline-flex items-center rounded-[3px] border border-black/5 px-2 py-0.5 text-[12px] font-medium"
+                                style={{ backgroundColor: c.bg, color: c.fg }}
+                              >
+                                {tag}
+                              </span>
+                            )
+                          })}
+                          {displayTags.length > TAG_MAX_VISIBLE && (
+                            <Tooltip {...pluginCardTooltipProps} title={displayTags.slice(TAG_MAX_VISIBLE).join(' · ')}>
+                              <span className="inline-flex cursor-default items-center rounded-[3px] border border-gray-300/80 bg-gray-200 px-2 py-0.5 text-[12px] font-medium text-gray-700">
+                                +{displayTags.length - TAG_MAX_VISIBLE}
+                              </span>
+                            </Tooltip>
+                          )}
                         </div>
                       ) : null}
                     </div>
