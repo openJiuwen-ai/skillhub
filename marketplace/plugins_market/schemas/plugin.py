@@ -294,7 +294,7 @@ class PluginListQuery(BaseModel):
             f"参数长度上限 {QUERY_TAGS_MAX_LEN} 字符，超出返回 422"
         ),
     )
-    tags_match: str = Field("all", description="标签匹配模式: all=同时包含全部标签, any=包含任一标签")
+    tags_match: Literal["all", "any"] = Field("all", description="标签匹配模式: all=同时包含全部标签, any=包含任一标签")
     order_by: str = Field(
         "install_count",
         description=(
@@ -343,9 +343,12 @@ class PluginListQuery(BaseModel):
     @field_validator("tags_match", mode="before")
     @classmethod
     def normalize_tags_match(cls, v: object) -> str:
-        s = str(v or "all").strip().lower()
-        if s not in ("all", "any"):
-            raise ValueError("tags_match must be one of: all, any")
+        """Normalize tags_match to lowercase so "ANY" / "All" match the Literal options."""
+        if v is None:
+            return "all"
+        s = str(v).strip().lower()
+        if s == "":
+            return "all"
         return s
 
 

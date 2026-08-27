@@ -46,6 +46,7 @@ import {
 } from '@mui/material'
 import { useQueries, useQuery, useQueryClient } from 'react-query'
 import { pluginCardTooltipProps, pluginDetailHeaderTooltipProps } from '@/components/Common/pluginCardTooltip'
+import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
 import { AppHeader } from '@/components/Common/AppHeader'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
@@ -468,25 +469,25 @@ function RefetchListOverlay() {
   )
 }
 
-function DetailPluginTags({ tags }: { tags: string[] }) {
+function DetailPluginTags({ tags, hotTagSet }: { tags: string[]; hotTagSet: Set<string> }) {
   const list = tags ?? []
-  const MAX = 3
-  const tagBg = ['#FEF3C7', '#EDE9FE', '#FCE7F3'] as const
-  const tagFg = ['#B45309', '#5B21B6', '#BE185D'] as const
   if (list.length === 0) return null
-  const visible = list.slice(0, MAX)
-  const hidden = list.slice(MAX)
+  const visible = list.slice(0, TAG_MAX_VISIBLE)
+  const hidden = list.slice(TAG_MAX_VISIBLE)
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
-      {visible.map((tag, i) => (
-        <span
-          key={`${tag}-${i}`}
-          className="shrink-0 rounded-md border border-black/5 px-2 py-0.5 text-[11px] font-medium"
-          style={{ backgroundColor: tagBg[i % tagBg.length], color: tagFg[i % tagFg.length] }}
-        >
-          {tag}
-        </span>
-      ))}
+      {visible.map((tag) => {
+	        const c = getTagColor(tag, hotTagSet.has(tag))
+        return (
+          <span
+            key={tag}
+            className="shrink-0 rounded-md border border-black/5 px-2 py-0.5 text-[11px] font-medium"
+            style={{ backgroundColor: c.bg, color: c.fg }}
+          >
+            {tag}
+          </span>
+        )
+      })}
       {hidden.length > 0 && (
         <Tooltip {...pluginCardTooltipProps} title={hidden.join(' · ')}>
           <span className="shrink-0 cursor-default rounded-md border border-gray-300/80 bg-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-700">
@@ -713,6 +714,7 @@ export default function PluginMarketPage() {
     { staleTime: 60_000, keepPreviousData: true },
   )
   const tagOptions = useMemo(() => tagOptionsQuery.data ?? [], [tagOptionsQuery.data])
+  const hotTagSet = useMemo(() => buildHotTagSet(tagOptions), [tagOptions])
 
   const toggleSelectedTag = useCallback((tag: string) => {
     // 点标签 = 进入标签视图 + 清分类回 all + 清搜索。标签/分类互斥，
@@ -847,6 +849,10 @@ export default function PluginMarketPage() {
   const handleSetType = useCallback(
     (nextType: SkillTypeTab) => {
       if (nextType === activeType) return
+      // 切换资产类型时清空标签和搜索：不同类型的标签集不互通，残留旧标签会导致列表为空或状态矛盾。
+      setSelectedTags([])
+      setSearchInput('')
+      setSearchKeyword('')
       setCurrentPage(1)
       setSearchParams(
         prev => {
@@ -1154,15 +1160,22 @@ export default function PluginMarketPage() {
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-1 flex min-w-0 items-center gap-1.25 overflow-hidden">
-                    {plugin.tags?.slice(0, 2).map((tag, i) => (
-                      <span key={`${tag}-${i}`} className="truncate max-w-[84px] rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-[#191919]">
-                        {tag}
-                      </span>
-                    ))}
-                    {plugin.tags && plugin.tags.length > 2 && (
-                      <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(2).join(' · ')}>
-                        <span className="shrink-0 rounded-sm bg-[#F7F8FC] px-1.5 py-0.5 text-[11px] font-medium leading-none text-slate-400">+{plugin.tags.length - 2}</span>
+                  <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
+                    {plugin.tags?.slice(0, TAG_MAX_VISIBLE).map((tag) => {
+                      const c = getTagColor(tag, hotTagSet.has(tag))
+                      return (
+                        <span
+                          key={tag}
+                          className="max-w-[120px] truncate rounded-[2px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
+                          style={{ backgroundColor: c.bg, color: c.fg }}
+                        >
+                          {tag}
+                        </span>
+                      )
+                    })}
+                    {plugin.tags && plugin.tags.length > TAG_MAX_VISIBLE && (
+                      <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(TAG_MAX_VISIBLE).join(' · ')}>
+                        <span className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[11px] font-medium leading-none text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
                       </Tooltip>
                     )}
                     {plugin.latestVersion && (
@@ -1251,8 +1264,25 @@ export default function PluginMarketPage() {
                           {t('plugins.pinnedBadge')}
                         </span>
                       )}
+                      {plugin.tags && plugin.tags.length > 0 && plugin.tags.slice(0, TAG_MAX_VISIBLE).map((tag) => {
+                        const c = getTagColor(tag, hotTagSet.has(tag))
+                        return (
+                          <span
+                            key={tag}
+                            className="max-w-[120px] shrink-0 truncate rounded-[2px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
+                            style={{ backgroundColor: c.bg, color: c.fg }}
+                          >
+                            {tag}
+                          </span>
+                        )
+                      })}
+                      {plugin.tags && plugin.tags.length > TAG_MAX_VISIBLE && (
+                        <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(TAG_MAX_VISIBLE).join(' · ')}>
+                          <span className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[11px] font-medium leading-none text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
+                        </Tooltip>
+                      )}
                       {plugin.latestVersion && (
-                        <span className="rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-[11px] font-medium leading-none text-[#5D6B85]">
+                        <span className="shrink-0 rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-[11px] font-medium leading-none text-[#5D6B85]">
                           {formatMarketSkillVersionLabel(plugin.latestVersion, plugin)}
                         </span>
                       )}
@@ -1923,7 +1953,7 @@ export default function PluginMarketPage() {
                       </Typography>
                     </div>
                     <div className="mt-1 min-h-[22px]">
-                      {selectedPlugin.tags?.length ? <DetailPluginTags tags={selectedPlugin.tags} /> : <Typography variant="body2" color="text.secondary">-</Typography>}
+                      {selectedPlugin.tags?.length ? <DetailPluginTags tags={selectedPlugin.tags} hotTagSet={hotTagSet} /> : <Typography variant="body2" color="text.secondary">-</Typography>}
                     </div>
                   </div>
                   <div>

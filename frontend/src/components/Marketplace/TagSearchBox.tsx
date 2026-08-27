@@ -58,9 +58,16 @@ export function TagSearchBox({ activeType, selectedTags, onToggle }: TagSearchBo
     return recentTags.map(tag => ({ tag }))
   }, [debounced, searchResults, recentTags])
 
-  // 列表变化时重置高亮：有项 -> 0（回车直选首项），无项 -> -1。
+  // 列表内容变化时重置高亮：有项 -> 0（回车直选首项），无项 -> -1。
+  // 只比较 tag 列表而非 items 引用，避免键盘导航更新 activeIdx 后
+  // items 因 searchResults/recentTags 引用刷新而被 useEffect 重置回 0。
+  const prevTagListRef = useRef<string>('')
   useEffect(() => {
-    setActiveIdx(items.length > 0 ? 0 : -1)
+    const tagKey = items.map(it => it.tag).join('\0')
+    if (tagKey !== prevTagListRef.current) {
+      prevTagListRef.current = tagKey
+      setActiveIdx(items.length > 0 ? 0 : -1)
+    }
   }, [items])
 
   // 点击外部关闭。
