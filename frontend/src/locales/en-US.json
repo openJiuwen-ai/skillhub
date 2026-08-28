@@ -209,8 +209,9 @@
       "collapse": "Collapse",
       "expand": "Expand",
       "confirmTitle": "Starring for you",
-      "confirmBody": "Starring 10 core openjiuwen open-source repos for you. Thanks for your support! Starring runs in the background and will complete shortly.",
-      "confirmOk": "OK"
+      "confirmBody": "Starring core openjiuwen open-source projects for you. Thanks for your support! Starring runs in the background and will complete shortly.",
+      "confirmOk": "OK",
+      "snapHint": "Release to snap to edge"
     }
   },
   "profile": {

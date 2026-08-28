@@ -7,7 +7,7 @@ GitHub REST 代理转发：使用用户的 Bearer access_token 调 api.github.co
 - 标星仓库（PUT /user/starred/{owner}/{repo}，幂等）
 
 注：早期版本曾封装 list_org_repos（列出组织公开仓库），后改为固定仓库清单
-（见 routers/github_watch.py STAR_REPO_NAMES），本模块不再承担「列出仓库」职责。
+（见 routers/github_watch.py DEFAULT_STAR_REPO_NAMES），本模块不再承担「列出仓库」职责。
 
 GitHub 内容生成限制按 token 计量（≤80 次/min，见调研文档 §2.2），非 IP 聚合，
 因此转发层按 token hash 分桶做单用户速率闸（60/min < 80），辅以全局并发闸

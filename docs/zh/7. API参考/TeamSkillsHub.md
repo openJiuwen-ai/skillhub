@@ -2148,12 +2148,16 @@ paths:
                   github_star_enabled:
                     type: boolean
                     description: 一键标星功能开关（MARKET_GITHUB_STAR_ENABLED，默认 false）
+                  agentos_oauth_enabled:
+                    type: boolean
+                    description: AgentOS 登录开关（MARKET_AGENTOS_OAUTH_ENABLED，默认 false）
                   rec_list_top_k:
                     type: integer
                     description: 推荐精选一次召回上限（MARKET_REC_LIST_TOP_K）
                 required:
                   - playground_enabled
                   - github_star_enabled
+                  - agentos_oauth_enabled
                   - rec_list_top_k
 
   /api/v1/github/watch:
@@ -2161,7 +2165,7 @@ paths:
       summary: 批量标星 GitHub 仓库
       description: |
         代理转发 GitHub Star API（PUT /user/starred/{owner}/{repo}）。
-        `repos` 为空数组时使用固定核心仓库清单（STAR_REPO_NAMES，共 10 个：
+        `repos` 为空数组时使用配置的核心仓库清单（DEFAULT_STAR_REPO_NAMES，默认 10 个：
         jiuwenswarm/agent-studio/agent-core/jiuwensymbiosis/deepsearch/
         agent-memory/agent-protocol/agent-core-java/agent-runtime-java/skillhub）逐个标星。
         需 GitHub OAuth 登录（scope 含 public_repo）。

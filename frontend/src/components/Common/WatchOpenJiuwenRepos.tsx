@@ -13,41 +13,106 @@ import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 // 我们的 GitHub 组织地址（"代码"按钮跳转目标）
 const GITHUB_ORG_URL = 'https://github.com/openJiuwen-ai'
 
+// 拖拽移动阈值（px）：mousedown 后移动超过此距离才视为拖拽，否则视为点击
+const DRAG_THRESHOLD = 3
+// 浮窗距屏幕边缘的间距（贴边）
+const EDGE_MARGIN = 0
+
+// 浮窗尺寸
+const WIDGET_WIDTH = 52
+const BUTTON_HEIGHT = 52
+const BUTTON_COUNT = 3
+const WIDGET_HEIGHT = BUTTON_HEIGHT * BUTTON_COUNT // 156px
+// 弹窗尺寸和间距
+const DIALOG_WIDTH = 320
+const DIALOG_GAP = 12
+
+/** 浮窗位置状态（照搬 openjiuwen 的 x/y/side 模式）
+ * - x: 拖拽中存绝对 left 值；吸附后存 EDGE_MARGIN（给 CSS right/left 常量用）
+ * - side: 决定 CSS 用 right 还是 left 定位
+ */
+interface WidgetPos {
+  x: number
+  y: number   // 距离屏幕顶部的像素
+  side: 'left' | 'right'
+}
+
+/** 计算浮窗初始位置：右侧垂直居中 */
+function getInitialPos(): WidgetPos {
+  return {
+    x: EDGE_MARGIN,
+    y: Math.max(0, (window.innerHeight - WIDGET_HEIGHT) / 2),
+    side: 'right',
+  }
+}
+
+/** 将位置吸附到最近边缘（照搬 openjiuwen：x 设为 EDGE_MARGIN，CSS 用 right/left 常量） */
+function snapToEdge(pos: WidgetPos): WidgetPos {
+  const newSide = pos.x > window.innerWidth / 2 ? 'right' : 'left'
+  const clampedY = Math.max(0, Math.min(window.innerHeight - WIDGET_HEIGHT, pos.y))
+  return { x: EDGE_MARGIN, y: clampedY, side: newSide }
+}
+
 /**
- * 右侧浮窗：完全照搬 openjiuwen.com 浮窗结构与样式。
- * 按钮组：收起 / 标星(替换客服位) / 代码 / 回到顶部（去掉吐槽）。
- * 标星按钮点击弹确认弹窗，确认后标星，标星后图标变实心。
+ * 右侧浮窗：完全照搬 openjiuwen.com 浮窗结构与拖拽逻辑。
+ *
+ * 光标：容器加 .oj-dragging class，CSS 规则 `.oj-dragging, .oj-dragging * { cursor: grabbing !important }`
+ * 左右镜像：容器用 flex-direction: row / row-reverse，收起按钮用 .oj-collapse-right / .oj-collapse-left
+ * 吸附提示：相对于容器定位，出现在浮窗上方
+ * 拖拽事件：mousedown 在 buttonGroup → isDragging → useEffect 动态添加/移除 document 监听器
  */
 export function WatchOpenJiuwenRepos() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { isAuthenticated, provider, user } = useGitCodeAuth()
 
-  // 功能开关：从 /site/config 读取，默认 true（fail-open）
   const [enabled, setEnabled] = useState(true)
-
-  // 标星状态：从后端 Redis 读取（按用户隔离，跨设备同步）
   const [clicked, setClicked] = useState(false)
-  // flashing：标星请求 in-flight 期间为 true（按钮显示 Loader2 旋转），请求结束即 false。
-  // 后端 fire-and-forget，收到 202 即停转；期间 starringRef 锁防止连点并发多个 batch。
   const [flashing, setFlashing] = useState(false)
-  // 标星请求序号：防止快速连点时旧请求的失败回调覆盖新请求的成功状态
   const starSeq = useRef(0)
-  // in-flight 锁：防止连点/多标签页在后台标星窗口（≈13s）内重复发起 batch，
-  // 成功后延时释放（覆盖后台窗口），失败立即释放（见 doStar 的 .finally）
   const starringRef = useRef(false)
-  // starringRef 延时释放的定时器句柄（换锁/卸载时清理，防止泄漏与误释放）
   const starringReleaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // 确认弹窗
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // 弹窗锚定坐标：根据浮窗 DOM 位置动态计算，弹窗出现在浮窗旁边而非固定右下角
+  const [confirmCoords, setConfirmCoords] = useState<{ top: number; left: number; side: 'left' | 'right' } | null>(null)
 
-  // 收起/展开状态（照搬 openjiuwen 的 collapse 交互）
   const [collapsed, setCollapsed] = useState(false)
-  // 容器 hover 状态（用 React 控制收起按钮显隐，比 CSS :hover 更可靠）
   const [hovered, setHovered] = useState(false)
-  // 收起按钮自身 hover 状态（内联样式优先级高于 CSS，hover 反馈需由 React state 驱动）
   const [collapseHovered, setCollapseHovered] = useState(false)
+
+  // ── 拖拽状态（照搬 openjiuwen） ──
+  const [pos, setPos] = useState<WidgetPos>(getInitialPos)
+  const [isDragging, setIsDragging] = useState(false)
+  // hasMoved：鼠标移动超过 3px 才算真正的拖拽（区分点击），同时控制提示显示
+  const [hasMoved, setHasMoved] = useState(false)
+  const hasMovedRef = useRef(false)
+  // 拖拽刚结束标记：mouseup 时置 true，200ms 后重置，用于阻止 click 事件穿透到按钮
+  const justDraggedRef = useRef(false)
+  // mousedown 起始坐标 + 起始位置（用于计算拖拽偏移）
+  const dragStartRef = useRef({ clientX: 0, clientY: 0, posX: 0, posY: 0 })
+  // 容器 DOM ref：mousedown 时用 getBoundingClientRect() 取真实屏幕位置
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  // 弹窗 DOM ref：点击外部关闭时排除弹窗自身
+  const confirmDialogRef = useRef<HTMLDivElement | null>(null)
+  // 位置镜像 ref：event handler 内读取避免 stale closure
+  const posRef = useRef(pos)
+  posRef.current = pos
+  // 拖拽结束定时器 ref：追踪 handleMouseUp 中的 setTimeout，用于 cleanup
+  const dragEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ── resize 时重新约束浮窗位置，防止视口缩小后浮窗不可见 ──
+  useEffect(() => {
+    const onResize = () => {
+      const p = posRef.current
+      const clampedY = Math.max(0, Math.min(window.innerHeight - WIDGET_HEIGHT, p.y))
+      if (clampedY !== p.y) {
+        setPos({ ...p, y: clampedY })
+      }
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   // 拉取功能开关
   useEffect(() => {
@@ -56,7 +121,7 @@ export function WatchOpenJiuwenRepos() {
       .catch(() => {})
   }, [])
 
-  // 用户变化时从后端查询标星状态（Redis，跨设备同步）
+  // 用户变化时从后端查询标星状态
   useEffect(() => {
     if (!isAuthenticated || provider !== 'github') {
       setClicked(false)
@@ -68,13 +133,12 @@ export function WatchOpenJiuwenRepos() {
         if (!cancelled) setClicked(starred)
       })
       .catch(() => {
-        // 查询失败（如 Redis 不可用）降级为未标星，用户可重新点（PUT 幂等无害）
         if (!cancelled) setClicked(false)
       })
     return () => { cancelled = true }
   }, [isAuthenticated, provider, user?.login])
 
-  // 卸载时清理 starringRef 延时释放定时器，防止泄漏与卸载后误置 ref
+  // 卸载时清理定时器
   useEffect(() => {
     return () => {
       if (starringReleaseTimer.current !== null) {
@@ -84,32 +148,213 @@ export function WatchOpenJiuwenRepos() {
     }
   }, [])
 
+  // ── 弹窗锚定坐标：打开时根据浮窗 DOM 位置计算 ──
+  // 弹窗出现在浮窗旁边（side=right → 弹窗在左；side=left → 弹窗在右），
+  // 垂直方向与星标按钮对齐（容器顶部），参照 NotificationBell 的 getBoundingClientRect 模式
+  useEffect(() => {
+    if (!confirmOpen) {
+      setConfirmCoords(null)
+      return
+    }
+    const recalc = () => {
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) { setConfirmCoords(null); return }
+      const side = posRef.current.side
+      // 计算弹窗水平位置：side=right → 弹窗在左；side=left → 弹窗在右
+      let dialogLeft: number
+      let dialogSide: 'left' | 'right'
+      if (side === 'right') {
+        dialogLeft = rect.left - DIALOG_WIDTH - DIALOG_GAP
+        dialogSide = 'left'
+      } else {
+        dialogLeft = rect.right + DIALOG_GAP
+        dialogSide = 'right'
+      }
+      // 防溢出：弹窗宽度不足以在首选侧放置时，翻转到另一侧
+      if (dialogSide === 'left' && dialogLeft < 0) {
+        dialogLeft = rect.right + DIALOG_GAP
+        dialogSide = 'right'
+      } else if (dialogSide === 'right' && dialogLeft + DIALOG_WIDTH > window.innerWidth) {
+        dialogLeft = rect.left - DIALOG_WIDTH - DIALOG_GAP
+        dialogSide = 'left'
+      }
+      // 二次防溢出：两侧都不够时，贴边显示
+      if (dialogSide === 'left' && dialogLeft < 0) dialogLeft = 0
+      if (dialogSide === 'right' && dialogLeft + DIALOG_WIDTH > window.innerWidth) {
+        dialogLeft = window.innerWidth - DIALOG_WIDTH
+      }
+      // 垂直方向防溢出：弹窗高度约 200px，确保不超出视口底部
+      const DIALOG_EST_HEIGHT = 200
+      let dialogTop = rect.top
+      if (dialogTop + DIALOG_EST_HEIGHT > window.innerHeight) {
+        dialogTop = Math.max(0, window.innerHeight - DIALOG_EST_HEIGHT)
+      }
+      setConfirmCoords({
+        top: dialogTop,
+        left: dialogLeft,
+        side: dialogSide,
+      })
+    }
+    recalc()
+    const onResize = () => recalc()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  // pos 变化时也需要重算（拖拽结束后弹窗应跟随浮窗新位置）
+  }, [confirmOpen, pos])
+
+  // ── 弹窗交互：ESC 关闭 + 点击外部关闭 ──
+  useEffect(() => {
+    if (!confirmOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConfirmOpen(false) }
+    const onClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (containerRef.current?.contains(target)) return
+      if (confirmDialogRef.current?.contains(target)) return
+      setConfirmOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onClickOutside)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onClickOutside)
+    }
+  }, [confirmOpen])
+
+  // ── 拖拽：mousedown 在 buttonGroup 上 ──
+  const handleButtonGroupMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    if (collapsed) return
+    e.preventDefault()
+    e.stopPropagation()
+    hasMovedRef.current = false
+    setHasMoved(false)
+    justDraggedRef.current = false
+    // 清除上一轮拖拽的结束定时器，防止快速连续拖拽时旧定时器干扰
+    if (dragEndTimerRef.current !== null) {
+      clearTimeout(dragEndTimerRef.current)
+      dragEndTimerRef.current = null
+    }
+    // 用 DOM getBoundingClientRect() 获取真实屏幕位置（pos.x 存的是 EDGE_MARGIN，不是绝对坐标）
+    const rect = containerRef.current?.getBoundingClientRect()
+    dragStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      posX: rect ? rect.left : (posRef.current.side === 'right' ? window.innerWidth - WIDGET_WIDTH - EDGE_MARGIN : EDGE_MARGIN),
+      posY: rect ? rect.top : posRef.current.y,
+    }
+    setIsDragging(true)
+  }, [collapsed])
+
+  // ── 拖拽：document mousemove/mouseup（仅在 isDragging=true 时注册） ──
+  useEffect(() => {
+    if (!isDragging) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const start = dragStartRef.current
+      const dx = e.clientX - start.clientX
+      const dy = e.clientY - start.clientY
+
+      if (!hasMovedRef.current) {
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return
+        hasMovedRef.current = true
+        setHasMoved(true)
+      }
+
+      const newX = Math.max(0, Math.min(window.innerWidth - WIDGET_WIDTH, start.posX + dx))
+      const newY = Math.max(0, Math.min(window.innerHeight - WIDGET_HEIGHT, start.posY + dy))
+
+      setPos({ x: newX, y: newY, side: newX > window.innerWidth / 2 ? 'right' : 'left' })
+    }
+
+    // 拖拽结束的共享逻辑：吸附 + 重置 isDragging + 设置 justDraggedRef 定时器
+    // handleMouseUp（正常释放）和 handleBlur（窗口失焦时 mouseup 不触发）共用
+    const endDrag = () => {
+      if (hasMovedRef.current) {
+        const snapped = snapToEdge(posRef.current)
+        setPos(snapped)
+        justDraggedRef.current = true
+        if (dragEndTimerRef.current !== null) clearTimeout(dragEndTimerRef.current)
+        dragEndTimerRef.current = setTimeout(() => {
+          dragEndTimerRef.current = null
+          hasMovedRef.current = false
+          setHasMoved(false)
+          justDraggedRef.current = false
+        }, 200)
+      } else {
+        hasMovedRef.current = false
+        setHasMoved(false)
+      }
+      setIsDragging(false)
+    }
+
+    const handleMouseUp = (e: MouseEvent) => {
+      if (hasMovedRef.current && e) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+      // 只在真正拖拽过时才吸附到边缘；纯点击（未移动）不改变位置
+      // 否则 pos.x=EDGE_MARGIN(20) < innerWidth/2 会误判为左侧，导致点击后从右跳到左
+      endDrag()
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    // 保存原有 userSelect 值，拖拽结束后恢复（避免冲掉其他代码设置的值）
+    const prevUserSelect = document.body.style.userSelect
+    const prevWebkitUserSelect = document.body.style.webkitUserSelect
+    document.body.style.userSelect = 'none'
+    document.body.style.webkitUserSelect = 'none'
+    // 窗口失焦保底：Alt-Tab / 切窗口时 mouseup 不触发，需通过 blur 结束拖拽
+    // 否则 isDragging 保持 true，切回窗口后移动鼠标浮窗会无按键跟随
+    const handleBlur = () => {
+      endDrag()
+      document.body.style.userSelect = prevUserSelect
+      document.body.style.webkitUserSelect = prevWebkitUserSelect
+    }
+    window.addEventListener('blur', handleBlur)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('blur', handleBlur)
+      document.body.style.userSelect = prevUserSelect
+      document.body.style.webkitUserSelect = prevWebkitUserSelect
+    }
+  }, [isDragging])
+
+  // 拖拽结束定时器只在组件卸载时清理，不能放在 isDragging effect cleanup 中
+  // 因为 setIsDragging(false) 会触发该 cleanup，从而在 200ms 定时器触发前将其清除，
+  // 导致 justDraggedRef 永久卡在 true，按钮永久不可点击
+  useEffect(() => {
+    return () => {
+      if (dragEndTimerRef.current !== null) {
+        clearTimeout(dragEndTimerRef.current)
+        dragEndTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // 阻止浏览器原生拖拽
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
   const doStar = useCallback(() => {
-    // in-flight 锁：标星进行中禁用重复触发，避免并发 batch 抵消后端串行改造。
-    // starSeq 防回调覆盖，starringRef 防重复发请求，两者互补。
     if (starringRef.current) return
     starringRef.current = true
-    // 乐观更新：立即显示已标星，后台异步调标星接口
     const seq = ++starSeq.current
     setClicked(true)
     setFlashing(true)
-    // 202 受理即视为成功（后台 fire-and-forget 无逐仓结果）；失败路径 finally 立即放锁
     let succeeded = false
 
     starAllRepos()
-      .then(() => {
-        // 后端 fire-and-forget：202 已受理即成功，后台串行标星 ≈13s 无需前端等待。
-        // 标记成功：finally 依据它决定 starringRef 延时释放（覆盖后台窗口）。
-        succeeded = true
-      })
+      .then(() => { succeeded = true })
       .catch(err => {
-        // 过期请求的回调直接忽略
         if (seq !== starSeq.current) return
         console.warn('github star failed (background):', err)
-        // 标星请求失败：回滚为未标星态，关闭通知卡片
         setClicked(false)
         setConfirmOpen(false)
-        // 401 token 过期：引导用户重新登录（重新授权后可再次点标星，PUT 幂等无害）
         const status = err instanceof GithubWatchError ? err.status : undefined
         if (status === 401) {
           setPostLoginRedirect('/')
@@ -117,20 +362,8 @@ export function WatchOpenJiuwenRepos() {
         }
       })
       .finally(() => {
-        // 请求结束才停转：flashing 跟随真实生命周期，成功/失败均由此收口。
-        // 过期请求（seq 不匹配）不动 flashing，留给最新请求的回调处理。
-        if (seq === starSeq.current) {
-          setFlashing(false)
-        }
-        // starringRef 锁需覆盖后台任务窗口（≈13s），而非仅 HTTP 生命周期（≈50ms）：
-        // 后端 fire-and-forget 收到 202 即返回，但后台串行标星仍在进行，提前释放
-        // 锁会让连点/多标签页触发并发 batch（抵消后端串行改造，触发 GitHub 反自动化
-        // 标星系统）。成功路径延时释放（15s ≈ 13s 后台窗口 + 余量），失败路径立即
-        // 释放（401/网络错误后用户可马上重试）。延时期间再点击由后端 per-user
-        // 去重闸兜底（already_running），双保险。
-        if (starringReleaseTimer.current !== null) {
-          clearTimeout(starringReleaseTimer.current)
-        }
+        if (seq === starSeq.current) setFlashing(false)
+        if (starringReleaseTimer.current !== null) clearTimeout(starringReleaseTimer.current)
         if (succeeded) {
           starringReleaseTimer.current = setTimeout(() => {
             starringReleaseTimer.current = null
@@ -143,43 +376,29 @@ export function WatchOpenJiuwenRepos() {
   }, [navigate])
 
   const handleStarClick = useCallback(() => {
+    if (hasMovedRef.current) return
     if (!isAuthenticated) {
       setPostLoginRedirect('/')
       navigate('/login?from=star')
       return
     }
-    // 标星进行中（flashing）时禁用点击，防止连点并发多个 batch
     if (flashing) return
-    // 已标星：直接重新标星（PUT 幂等）
-    // 未标星：立即标星 + 弹通知提示（不再先弹确认再执行）
     doStar()
     setConfirmOpen(true)
   }, [isAuthenticated, navigate, doStar, flashing])
 
-  // 回到顶部
   const scrollToTop = useCallback(() => {
+    if (hasMovedRef.current) return
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
 
-  // 通知卡片为非阻塞提示（标星后台 fire-and-forget），不锁滚动、不监听 ESC：
-  // 用户可在标星进行中继续浏览页面，卡片仅靠「知道了」按钮关闭。
-
-  // 功能关闭或 gitcode 登录用户不显示
   if (!enabled || (isAuthenticated && provider !== 'github')) return null
 
   const starLabel = t('plugins.githubWatch.starAll')
   const codeLabel = t('plugins.githubWatch.code')
   const topLabel = t('plugins.githubWatch.backToTop')
 
-  // ── 浮窗（完全照搬 openjiuwen.com 结构 + 样式）──────────────
-  // 外层 contactContainer：fixed 定位壳，透明
-  // 内层 buttonGroup：视觉壳（白底/阴影/毛玻璃/圆角/overflow:hidden）
-  // 按钮：floatButton 52×52，flex-col center，gap:2px
-  // 分隔线：::after 1px×28px rgba(0,0,0,0.06)（非末尾按钮）
-  // 标星按钮（替换客服位）：用 contactButton 渐变激活样式
-  // 收起按钮：hover 容器时显现，点击收起/展开
-
-  // 收起按钮样式：按 collapsed / collapseHovered 组合预计算，避免内联嵌套三元
+  // 收起按钮样式
   const GRADIENT_ACTIVE = 'linear-gradient(135deg, rgb(10, 89, 247) 0%, rgb(115, 38, 255) 100%)'
   const GRADIENT_HOVER = 'linear-gradient(135deg, rgb(240, 241, 244) 0%, rgb(232, 233, 236) 100%)'
   const GRADIENT_IDLE = 'linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,249,252,0.95) 100%)'
@@ -198,26 +417,59 @@ export function WatchOpenJiuwenRepos() {
         ? 'rgba(10,89,247,0.4) 0px 4px 16px'
         : 'rgba(0,0,0,0.1) 0px 2px 8px'
 
+  // 容器 class：照搬 openjiuwen 的 contactContainerRight/Left + Dragging 模式
+  // .oj-dragging, .oj-dragging * { cursor: grabbing !important } — 在全局 CSS 中定义
+  const containerClassName = [
+    'oj-contact-container',
+    pos.side === 'right' ? 'oj-contact-right' : 'oj-contact-left',
+    isDragging ? 'oj-dragging' : '',
+  ].filter(Boolean).join(' ')
+
+  // 外层容器样式（照搬 openjiuwen）：
+  // - 拖拽中：left=绝对坐标, right=auto, transition=none（精确跟随鼠标）
+  // - 非拖拽：side=right → right=EDGE_MARGIN, left=auto；side=left → left=EDGE_MARGIN, right=auto
+  //   CSS right/left 常量让浏览器自动跟随视口边缘，resize 时不需 JS 干预
+  // - transition: all 0.3s（照搬 openjiuwen，left↔auto 无法插值所以吸附瞬间完成）
+  const containerStyle: React.CSSProperties = {
+    position: 'fixed',
+    top: pos.y,
+    ...(isDragging && hasMoved
+      ? { left: pos.x, right: 'auto' }
+      : pos.side === 'right'
+        ? { right: EDGE_MARGIN, left: 'auto' }
+        : { left: EDGE_MARGIN, right: 'auto' }),
+    zIndex: 1000,
+    alignItems: 'center',
+    display: 'flex',
+    flexDirection: pos.side === 'right' ? 'row' : 'row-reverse',
+    height: WIDGET_HEIGHT,
+    transition: isDragging ? 'none' : 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    userSelect: 'none',
+  }
+
+  // 收起按钮 class：照搬 openjiuwen 的 collapseButtonRight/Left + Collapsed
+  const collapseClassName = [
+    'oj-contact-collapse',
+    pos.side === 'right' ? 'oj-collapse-right' : 'oj-collapse-left',
+    collapsed ? 'oj-collapse-collapsed' : '',
+  ].filter(Boolean).join(' ')
+
   const floatingWidget = (
     <div
-      className="oj-contact-container"
+      ref={containerRef}
+      className={containerClassName}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{
-        position: 'fixed',
-        right: collapsed ? 0 : 20,
-        bottom: 24,
-        zIndex: 1000,
-        alignItems: 'center',
-        display: 'flex',
-        flexDirection: 'row',
-        // 容器始终保持展开态浮窗高度（3 按钮 × 52px = 156px），收起态不塌缩。
-        // 这样 absolute 收起按钮的 top/bottom 锚点稳定，位置不会随收起/展开漂移。
-        height: 156,
-        transition: 'right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-      }}
+      style={containerStyle}
     >
-      {/* 收起/展开按钮（照搬 openjiuwen collapseButton）*/}
+      {/* 拖拽提示（照搬 openjiuwen：isDragging 期间始终显示，浮窗上方，fadeInDown 动画） */}
+      {isDragging && hasMoved && (
+        <div className="oj-drag-hint">
+          {t('plugins.githubWatch.snapHint')}
+        </div>
+      )}
+
+      {/* 收起/展开按钮（不在 buttonGroup 内，照搬 openjiuwen） */}
       <button
         type="button"
         onClick={() => setCollapsed(c => !c)}
@@ -225,11 +477,10 @@ export function WatchOpenJiuwenRepos() {
         onMouseLeave={() => setCollapseHovered(false)}
         title={collapsed ? t('plugins.githubWatch.expand') : t('plugins.githubWatch.collapse')}
         aria-label={collapsed ? t('plugins.githubWatch.expand') : t('plugins.githubWatch.collapse')}
+        className={collapseClassName}
         style={{
           cursor: 'pointer',
-          // 收起态始终显示；展开态 hover 容器时显示
           opacity: collapsed || hovered ? 1 : 0,
-          // hover 反馈由 React state 驱动（内联优先级高于 CSS，无法用 :hover）
           color: collapseColor,
           background: collapseBg,
           border: collapseBorder,
@@ -240,36 +491,39 @@ export function WatchOpenJiuwenRepos() {
           transition: '0.3s',
           display: 'flex',
           position: 'absolute',
-          // 照搬 openjiuwen：同时设 top/bottom 让按钮在 156px 容器里垂直居中。
-          // 展开态：(156-36)/2=60；收起态：(156-56)/2=50。
           top: collapsed ? 50 : 60,
           bottom: collapsed ? 50 : 60,
           boxShadow: collapseShadow,
-          borderRadius: collapsed ? '10px 0 0 10px' : '6px 0 0 6px',
-          marginRight: collapsed ? 0 : 4,
-          right: '100%',
           pointerEvents: 'auto',
         }}
-        className="oj-contact-collapse"
       >
-        {/* 展开态箭头朝右（收起右侧按钮组），收起态箭头朝左（展开拉出），照搬 openjiuwen */}
+        {/* side=right: 收起用左箭头，展开用右箭头；side=left: 镜像 */}
         {collapsed ? (
-          <ChevronLeft style={{ width: 16, height: 16 }} />
+          pos.side === 'right' ? (
+            <ChevronLeft style={{ width: 16, height: 16 }} />
+          ) : (
+            <ChevronRight style={{ width: 16, height: 16 }} />
+          )
         ) : (
-          <ChevronRight style={{ width: 12, height: 12 }} />
+          pos.side === 'right' ? (
+            <ChevronRight style={{ width: 12, height: 12 }} />
+          ) : (
+            <ChevronLeft style={{ width: 12, height: 12 }} />
+          )
         )}
       </button>
 
-      {/* 按钮组（照搬 openjiuwen buttonGroup）*/}
+      {/* 按钮组（mousedown 在此注册，照搬 openjiuwen buttonGroup） */}
       <div
+        className="oj-button-group"
+        onMouseDown={handleButtonGroupMouseDown}
+        onDragStart={handleDragStart}
+        onClickCapture={(e) => { if (justDraggedRef.current) { e.stopPropagation(); e.preventDefault() } }}
         style={{
           backdropFilter: 'blur(10px)',
           WebkitBackdropFilter: 'blur(10px)',
-          // openjiuwen 用 grab（可拖拽），我们未实现拖拽，用 default 避免误导
-          cursor: 'default',
-          userSelect: 'none',
           background: 'rgba(255, 255, 255, 0.95)',
-          borderRadius: 12,
+          borderRadius: pos.side === 'right' ? '12px 0 0 12px' : '0 12px 12px 0',
           flexDirection: 'column',
           display: collapsed ? 'none' : 'flex',
           overflow: 'hidden',
@@ -277,7 +531,7 @@ export function WatchOpenJiuwenRepos() {
           transition: 'opacity 0.3s',
         }}
       >
-        {/* 标星按钮（浅灰底，和代码/顶部统一；未标星 #333，已标星金色）*/}
+        {/* 标星按钮 */}
         <FloatButton
           onClick={handleStarClick}
           title={t('plugins.githubWatch.starAllTip')}
@@ -301,7 +555,7 @@ export function WatchOpenJiuwenRepos() {
           <FloatLabel className={`oj-btn-label oj-star-label${clicked ? ' oj-starred-label' : ''}`}>{starLabel}</FloatLabel>
         </FloatButton>
 
-        {/* 代码按钮（链到我们的 GitHub org）*/}
+        {/* 代码按钮 */}
         <a
           href={GITHUB_ORG_URL}
           target="_blank"
@@ -316,8 +570,8 @@ export function WatchOpenJiuwenRepos() {
             justifyContent: 'center',
             alignItems: 'center',
             gap: 2,
-            width: 52,
-            height: 52,
+            width: WIDGET_WIDTH,
+            height: BUTTON_HEIGHT,
             textDecoration: 'none',
             transition: '0.2s',
             display: 'flex',
@@ -338,7 +592,7 @@ export function WatchOpenJiuwenRepos() {
           </span>
         </a>
 
-        {/* 回到顶部按钮（照搬 openjiuwen topButton，底部圆角，无文字）*/}
+        {/* 回到顶部按钮 */}
         <FloatButton
           onClick={scrollToTop}
           title={t('plugins.githubWatch.backToTopTip')}
@@ -356,12 +610,12 @@ export function WatchOpenJiuwenRepos() {
     </div>
   )
 
-  // ── 通知弹窗（点击后立即标星，弹窗仅提示，不阻塞执行）──────────
-  // 右下角通知卡片（不铺满遮罩，贴右下角浮出）
-  const confirmDialog = confirmOpen ? (
+  // 通知弹窗：锚定在浮窗旁边（side=right → 弹窗在左；side=left → 弹窗在右）
+  const confirmDialog = confirmOpen && confirmCoords ? (
     <div
-      className="oj-notify-card fixed right-5 z-[1100] w-full max-w-[360px] rounded-2xl bg-white p-5 shadow-[0_8px_40px_rgba(0,0,0,0.16)]"
-      style={{ bottom: 88 }}
+      ref={confirmDialogRef}
+      className={`oj-notify-card oj-notify-${confirmCoords.side} fixed z-[1100] rounded-2xl bg-white p-5 shadow-[0_8px_40px_rgba(0,0,0,0.16)]`}
+      style={{ top: confirmCoords.top, left: confirmCoords.left, width: DIALOG_WIDTH }}
       role="dialog"
       aria-modal="false"
       aria-hidden={!confirmOpen}
@@ -402,11 +656,7 @@ export function WatchOpenJiuwenRepos() {
   )
 }
 
-// ── 子组件：浮窗按钮（照搬 openjiuwen floatButton 基础样式）──────────
-// variant:
-//   star -> 首位按钮（border-radius: 12px 12px 0 0，浅灰底，和代码/顶部统一）
-//   top  -> 末位按钮（border-radius: 0 0 12px 12px，浅灰底）
-// 非末尾按钮有底部分隔线（::after 用伪元素无法内联，改用绝对定位 div 实现）
+// ── 子组件：浮窗按钮 ──
 function FloatButton({
   children,
   onClick,
@@ -435,8 +685,8 @@ function FloatButton({
         justifyContent: 'center',
         alignItems: 'center',
         gap: 2,
-        width: 52,
-        height: 52,
+        width: WIDGET_WIDTH,
+        height: BUTTON_HEIGHT,
         transition: '0.2s',
         display: 'flex',
         position: 'relative',
@@ -444,7 +694,6 @@ function FloatButton({
       }}
     >
       {children}
-      {/* 分隔线（非末尾按钮底部，照搬 ::after 1px×28px rgba(0,0,0,0.06)）*/}
       {isStar && (
         <span
           style={{
@@ -463,7 +712,6 @@ function FloatButton({
   )
 }
 
-// 文字标签（照搬 openjiuwen buttonLabel，颜色由 CSS class 控制以便 hover 生效）
 function FloatLabel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <span

@@ -209,8 +209,9 @@
       "collapse": "收起",
       "expand": "展开",
       "confirmTitle": "正在为你标星",
-      "confirmBody": "正在为你标星 openjiuwen 10 个核心开源仓库，感谢支持！标星在后台进行，稍后即完成。",
-      "confirmOk": "好的"
+      "confirmBody": "正在为你标星 openjiuwen 核心开源项目，感谢支持！标星在后台进行，稍后即完成。",
+      "confirmOk": "好的",
+      "snapHint": "松开吸附边缘"
     }
   },
   "profile": {

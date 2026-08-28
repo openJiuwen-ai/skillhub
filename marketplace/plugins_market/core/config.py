@@ -158,6 +158,20 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("MARKET_GITHUB_STAR_ENABLED", "GITHUB_STAR_ENABLED"),
     )
+    # 一键标星目标仓库：逗号分隔的仓库名列表（不含 owner 前缀）。
+    # 为空时回退使用硬编码默认值（见 github_watch.py DEFAULT_STAR_REPO_NAMES）。
+    # 示例：MARKET_GITHUB_STAR_REPOS=jiuwenswarm,agent-studio,agent-core
+    github_star_repos: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_GITHUB_STAR_REPOS", "GITHUB_STAR_REPOS",
+        ),
+    )
+    # 一键标星目标组织：标星的 GitHub 组织名，默认 openJiuwen-ai。
+    github_star_org: str = Field(
+        default="openJiuwen-ai",
+        validation_alias=AliasChoices("MARKET_GITHUB_STAR_ORG", "GITHUB_STAR_ORG"),
+    )
 
     # AgentOS OAuth2（Control Panel）
     agentos_oauth_enabled: bool = Field(

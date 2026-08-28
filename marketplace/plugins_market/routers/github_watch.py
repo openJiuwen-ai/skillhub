@@ -49,12 +49,14 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/github", tags=["github"])
 
-WATCH_ORG = "openJiuwen-ai"
+# 一键标星的目标组织：默认值，当 settings.github_star_org 为空时回退使用。
+DEFAULT_WATCH_ORG = "openJiuwen-ai"
 
 # 一键标星的目标仓库清单（openJiuwen-ai 组织下精选仓库）。
+# 当 settings.github_star_repos 为空时回退使用此默认列表。
 # 早期版本 repos 为空时会调 list_org_repos 拉取组织全部公开仓库（约 18 个），
 # 现按业务要求固定为以下 10 个核心仓库，既聚焦核心项目又缩短标星耗时（≈13s）。
-STAR_REPO_NAMES = (
+DEFAULT_STAR_REPO_NAMES = (
     "jiuwenswarm",
     "agent-studio",
     "agent-core",
@@ -66,6 +68,26 @@ STAR_REPO_NAMES = (
     "agent-runtime-java",
     "skillhub",
 )
+
+
+def _get_watch_org() -> str:
+    """读取标星目标组织，配置缺失时回退为默认值。"""
+    org = settings.github_star_org.strip() if settings.github_star_org else ""
+    return org or DEFAULT_WATCH_ORG
+
+
+def _get_star_repo_names() -> tuple[str, ...]:
+    """读取标星目标仓库列表，配置缺失时回退为硬编码默认值。
+
+    环境变量格式：逗号分隔的仓库名（不含 owner 前缀），如：
+      MARKET_GITHUB_STAR_REPOS=jiuwenswarm,agent-studio,agent-core
+    空值或纯空白回退为 DEFAULT_STAR_REPO_NAMES。
+    """
+    raw = settings.github_star_repos.strip() if settings.github_star_repos else ""
+    if not raw:
+        return DEFAULT_STAR_REPO_NAMES
+    names = tuple(n.strip() for n in raw.split(",") if n.strip())
+    return names or DEFAULT_STAR_REPO_NAMES
 
 # 标星状态 Redis key：按 provider:login 隔离，永久（无 TTL）。
 # 写入时机：标星请求成功（至少一个仓库 success）后；读取时机：GET /watch/status。
@@ -167,7 +189,7 @@ class WatchItem(BaseModel):
 
 
 class WatchBatchBody(BaseModel):
-    # repos 为空时表示「一键标星 openJiuwen-ai 组织核心仓库」（固定 10 个，见 STAR_REPO_NAMES）
+    # repos 为空时表示「一键标星组织核心仓库」（配置项，见 _get_star_repo_names）
     repos: list[WatchItem] = Field(default_factory=list, max_length=100)
 
 
@@ -184,41 +206,43 @@ async def star_repos(
     按用户隔离写入 Redis 状态；缺失/非法时 fallback 为 github（见 _resolve_github_provider，
     本端点仅服务 GitHub 用户，fallback 用 github 而非 app 默认 gitcode 以保证读写 key 一致）。
 
-    串行标星 10 个仓库 ≈20s，若同步等待前端会转圈 20s 用户以为卡住。
+    串行标星默认 10 个仓库 ≈20s，若同步等待前端会转圈 20s 用户以为卡住。
     改为后台 asyncio.create_task 异步标星，立即返回 202 + 乐观写 Redis 已标星态。
     后台全失败时回滚 Redis 为 "0"（前端下次查状态返回 false）。
     """
     with operation_context(operation_type="star github repos"):
         bind_operation_actor(actor_type="oauth_user")
-        bind_operation_resource(resource_type="github_watch", resource_id=WATCH_ORG)
-        _log_started("star github repos", org=WATCH_ORG)
+        watch_org = _get_watch_org()
+        star_repo_names = _get_star_repo_names()
+        bind_operation_resource(resource_type="github_watch", resource_id=watch_org)
+        _log_started("star github repos", org=watch_org)
 
         if not settings.github_star_enabled:
             _raise_with_failure_log(
                 "star github repos",
                 BusinessError(code=404, status_code=404, error="feature_disabled",
                               message="标星功能已关闭"),
-                org=WATCH_ORG,
+                org=watch_org,
             )
         token = _extract_token(authorization)
         # 点击计数：总计数（永不过期）+ 每日计数（当天过期），Redis 不可用时静默跳过
         cache_incr("github_star_clicks:total")
         cache_incr(f"github_star_clicks:daily:{date.today().isoformat()}", ttl=86400)
-        # repos 为空时，使用固定的核心仓库清单（STAR_REPO_NAMES），不再拉取组织全部仓库。
-        # org 白名单：只允许标星 openJiuwen-ai 组织下的仓库，
+        # repos 为空时，使用配置的核心仓库清单（_get_star_repo_names），不再拉取组织全部仓库。
+        # org 白名单：只允许标星目标组织下的仓库，
         # 防止用户传入任意 owner/repo 使 SkillHub 沦为通用标星代理。
         items_to_star: list[WatchItem] = body.repos
         for item in items_to_star:
-            if item.owner.lower() != WATCH_ORG.lower():
+            if item.owner.lower() != watch_org.lower():
                 _raise_with_failure_log(
                     "star github repos",
                     BusinessError(code=403, status_code=403, error="github_forbidden",
-                                  message=f"仅支持标星 {WATCH_ORG} 组织下的仓库"),
-                    org=WATCH_ORG,
+                                  message=f"仅支持标星 {watch_org} 组织下的仓库"),
+                    org=watch_org,
                 )
         if not items_to_star:
             items_to_star = [
-                WatchItem(owner=WATCH_ORG, repo=name) for name in STAR_REPO_NAMES
+                WatchItem(owner=watch_org, repo=name) for name in star_repo_names
             ]
 
         # 串行标星 + 请求间隔，遵循 GitHub 官方最佳实践：
@@ -271,10 +295,10 @@ async def star_repos(
         user_key = _star_user_key(prov, login)
         running = _star_bg_tasks.get(user_key)
         if running is not None and not running.done():
-            _log_started("star github repos", org=WATCH_ORG, deduped=True)
+            _log_started("star github repos", org=watch_org, deduped=True)
             return ResponseModel(code=202, message="accepted", data={"status": "already_running"})
 
-        # 后台 fire-and-forget 标星：串行 10 个仓库 ≈20s，若同步等待前端会转圈 20s
+        # 后台 fire-and-forget 标星：串行仓库列表 ≈20s，若同步等待前端会转圈 20s
         # 用户以为卡住。改为后台任务立即返回 202，前端无需等待。
         async def _star_batch_bg() -> None:
             bg_success = 0
