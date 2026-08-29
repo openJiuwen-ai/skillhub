@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, List, Optional
 
 from fastapi import UploadFile
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from plugins_market.validation.constants import QUERY_TAGS_MAX_LEN
 
@@ -64,6 +64,7 @@ class PluginPublishResult(BaseModel):
     plugin_type: Optional[str] = None
     publish_result: Optional[str] = None
     visibility: Optional[str] = None
+    _import_disposition: str = PrivateAttr(default="published")
 
 
 @dataclass
