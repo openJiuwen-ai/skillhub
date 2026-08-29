@@ -33,10 +33,22 @@ body,
 }
 
 /* 右下角通知卡片：从右下方滑入 */
-@keyframes oj-slide-in {
+@keyframes oj-slide-in-left {
   0% {
     opacity: 0;
-    transform: translate(16px, 16px) scale(0.96);
+    transform: translate(16px, 8px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+/* 弹窗在浮窗右侧（浮窗在左侧时），从左向右滑入 */
+@keyframes oj-slide-in-right {
+  0% {
+    opacity: 0;
+    transform: translate(-16px, 8px) scale(0.96);
   }
   100% {
     opacity: 1;
@@ -45,7 +57,13 @@ body,
 }
 
 .oj-notify-card {
-  animation: oj-slide-in 0.25s ease-out both;
+  animation: oj-slide-in-left 0.25s ease-out both;
+}
+.oj-notify-card.oj-notify-right {
+  animation: oj-slide-in-right 0.25s ease-out both;
+}
+.oj-notify-card.oj-notify-left {
+  animation: oj-slide-in-left 0.25s ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -104,5 +122,76 @@ body,
 .oj-float-btn:hover .oj-starred-label {
   fill: #fbbf24;
   color: #f59e0b;
+}
+
+/* ── 拖拽光标（照搬 openjiuwen .contactContainerDragging 模式）────────────── */
+/* 拖拽时：容器及所有子元素强制 grabbing 光标，覆盖子元素自身的 cursor:pointer */
+.oj-dragging,
+.oj-dragging * {
+  cursor: grabbing !important;
+}
+
+/* 按钮组默认光标：grab（照搬 openjiuwen .buttonGroup { cursor: grab }） */
+.oj-button-group {
+  cursor: grab;
+}
+
+/* ── 收起按钮左右镜像（照搬 openjiuwen collapseButtonRight/Left 模式）────── */
+/* side=right: 收起按钮在按钮组左侧 */
+.oj-collapse-right {
+  border-radius: 6px 0 0 6px;
+  margin-right: 4px;
+  right: 100%;
+  left: auto;
+}
+.oj-collapse-right.oj-collapse-collapsed {
+  border-radius: 10px 0 0 10px;
+  margin-right: 0 !important;
+  right: 0 !important;
+  left: auto !important;
+}
+
+/* side=left: 收起按钮在按钮组右侧 */
+.oj-collapse-left {
+  border-radius: 0 6px 6px 0;
+  margin-left: 4px;
+  left: 100%;
+  right: auto;
+}
+.oj-collapse-left.oj-collapse-collapsed {
+  border-radius: 0 10px 10px 0;
+  margin-left: 0 !important;
+  left: 0 !important;
+  right: auto !important;
+}
+
+/* ── 拖拽吸附提示（照搬 openjiuwen .dragHint 模式）────────────────────── */
+/* 提示出现在浮窗上方，绝对定位相对于容器 */
+@keyframes oj-fade-in-down {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+.oj-drag-hint {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+  backdrop-filter: blur(8px);
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  animation: oj-fade-in-down 0.2s ease both;
 }
 
