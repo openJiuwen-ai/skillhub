@@ -20,6 +20,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_TEMPLATE,
 )
+from plugins_market.validation.content_security import find_dangerous_zip_script
 from plugins_market.validation.localized_manifest import (
     localized_manifest_tags,
     localized_manifest_text,
@@ -158,6 +159,37 @@ def _validate_declared_skills(
         validate_skill_frontmatter(frontmatter, dir_name=skill_name, yaml_name=skill_name)
 
 
+def _validate_bundled_skill_dirs(
+    zf: zipfile.ZipFile,
+    members: dict[str, str],
+    payload_prefix: str,
+    counter: DecompressCounter,
+    *,
+    error: str,
+) -> None:
+    """校验内层 skills/ 下的每个技能目录（无论 manifest 是否声明）。
+
+    manifest.skills 声明项之外的目录同样会随包分发，缺 SKILL.md 或 frontmatter
+    非法（缺 description / name 与目录不一致）时不允许带病上架。
+    """
+    skills_prefix = f"{payload_prefix}skills/"
+    skill_dirs: set[str] = set()
+    for normalized in members:
+        if not normalized.startswith(skills_prefix):
+            continue
+        parts = normalized[len(skills_prefix):].split("/")
+        if len(parts) >= 2 and parts[0]:
+            skill_dirs.add(parts[0])
+    for dir_name in sorted(skill_dirs):
+        skill_path = f"{skills_prefix}{dir_name}/SKILL.md"
+        original = members.get(skill_path)
+        if original is None or not _member_exists(members, skill_path):
+            _invalid(error, f"skills/{dir_name} 缺少 SKILL.md")
+        raw = safe_read_zip_member(zf, original, counter)
+        frontmatter, _ = parse_skill_frontmatter(raw)
+        validate_skill_frontmatter(frontmatter, dir_name=dir_name, yaml_name=dir_name)
+
+
 def _validate_declared_file_arrays(
     members: dict[str, str],
     payload_prefix: str,
@@ -183,9 +215,11 @@ def _validate_declared_file_arrays(
 
 
 def _validate_declared_subagents(
+    zf: zipfile.ZipFile,
     members: dict[str, str],
     payload_prefix: str,
     entries: Any,
+    counter: DecompressCounter,
     *,
     error: str,
 ) -> None:
@@ -199,13 +233,29 @@ def _validate_declared_subagents(
         relative = _safe_relative_path(
             item.get("dir"), f"subagents[{index}].dir", error=error
         )
-        if not _directory_has_file(
-            members, f"{payload_prefix}{relative}", ".subagent.json"
-        ):
+        dir_prefix = f"{payload_prefix}{relative}".rstrip("/") + "/"
+        subagent_files = sorted(
+            m
+            for m in members
+            if m.startswith(dir_prefix)
+            and m.endswith(".subagent.json")
+            and not members[m].replace("\\", "/").endswith("/")
+        )
+        if not subagent_files:
             _invalid(
                 error,
                 f"manifest.subagents[{index}] 声明的目录缺少 .subagent.json：{relative}",
             )
+        for member_path in subagent_files:
+            raw = safe_read_zip_member(zf, members[member_path], counter)
+            try:
+                json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                _invalid(
+                    error,
+                    f"manifest.subagents[{index}] 的 .subagent.json 不是合法 JSON："
+                    f"{relative}（{exc}）",
+                )
 
 
 def _validate_agent_plugin_capabilities(
@@ -235,8 +285,9 @@ def _validate_agent_plugin_capabilities(
         error=error,
     )
     _validate_declared_subagents(
-        members, payload_prefix, manifest.get("subagents"), error=error
+        zf, members, payload_prefix, manifest.get("subagents"), counter, error=error
     )
+    _validate_bundled_skill_dirs(zf, members, payload_prefix, counter, error=error)
 
 
 @dataclass(frozen=True)
@@ -343,9 +394,18 @@ def validate_agent_asset_layout(
             error="invalid_manifest_json",
         )
         _validate_declared_subagents(
+            zf,
             members,
             payload_prefix,
             manifest.get("subagents"),
+            counter,
+            error="invalid_manifest_json",
+        )
+        _validate_bundled_skill_dirs(
+            zf,
+            members,
+            payload_prefix,
+            counter,
             error="invalid_manifest_json",
         )
         display_name = (
@@ -357,6 +417,11 @@ def validate_agent_asset_layout(
         asset_type = RUNTIME_AGENT_TEMPLATE
     else:  # defensive guard
         _invalid("invalid_plugin_config", f"不支持的智能体资产类型：{runtime_type}")
+
+    # 静态安全扫描：内层脚本（tools/rails/mcps 下的 .py/.sh 等）不得包含危险执行内容。
+    hit = find_dangerous_zip_script(zf, members, payload_prefix, counter)
+    if hit:
+        _invalid("dangerous_content", f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
 
     avatar = manifest.get("avatar")
     if avatar is not None:

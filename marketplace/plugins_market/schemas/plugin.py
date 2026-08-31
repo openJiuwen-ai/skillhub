@@ -64,6 +64,8 @@ class PluginPublishResult(BaseModel):
     plugin_type: Optional[str] = None
     publish_result: Optional[str] = None
     visibility: Optional[str] = None
+    # 幂等命中（同名同版本同内容，未新增版本）时为 True；默认 False 不影响既有调用方
+    deduplicated: bool = False
 
 
 @dataclass
