@@ -48,6 +48,7 @@ _REGISTERED_ERROR_METADATA: dict[str, ErrorMetadata] = {
     "invalid_file_format": ErrorMetadata("SKILLHUB_PLUGIN_FILE_FORMAT_INVALID", "validation"),
     "file_too_large": ErrorMetadata("SKILLHUB_PLUGIN_FILE_TOO_LARGE", "validation"),
     "invalid_plugin_config": ErrorMetadata("SKILLHUB_PLUGIN_CONFIG_INVALID", "validation"),
+    "dangerous_content": ErrorMetadata("SKILLHUB_DANGEROUS_CONTENT", "validation"),
     "plugin_not_found": ErrorMetadata("SKILLHUB_PLUGIN_NOT_FOUND", "not_found"),
     "permission_denied": ErrorMetadata("SKILLHUB_PERMISSION_DENIED", "permission"),
     "plugin_id_mismatch": ErrorMetadata("SKILLHUB_PLUGIN_ID_MISMATCH", "validation"),

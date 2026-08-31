@@ -496,6 +496,8 @@ def _make_publish_result(
     asset: MarketAssetDB,
     version_row: MarketAssetVersionDB,
     zip_key: str,
+    *,
+    deduplicated: bool = False,
 ) -> PluginPublishResult:
     ts_ms = version_row.create_time or asset.create_time or 0
     published_at = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
@@ -512,6 +514,7 @@ def _make_publish_result(
         plugin_type=asset.plugin_type,
         publish_result=_resolved_version_publish_result_value(version_row),
         visibility=getattr(asset, "visibility", None) or "public",
+        deduplicated=deduplicated,
     )
 
 
@@ -911,13 +914,17 @@ def publish(
                 asset_id,
                 version,
             )
-            return _make_publish_result(asset_for_result, existing_version, zip_key)
+            return _make_publish_result(
+                asset_for_result, existing_version, zip_key, deduplicated=True
+            )
         logger.info(
             "publish idempotent skip (same version + artifact_sha256): asset_id=%s version=%s",
             asset_id,
             version,
         )
-        return _make_publish_result(asset_for_result, existing_version, zip_key)
+        return _make_publish_result(
+            asset_for_result, existing_version, zip_key, deduplicated=True
+        )
 
     if existing_version and not force:
         raise PublishError(
