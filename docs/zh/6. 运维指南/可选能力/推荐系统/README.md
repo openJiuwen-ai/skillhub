@@ -190,7 +190,7 @@ python -m recommender.offline.redis_sync
 
 ## 运维关注点
 
-- Redis / Milvus 网络可达（容器或跨机部署时注意主机名与端口）。Windows + WSL Docker：marketplace 在 Windows 时 `MILVUS_HOST` 用 WSL 网卡 IP（`hostname -I` / `start_milvus.ps1` 输出）；WSL 休眠后容器会没了，表现为推荐接口空等数秒再兜底。本地部署见仓库根目录 `tools/milvus/本地容器化部署.md`。华为云 DCS 见[配置切换-Redis_DCS 与 MinIO_OBS](../../配置切换-Redis_DCS与MinIO_OBS.md)。
+- Redis / Milvus 网络可达（容器或跨机部署时注意主机名与端口）。Windows + WSL Docker：marketplace 在 Windows 时 `MILVUS_HOST` 用 WSL 网卡 IP（`hostname -I` / `start_milvus.ps1` 输出）；WSL 休眠后容器会没了，表现为推荐接口空等数秒再兜底。本地部署见仓库根目录 `tools/milvus/本地容器化部署.md`。华为云 DCS 见[配置切换-Redis_DCS 与 MinIO_OBS](../../../配置切换-Redis_DCS与MinIO_OBS.md)。
 - Milvus 若开启 `authorizationEnabled`，须配置 `MILVUS_USER` / `MILVUS_PASSWORD`（默认内置多为 `root`/`Milvus`，生产改密）；密码支持 `SecurityUtils` 密文。未开鉴权时这两项留空即可。
 - Embedding API 配额与维度一致性；换模型维度或 schema 升级后必须 `--mode full`。
 - 首次启用建议临时 `MARKET_REC_REBUILD_ON_STARTUP=true`，并确保下载目录已有 zip（或先手动 `package_sync`）。日志出现 `recommender job: redis_sync done` 且 milvus upsert 成功后，可改回 `false` 以免每次发版都全量重建。
