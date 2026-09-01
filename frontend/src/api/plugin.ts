@@ -467,6 +467,24 @@ export async function togglePluginInteract(
 }
 
 /** GET /api/v1/plugins/{asset_id}/versions/{version} 响应 data */
+export interface AgentPackageCapabilityItem {
+  kind: string
+  id: string
+  name: string
+  description?: string | null
+}
+
+export interface AgentPackageProfileData {
+  package_type?: string | null
+  category?: string | null
+  source?: string | null
+  default_init_input?: string | null
+  quick_inputs?: string[]
+  persona_markdown?: string | null
+  capabilities?: AgentPackageCapabilityItem[]
+  manifest_tags?: string[]
+}
+
 export interface PluginVersionDetailData {
   asset_id: string
   version: string
@@ -511,6 +529,7 @@ export interface PluginVersionDetailData {
   resolved_commit_sha?: string | null
   declared_skill_version?: string | null
   storage_mode?: string | null
+  agent_package_profile?: AgentPackageProfileData | null
 }
 
 export interface SkillModerationResultData {

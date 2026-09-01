@@ -218,6 +218,45 @@ def test_agent_template_rejects_subagent_json_non_object_root() -> None:
     assert "根结构必须为对象" in exc_info.value.detail["message"]
 
 
+def test_agent_plugin_accepts_mcp_connector_only() -> None:
+    content = _build_wrapped_zip(
+        "wellness-plugin",
+        "agent-plugin",
+        {
+            "manifest.json": _plugin_manifest(
+                tools=[{"file": "tools/tool.py"}],
+                mcps=[{"connector": "amap"}],
+            ),
+            "README.md": "# Wellness",
+            "tools/tool.py": "def run():\n    return True\n",
+        },
+    )
+    result = _validate_plugin(content, "wellness-plugin")
+    assert result["asset_type"] == "agent-plugin"
+
+
+def test_agent_plugin_accepts_connector_without_tools() -> None:
+    content = _build_wrapped_zip(
+        "mcp-only-plugin",
+        "agent-plugin",
+        {
+            "manifest.json": json.dumps(
+                {
+                    "version": "1.0.0",
+                    "package_type": "plugin",
+                    "id": "mcp-only-plugin",
+                    "name": "MCP Only",
+                    "description": "Connector only",
+                    "mcps": [{"connector": "amap"}],
+                }
+            ),
+            "README.md": "# MCP",
+        },
+    )
+    result = _validate_plugin(content, "mcp-only-plugin")
+    assert result["asset_type"] == "agent-plugin"
+
+
 def test_agent_mcp_rejects_dangerous_second_server() -> None:
     content = _build_wrapped_zip(
         "dangerous-mcp",

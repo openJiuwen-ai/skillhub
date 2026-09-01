@@ -30,6 +30,7 @@ import {
   type MarketplacePluginItem,
   type VersionFileEntry,
   type PluginVersionDetailData,
+  type AgentPackageProfileData,
   getPluginTagOptions,
 } from '@/api/plugin'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
@@ -426,6 +427,112 @@ function SecurityReviewPanel({
   )
 }
 
+function agentCapabilityKindLabel(kind: string, t: (key: string) => string): string {
+  const normalized = kind.trim().toLowerCase()
+  if (normalized === 'skill') return t('plugins.skillPage.agentCapabilityKindSkill')
+  if (normalized === 'tool') return t('plugins.skillPage.agentCapabilityKindTool')
+  if (normalized === 'rail') return t('plugins.skillPage.agentCapabilityKindRail')
+  if (normalized === 'mcp') return t('plugins.skillPage.agentCapabilityKindMcp')
+  return kind
+}
+
+function AgentPackageProfilePanel({
+  profile,
+  t,
+}: {
+  profile: AgentPackageProfileData
+  t: (key: string) => string
+}) {
+  const capabilities = profile.capabilities ?? []
+  const quickInputs = profile.quick_inputs ?? []
+  const hasMeta = Boolean(profile.category?.trim() || profile.source?.trim())
+  const hasCapabilities = capabilities.length > 0
+  const hasPersona = Boolean(profile.persona_markdown?.trim())
+  const hasQuickInputs = quickInputs.length > 0
+  if (!hasMeta && !hasCapabilities && !hasPersona && !hasQuickInputs) return null
+
+  return (
+    <div className="mt-8 space-y-8 border-t border-[#F0F0F0] pt-8">
+      {hasMeta ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentManifestMetaHeading')}
+          </h2>
+          <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+            {profile.category?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentCategory')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.category}</div>
+              </div>
+            ) : null}
+            {profile.source?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentSource')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.source}</div>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {hasCapabilities ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentCapabilitiesHeading')}
+          </h2>
+          <ul className="space-y-3">
+            {capabilities.map(item => (
+              <li
+                key={`${item.kind}:${item.id}`}
+                className="rounded-lg border border-slate-100 bg-slate-50/80 px-4 py-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-indigo-700">
+                    {agentCapabilityKindLabel(item.kind, t)}
+                  </span>
+                  <span className="text-[13px] font-medium text-[#404040]">{item.name}</span>
+                </div>
+                {item.description?.trim() ? (
+                  <p className="mt-1.5 text-[12px] leading-5 text-[#666666]">{item.description}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {hasPersona ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentPersonaHeading')}
+          </h2>
+          <div className="prose prose-slate max-w-none text-sm prose-headings:font-semibold prose-a:text-indigo-600 prose-pre:bg-slate-100 prose-pre:text-slate-800">
+            <PluginMarkdown source={profile.persona_markdown || ''} variant="detail" className="leading-relaxed text-slate-700" />
+          </div>
+        </section>
+      ) : null}
+
+      {hasQuickInputs ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentQuickInputsHeading')}
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {quickInputs.map((text, index) => (
+              <span
+                key={`${index}-${text}`}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[12px] text-[#404040]"
+              >
+                {text}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
 function SecurityMetric({ label, value, tone = 'slate' }: { label: string; value: number; tone?: 'slate' | 'orange' }) {
   const valueClass = tone === 'orange' ? 'text-orange-600' : 'text-slate-950'
   return (
@@ -504,6 +611,7 @@ export default function SkillDetailPage() {
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [fileContentLoading, setFileContentLoading] = useState(false)
   const [fileContentError, setFileContentError] = useState<string | null>(null)
+  const [agentPackageProfile, setAgentPackageProfile] = useState<AgentPackageProfileData | null>(null)
   const downloadRef = useRef(false)
   const fileContentAbortRef = useRef<AbortController | null>(null)
   const locationState = location.state as { fromProfile?: boolean; moderationContext?: 'pending' } | null
@@ -587,6 +695,7 @@ export default function SkillDetailPage() {
     setFileList(null)
     setSelectedFile(null)
     setFileContent(null)
+    setAgentPackageProfile(null)
     setSelectedVersion(prev => {
       if (requestedVersion && skill.allVersions.includes(requestedVersion)) return requestedVersion
       if (prev && skill.allVersions.includes(prev)) return prev
@@ -617,6 +726,7 @@ export default function SkillDetailPage() {
     const effectiveModeration = getSkillLikeEffectiveModeration(res)
     setModerationStatus(normalizeSkillLikeModerationStatus(effectiveModeration.moderationStatus))
     setModerationRejectReason(effectiveModeration.moderationRejectReason)
+    setAgentPackageProfile(res.agent_package_profile ?? null)
     setChangelogLoading(false)
     void queryClient.invalidateQueries({ queryKey: ['plugins'] })
   }, [queryClient])
@@ -635,6 +745,7 @@ export default function SkillDetailPage() {
     setChangelogError(null)
     setChangelog(null)
     setDetailDescFromApi(null)
+    setAgentPackageProfile(null)
     fileContentAbortRef.current?.abort()
     fileContentAbortRef.current = null
     setFileList(null)
@@ -1268,6 +1379,10 @@ export default function SkillDetailPage() {
                         <p className="text-[13px] leading-[22px] text-[#666666]">{skill.shortDesc || '—'}</p>
                       </div>
                     </section>
+
+                    {isAgentDetail && agentPackageProfile ? (
+                      <AgentPackageProfilePanel profile={agentPackageProfile} t={t} />
+                    ) : null}
 
                     {/* Version selector */}
                     <div className="mt-6 flex items-center gap-3">

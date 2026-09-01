@@ -308,7 +308,7 @@ def _validate_agent_plugin_capabilities(
         members,
         payload_prefix,
         manifest,
-        ("tools", "mcps", "rails"),
+        ("tools", "rails"),
         error=error,
     )
     _validate_declared_subagents(
@@ -418,7 +418,7 @@ def validate_agent_asset_layout(
             members,
             payload_prefix,
             manifest,
-            ("tools", "mcps", "rails", "memories", "rubrics"),
+            ("tools", "rails", "memories", "rubrics"),
             error="invalid_manifest_json",
         )
         _validate_declared_subagents(

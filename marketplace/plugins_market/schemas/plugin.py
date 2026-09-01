@@ -181,6 +181,24 @@ class PluginTemplatePresignData(BaseModel):
     filename: str
 
 
+class AgentPackageCapabilityItem(BaseModel):
+    kind: str
+    id: str
+    name: str
+    description: Optional[str] = None
+
+
+class AgentPackageProfile(BaseModel):
+    package_type: Optional[str] = None
+    category: Optional[str] = None
+    source: Optional[str] = None
+    default_init_input: Optional[str] = None
+    quick_inputs: List[str] = Field(default_factory=list)
+    persona_markdown: Optional[str] = None
+    capabilities: List[AgentPackageCapabilityItem] = Field(default_factory=list)
+    manifest_tags: List[str] = Field(default_factory=list)
+
+
 class PluginVersionDetail(BaseModel):
     asset_id: str
     version: str
@@ -241,6 +259,10 @@ class PluginVersionDetail(BaseModel):
     git_version_display_as_commit: bool = Field(
         False,
         description="为 true 时本行 version 显示为 commit 短码（仅当 version 等于资产 latest_version）",
+    )
+    agent_package_profile: Optional[AgentPackageProfile] = Field(
+        None,
+        description="agent-plugin / agent-template 内层 manifest 只读摘要（能力、persona、推荐提示词）",
     )
 
 

@@ -204,7 +204,17 @@
       "moderationSuccess": "审核已更新",
       "moderationFailed": "审核操作失败",
       "notFoundTitle": "该 Skill 不存在或已被删除",
-      "notFoundHint": "asset_id 无效，可能是 Skill 已被删除、版本号错误或来自旧的历史链接。"
+      "notFoundHint": "asset_id 无效，可能是 Skill 已被删除、版本号错误或来自旧的历史链接。",
+      "agentManifestMetaHeading": "包内元数据",
+      "agentCategory": "分类",
+      "agentSource": "来源",
+      "agentCapabilitiesHeading": "能力清单",
+      "agentPersonaHeading": "Persona",
+      "agentQuickInputsHeading": "推荐提示词",
+      "agentCapabilityKindSkill": "Skill",
+      "agentCapabilityKindTool": "Tool",
+      "agentCapabilityKindRail": "Rail",
+      "agentCapabilityKindMcp": "MCP"
     },
     "assetPage": {
       "notFoundTitle": "该资产不存在或已被删除",

@@ -204,7 +204,17 @@
       "moderationSuccess": "Review updated",
       "moderationFailed": "Review action failed",
       "notFoundTitle": "This Skill does not exist or was deleted",
-      "notFoundHint": "Invalid asset_id. The Skill may have been deleted, the version is wrong, or the link is outdated."
+      "notFoundHint": "Invalid asset_id. The Skill may have been deleted, the version is wrong, or the link is outdated.",
+      "agentManifestMetaHeading": "Package metadata",
+      "agentCategory": "Category",
+      "agentSource": "Source",
+      "agentCapabilitiesHeading": "Capabilities",
+      "agentPersonaHeading": "Persona",
+      "agentQuickInputsHeading": "Suggested prompts",
+      "agentCapabilityKindSkill": "Skill",
+      "agentCapabilityKindTool": "Tool",
+      "agentCapabilityKindRail": "Rail",
+      "agentCapabilityKindMcp": "MCP"
     },
     "assetPage": {
       "notFoundTitle": "This asset does not exist or was deleted",

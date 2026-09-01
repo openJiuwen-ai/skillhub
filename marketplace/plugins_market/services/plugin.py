@@ -69,6 +69,7 @@ from plugins_market.repositories import (
 )
 from plugins_market.repositories.market_assets_repository import parse_tag_filter
 from plugins_market.schemas.plugin import (
+    AgentPackageProfile,
     AssetVersionDeleteData,
     PluginDownloadData,
     PluginListItem,
@@ -112,6 +113,7 @@ from plugins_market.validation.zip_utils import (
     safe_read_zip_member,
     validate_zip_safety,
 )
+from plugins_market.services.agent_package_inspect import extract_agent_package_profile
 from plugins_market.services.skill_review import (
     REVIEW_STATUS_SYSTEM_FAILED,
     build_review_summary,
@@ -1069,7 +1071,9 @@ def publish(
                 is not None
             )
             skip_listing_fields_for_pending_skill = (
-                is_moderated_market_asset_type(plugin_type) and mod_st == MODERATION_PENDING and had_any_approved_version
+                is_moderated_market_asset_type(plugin_type)
+                and mod_st == MODERATION_PENDING
+                and had_any_approved_version
             )
 
             existing_plugin_type = (
@@ -1925,6 +1929,14 @@ def get_plugin_version_detail_service(
             except Exception as e:
                 logger.warning("版本 readme.md 解析失败 asset_id=%s version=%s: %s", asset_id, version, e)
 
+    agent_package_profile = _load_agent_package_profile_for_version(
+        asset_id,
+        version,
+        version_row,
+        storage,
+        asset.plugin_type,
+    )
+
     return PluginVersionDetail(
         asset_id=asset.asset_id,
         version=version_row.version,
@@ -1966,6 +1978,7 @@ def get_plugin_version_detail_service(
         resolved_commit_sha=getattr(asset, "resolved_commit_sha", None),
         declared_skill_version=getattr(asset, "declared_skill_version", None),
         git_version_display_as_commit=_git_version_display_as_commit(asset, version_row.version),
+        agent_package_profile=agent_package_profile,
     )
 
 
@@ -3119,6 +3132,50 @@ _TEXT_EXTENSIONS = {
 def _is_text_file(path: str) -> bool:
     dot = path.rfind(".")
     return dot < 0 or path[dot:].lower() in _TEXT_EXTENSIONS
+
+
+def _load_agent_package_profile_for_version(
+    asset_id: str,
+    version: str,
+    version_row: MarketAssetVersionDB,
+    storage: S3StorageClient,
+    plugin_type: str | None,
+) -> AgentPackageProfile | None:
+    normalized = (plugin_type or "").strip().lower()
+    if normalized not in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+        return None
+    from plugins_market.core.cache import cache_get, cache_set  # noqa: PLC0415
+
+    sha16 = (version_row.artifact_sha256 or "")[:16]
+    cache_key = f"vagentprofile:{asset_id}:{version}:{sha16}"
+    cached = cache_get(cache_key)
+    if cached:
+        try:
+            return AgentPackageProfile.model_validate(json.loads(cached))
+        except Exception:
+            pass
+    zf = _load_zip_from_obs(storage, version_row)
+    if zf is None:
+        return None
+    try:
+        with zf:
+            raw = extract_agent_package_profile(zf)
+    except Exception as exc:
+        logger.warning(
+            "agent package profile parse failed asset_id=%s version=%s: %s",
+            asset_id,
+            version,
+            exc,
+        )
+        return None
+    if not raw:
+        return None
+    profile = AgentPackageProfile.model_validate(raw)
+    try:
+        cache_set(cache_key, json.dumps(profile.model_dump()), _FILES_CACHE_TTL)
+    except Exception:
+        pass
+    return profile
 
 
 def get_version_file_list_service(
