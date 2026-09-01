@@ -45,7 +45,7 @@ import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
-import { MODERATED_MARKET_QUERY_VALUE, assetDetailPath } from '@/utils/pluginType'
+import { MODERATED_MARKET_QUERY_VALUE, assetDetailPath, isAgentAssetPluginType } from '@/utils/pluginType'
 import { listMyGroups, listMyGroupSkills, revokeSkillFromGroup, type GroupItem, type MyGroupSkillItem } from '@/api/groups'
 import emptyDataIllustration from '@/assets/empty-data.svg'
 
@@ -370,6 +370,11 @@ export default function MyProfilePage() {
     const versions = Array.isArray(row.all_versions) ? row.all_versions : []
     const fallback = versions.length ? versions[versions.length - 1] : ''
     const hint = v || fallback
+    if (isAgentAssetPluginType(row.plugin_type)) {
+      const query = hint ? `?version=${encodeURIComponent(hint)}` : ''
+      navigate(`${assetDetailPath(row.asset_id, row.plugin_type)}${query}`, { state: { fromProfile: true } })
+      return
+    }
     if (!hint) {
       window.alert(t('profile.missingVersion'))
       return

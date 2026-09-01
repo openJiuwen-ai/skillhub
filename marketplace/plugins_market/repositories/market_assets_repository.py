@@ -592,10 +592,11 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
 
         ms = (params.moderation_status or "").strip().upper() if params.moderation_status else ""
         if ms == "PENDING":
-            # Skill-like：系统审查通过后等待人工审核，或旧数据显式 PENDING，均视为待审。
+            # Skill / Agent 待审均以版本行 publish_result / moderation_status 为准，
+            # 避免「已有通过版本 + 新版本待审」时仅查主表 moderation_status 漏单。
             pt = (params.plugin_type or "").strip().lower()
             pt_parts = {p.strip() for p in pt.split(",") if p.strip()} if pt else set()
-            if not pt_parts or pt_parts & SKILL_LIKE_PLUGIN_TYPES:
+            if not pt_parts or pt_parts & MODERATED_MARKET_ASSET_TYPES:
                 q_assets = q_assets.filter(pending_moderation_version_exists_for_asset())
             else:
                 q_assets = q_assets.filter(MarketAssetDB.moderation_status == "PENDING")
