@@ -64,6 +64,8 @@ class PluginPublishResult(BaseModel):
     plugin_type: Optional[str] = None
     publish_result: Optional[str] = None
     visibility: Optional[str] = None
+    # 幂等命中（同名同版本同内容，未新增版本）时为 True；默认 False 不影响既有调用方
+    deduplicated: bool = False
 
 
 @dataclass
@@ -80,6 +82,7 @@ class SkillImportItemResult(BaseModel):
     """单条 skill 导入结果。"""
 
     entry: str
+    # skipped：幂等命中（同名同版本同内容）或 version_conflict 非 force 场景
     status: Literal["ok", "error", "skipped"]
     plugin_id: Optional[str] = None
     name: Optional[str] = None
@@ -94,7 +97,10 @@ class SkillImportSummary(BaseModel):
     total: int = Field(..., description="集合包内顶层 skill 目录总数")
     ok: int = Field(..., description="成功导入条数")
     failed: int = Field(..., description="失败条数（仅含已尝试并记入 results 的条目）")
-    skipped: int = Field(0, description="跳过条数（如同步时内容 MD5 未变）")
+    skipped: int = Field(
+        0,
+        description="跳过条数（幂等重复导入、version_conflict 非 force 等；不计入 ok）",
+    )
 
 
 class SkillImportResponse(BaseModel):
@@ -116,7 +122,10 @@ class AssetImportSummary(BaseModel):
     total: int = Field(..., description="集合包内资产条目总数")
     ok: int = Field(..., description="成功导入条数")
     failed: int = Field(..., description="失败条数（仅含已尝试并记入 results 的条目）")
-    skipped: int = Field(0, description="跳过条数")
+    skipped: int = Field(
+        0,
+        description="跳过条数（幂等重复导入、version_conflict 非 force 等；不计入 ok）",
+    )
 
 
 class AssetImportResponse(BaseModel):

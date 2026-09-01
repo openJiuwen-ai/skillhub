@@ -17,7 +17,8 @@ from plugins_market.core.logging import get_logger
 from plugins_market.core.operation_log import operation_log_fields, safe_error_summary
 from plugins_market.core.s3_storage_client import S3StorageClient
 from plugins_market.imports.bundle_safe_extract import skill_import_extract_zip_to_dir
-from plugins_market.imports.yaml_util import load_json_object_file
+from plugins_market.imports.yaml_util import load_json_object_file, load_plugin_yaml
+from plugins_market.validation.localized_manifest import localized_manifest_text
 from plugins_market.validation.constants import (
     MAX_JSON_BYTES,
     MAX_ZIP_ENTRIES,
@@ -71,6 +72,37 @@ def _skill_import_entry_version_desc(entry_overrides: dict[str, Any]) -> str | N
         return None
     s = str(raw).strip()
     return s or None
+
+
+def _resolve_import_fail_identity(entry: Path) -> tuple[str, str]:
+    """规范化失败时从 plugin.yaml / manifest.json 尽力补全 name 与 version。"""
+    fail_name, fail_version = "", ""
+    plugin_yaml_path = entry / "plugin.yaml"
+    if plugin_yaml_path.is_file():
+        try:
+            yaml_data = load_plugin_yaml(str(plugin_yaml_path))
+            fail_name = str(yaml_data.get("name") or "").strip()
+            fail_version = str(yaml_data.get("version") or "").strip()
+        except Exception:  # noqa: BLE001 - 尽力而为，不影响原始错误
+            pass
+    if fail_name and fail_version:
+        return fail_name, fail_version
+    manifest_path = entry / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = load_json_object_file(manifest_path, label="manifest.json")
+            if not fail_name:
+                fail_name = str(manifest.get("id") or manifest.get("name") or "").strip()
+                agent_card = manifest.get("agentCard")
+                if not fail_name and isinstance(agent_card, dict):
+                    fail_name = str(
+                        agent_card.get("id") or agent_card.get("name") or ""
+                    ).strip()
+            if not fail_version:
+                fail_version = str(manifest.get("version") or "").strip()
+        except Exception:  # noqa: BLE001 - 尽力而为，不影响原始错误
+            pass
+    return fail_name, fail_version
 
 
 def _read_import_json_object(path: Path, label: str) -> dict[str, Any]:
@@ -164,15 +196,27 @@ def _mcp_builtin_index_entries(tmp_root: Path) -> dict[str, dict[str, Any]]:
             _invalid_import_manifest(
                 f"index.json.mcps[{position}] 要求非空 id == source"
             )
-        description = str(
+        description_raw = (
             item.get("description_zh")
             or item.get("description_en")
             or item.get("description")
-            or ""
-        ).strip()
+        )
+        description = (
+            localized_manifest_text(description_raw)
+            if isinstance(description_raw, dict)
+            else str(description_raw or "").strip()
+        )
+        name_raw = item.get("name")
+        if isinstance(name_raw, dict):
+            # 多语言对象不能 str()，否则落库成 "{'zh': '...'}" 字符串
+            display_name = localized_manifest_text(name_raw) or str(
+                item.get("name_en") or asset_id
+            ).strip()
+        else:
+            display_name = str(name_raw or item.get("name_en") or asset_id).strip()
         override: dict[str, Any] = {
             "name": asset_id,
-            "display_name": str(item.get("name") or item.get("name_en") or asset_id).strip(),
+            "display_name": display_name,
             "description": description,
         }
         item_version = item.get("version")
@@ -328,10 +372,13 @@ def skill_import_from_staging_dir(
                 **normalize_options,
             )
         except ValueError as e:
+            fail_name, fail_version = _resolve_import_fail_identity(entry)
             results.append(
                 item_result_model(
                     entry=entry_name,
                     status="error",
+                    name=fail_name or None,
+                    version=fail_version or None,
                     error="import_normalize_failed",
                     message=str(e),
                 )
@@ -373,6 +420,8 @@ def skill_import_from_staging_dir(
             )
             if after_publish_success is not None:
                 after_publish_success(entry_name, pr)
+            # 幂等命中（同名同版本同内容）记 skipped 而非 ok；客户端应看 summary.skipped
+            deduplicated = bool(getattr(pr, "deduplicated", False))
             result_fields: dict[str, Any] = {}
             if allow_multi_asset:
                 result_fields.update(
@@ -383,16 +432,19 @@ def skill_import_from_staging_dir(
             results.append(
                 item_result_model(
                     entry=entry_name,
-                    status="ok",
+                    status="skipped" if deduplicated else "ok",
                     plugin_id=pr.plugin_id,
                     name=pr.name,
                     version=pr.version,
+                    message=(
+                        "已存在相同版本与内容，跳过" if deduplicated else None
+                    ),
                     **result_fields,
                 )
             )
             _log_skill_import_entry(
                 stage="entry_complete",
-                result="success",
+                result="skipped" if deduplicated else "success",
                 entry=entry_name,
                 resource_type=(pr.asset_type or "plugin") if allow_multi_asset else "skill",
                 resource_id=pr.plugin_id,

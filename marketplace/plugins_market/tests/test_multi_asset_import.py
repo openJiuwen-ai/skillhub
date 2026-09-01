@@ -651,3 +651,140 @@ def test_asset_import_uses_asset_specific_success_and_audit_messages(
 
     assert response.message == "Import assets finished"
     assert audit_details == ["批量导入资产完成，成功 1 个，失败 0 个，跳过 0 个，共 1 个"]
+
+
+def test_deduplicated_publish_marks_import_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_raw_agent_plugin(tmp_path / "wellness-plugin")
+    calls: list[dict[str, object]] = []
+
+    def fake_publish(**kwargs: object) -> PluginPublishResult:
+        calls.append(kwargs)
+        return PluginPublishResult(
+            plugin_id="id-wellness-plugin",
+            asset_id="id-wellness-plugin",
+            asset_type="agent-plugin",
+            plugin_type="agent-plugin",
+            name="wellness-plugin",
+            display_name="Wellness",
+            version="1.0.0",
+            status="ACTIVE",
+            published_at="2026-08-21T00:00:00Z",
+            storage_url="objects/wellness-plugin.zip",
+            deduplicated=True,
+        )
+
+    monkeypatch.setattr("plugins_market.imports.skill_import_service.publish", fake_publish)
+    result = skill_import_from_staging_dir(
+        tmp_path,
+        user_id="system_admin",
+        db=SimpleNamespace(rollback=lambda: None),
+        storage=SimpleNamespace(),
+        is_system_token=True,
+        publisher_name_override="system_admin",
+        allow_multi_asset=True,
+    )
+
+    assert result.summary.model_dump() == {"total": 1, "ok": 0, "failed": 0, "skipped": 1}
+    assert result.results[0].status == "skipped"
+    assert result.results[0].message == "已存在相同版本与内容，跳过"
+    assert calls
+
+
+def test_import_normalize_failure_includes_manifest_identity(tmp_path: Path) -> None:
+    entry = tmp_path / "raw-agent"
+    entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": "2.3.4",
+                "packageType": "plugin",
+                "id": "raw-agent-id",
+                "name": "Raw Agent",
+                "description": "Broken runtime",
+                "runtime": {"type": "tools"},
+                "tools": [{"file": "tools/tool.py"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (entry / "plugin.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "yaml-should-win",
+                "version": "9.9.9",
+                "display_name": "Yaml",
+                "description": "Yaml desc",
+                "runtime": {"type": "tools"},
+                "metadata": {"author": "system_admin", "tags": []},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = skill_import_from_staging_dir(
+        tmp_path,
+        user_id="system_admin",
+        db=SimpleNamespace(rollback=lambda: None),
+        storage=SimpleNamespace(),
+        allow_multi_asset=True,
+    )
+
+    assert result.summary.failed == 1
+    item = result.results[0]
+    assert item.status == "error"
+    assert item.name == "yaml-should-win"
+    assert item.version == "9.9.9"
+    assert item.error == "import_normalize_failed"
+
+
+def test_import_normalize_failure_falls_back_to_manifest_without_plugin_yaml(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "raw-agent"
+    entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": "2.3.4",
+                "packageType": "plugin",
+                "id": "raw-agent-id",
+                "name": "Raw Agent",
+                "description": "Broken runtime",
+                "tools": [{"file": "tools/tool.py"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (entry / "README.md").write_text("# Raw", encoding="utf-8")
+    (entry / "tools").mkdir()
+    (entry / "tools" / "tool.py").write_text("def run():\n    return True\n", encoding="utf-8")
+
+    def unexpected_publish(**_kwargs: object) -> PluginPublishResult:
+        raise AssertionError("normalize must fail before publish")
+
+    import plugins_market.imports.skill_import_service as import_service
+
+    original = import_service.entry_to_publish_zip
+
+    def fail_normalize(*args: object, **kwargs: object) -> tuple[Path, str, str]:
+        raise ValueError("asset_type_not_supported: tools")
+
+    import_service.entry_to_publish_zip = fail_normalize  # type: ignore[assignment]
+    try:
+        result = skill_import_from_staging_dir(
+            tmp_path,
+            user_id="system_admin",
+            db=SimpleNamespace(rollback=lambda: None),
+            storage=SimpleNamespace(),
+            allow_multi_asset=True,
+        )
+    finally:
+        import_service.entry_to_publish_zip = original
+
+    assert result.summary.failed == 1
+    item = result.results[0]
+    assert item.name == "raw-agent-id"
+    assert item.version == "2.3.4"

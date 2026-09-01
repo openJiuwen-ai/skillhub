@@ -12,6 +12,10 @@ from typing import Any, NoReturn
 
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import MAX_JSON_BYTES, RUNTIME_AGENT_MCP
+from plugins_market.validation.content_security import (
+    find_dangerous_command,
+    find_dangerous_zip_script,
+)
 from plugins_market.validation.types.skill import parse_skill_frontmatter, validate_skill_frontmatter
 from plugins_market.validation.types.wrapped_asset import validate_wrapped_outer_layout
 from plugins_market.validation.zip_utils import DecompressCounter, safe_read_zip_member, validate_png_icon_bytes
@@ -41,6 +45,23 @@ def _invalid(message: str) -> NoReturn:
     )
 
 
+def _dangerous(message: str) -> NoReturn:
+    """危险内容：单独错误码，便于调用方与安全审计区分结构错误。"""
+    raise PublishError(
+        code=400,
+        error="dangerous_content",
+        message=message,
+        error_code="SKILLHUB_DANGEROUS_CONTENT",
+        error_class="validation",
+    )
+
+
+def _scan_command_string(command: str, label: str) -> None:
+    reason = find_dangerous_command(command)
+    if reason:
+        _dangerous(f"{label} 包含危险命令（{reason}）")
+
+
 def _read_json(
     zf: zipfile.ZipFile,
     original_path: str,
@@ -68,6 +89,7 @@ def _validate_platform_commands(value: Any, label: str) -> None:
             _invalid(f"{label}.{platform} 必须为非空字符串")
         if "\x00" in command or "\n" in command or "\r" in command:
             _invalid(f"{label}.{platform} 包含不安全的控制字符")
+        _scan_command_string(command, f"{label}.{platform}")
 
 
 def _validate_command(value: Any, label: str) -> None:
@@ -75,6 +97,7 @@ def _validate_command(value: Any, label: str) -> None:
         has_control_chars = any(ch in value for ch in ("\x00", "\n", "\r"))
         if not value.strip() or has_control_chars:
             _invalid(f"{label} 必须为不含控制字符的非空字符串")
+        _scan_command_string(value, label)
         return
     _validate_platform_commands(value, label)
 
@@ -142,6 +165,8 @@ def _validate_mcp(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         url = config.get("url")
         if command is not None and (not isinstance(command, str) or not command.strip()):
             _invalid(f"mcp server {server_name!r} 的 command 必须为非空字符串")
+        if isinstance(command, str):
+            _scan_command_string(command, f"mcpServers.{server_name}.command")
         if command is None:
             if not isinstance(url, str) or not url.strip():
                 _invalid(f"mcp server {server_name!r} 必须提供 command 或 url")
@@ -154,6 +179,10 @@ def _validate_mcp(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             _invalid(f"mcp server {server_name!r} 的 args 必须为数组")
         if isinstance(args, list) and any(not isinstance(item, (str, int, float, bool)) for item in args):
             _invalid(f"mcp server {server_name!r} 的 args 只能包含标量值")
+        if isinstance(args, list):
+            for arg_index, arg in enumerate(args):
+                if isinstance(arg, str):
+                    _scan_command_string(arg, f"mcpServers.{server_name}.args[{arg_index}]")
         _validate_string_map(config.get("env"), f"mcpServers.{server_name}.env")
         _validate_string_map(config.get("headers"), f"mcpServers.{server_name}.headers")
 
@@ -244,6 +273,18 @@ def _validate_bundled_skills(
     return count
 
 
+def _validate_payload_scripts(
+    zf: zipfile.ZipFile,
+    members: dict[str, str],
+    payload_prefix: str,
+    counter: DecompressCounter,
+) -> None:
+    """扫描内层脚本文件（.py/.sh 等）中的危险执行内容。"""
+    hit = find_dangerous_zip_script(zf, members, payload_prefix, counter)
+    if hit:
+        _dangerous(f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
+
+
 def validate_agent_mcp_layout(
     zf: zipfile.ZipFile,
     prefix: str,
@@ -275,6 +316,7 @@ def validate_agent_mcp_layout(
     skill_count = _validate_bundled_skills(
         zf, members, payload_prefix, counter, has_mcp=has_mcp
     )
+    _validate_payload_scripts(zf, members, payload_prefix, counter)
     if has_cli:
         integration_type = "cli"
     elif mcp_integration is not None:
