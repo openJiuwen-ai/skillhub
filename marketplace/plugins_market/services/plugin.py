@@ -32,10 +32,13 @@ from plugins_market.core.audit_events import Action, ResourceType, Result
 from plugins_market.core.context import _BJ_TZ, set_audit_hint
 from plugins_market.core.errors import BusinessError, PublishError, http_error_payload
 from plugins_market.core.moderation import (
+    AGENT_ASSET_PLUGIN_TYPES,
     MODERATION_APPROVED,
     MODERATION_PENDING,
     MODERATION_REJECTED,
+    is_moderated_market_asset_type,
     is_skill_like_plugin_type,
+    is_wrapped_agent_asset_type,
     moderation_coalesce_display,
     normalize_skill_like_plugin_type,
 )
@@ -116,10 +119,6 @@ from plugins_market.services.skill_review import (
 
 logger = get_logger(__name__)
 
-_WRAPPED_AGENT_ASSET_TYPES = frozenset(
-    {RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP}
-)
-
 
 def _http_exception(status_code: int, message: str, *, error: str | None = None, details: Any = None) -> HTTPException:
     resolved_error = error
@@ -164,7 +163,7 @@ def _detail_desc_for_display(plugin_type: str | None, detail_desc: str | None) -
 
 
 def _access_source_for_viewer(asset: MarketAssetDB, viewer: ViewerContext, db: Session | None = None) -> str:
-    if is_skill_like_plugin_type(asset.plugin_type):
+    if is_moderated_market_asset_type(asset.plugin_type):
         return viewer.skill_asset_access_source(asset, db) or "public"
     return "public"
 
@@ -183,7 +182,7 @@ def _is_system_admin_publisher(user_id: str) -> bool:
 
 
 def _is_wrapped_agent_asset_type(plugin_type: str | None) -> bool:
-    return (plugin_type or "").strip().lower() in _WRAPPED_AGENT_ASSET_TYPES
+    return is_wrapped_agent_asset_type(plugin_type)
 
 
 def _ensure_agent_asset_publish_allowed(
@@ -207,12 +206,12 @@ def _should_use_retrieval_search(plugin_type: str | None) -> bool:
         for item in (plugin_type or "").split(",")
         if item.strip()
     }
-    return bool(requested) and requested.isdisjoint(_WRAPPED_AGENT_ASSET_TYPES)
+    return bool(requested) and requested.isdisjoint(AGENT_ASSET_PLUGIN_TYPES)
 
 
 def _moderation_for_publish(*, user_id: str, plugin_type: str | None) -> tuple[str | None, str | None]:
-    """非 skill-like 始终已通过；skill / swarmskill 由普通用户发布为审核中，系统管理员发布为通过。"""
-    if not is_skill_like_plugin_type(plugin_type):
+    """非 moderated 类型始终已通过；Skill/SwarmSkill/三类 Agent 由普通用户发布为审核中，系统管理员发布为通过。"""
+    if not is_moderated_market_asset_type(plugin_type):
         return MODERATION_APPROVED, None
     if (user_id or "").strip() == (settings.system_admin_user or "").strip():
         return MODERATION_APPROVED, None
@@ -259,8 +258,8 @@ def _latest_version_row_from_asset_versions(
 
 def _apply_skill_asset_aggregate_from_versions(db: Session, asset_id: str) -> None:
     """
-    按版本行重算 Skill 的 market_assets 聚合：moderation_status、moderation_reject_reason、
-    public_latest_version、publish_result。非 skill-like 则视为已通过，public_latest 跟随 latest。
+    按版本行重算 moderated 资产的 market_assets 聚合：moderation_status、moderation_reject_reason、
+    public_latest_version、publish_result。非 moderated 则视为已通过，public_latest 跟随 latest。
     调用方在事务内执行；不 commit。
     """
     # SessionLocal uses autoflush=False. Flush first so aggregate queries can see
@@ -271,7 +270,7 @@ def _apply_skill_asset_aggregate_from_versions(db: Session, asset_id: str) -> No
     asset = asset_repo.get_by_asset_id(asset_id)
     if not asset:
         return
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         asset.moderation_status = MODERATION_APPROVED
         asset.moderation_reject_reason = None
         asset.public_latest_version = asset.latest_version
@@ -864,20 +863,22 @@ def publish(
     _validate_existing_asset_visibility(existing_asset, asset_visibility)
     existing_version = version_repo.get_version(asset_id=asset_id, version=version)
     is_skill_like_publish = is_skill_like_plugin_type(plugin_type)
+    is_moderated_publish = is_moderated_market_asset_type(plugin_type)
+    # 系统 LLM 审查仅 Skill / SwarmSkill；三类 Agent 直接进人审（或系统身份免审）。
     supports_system_skill_review = is_skill_like_publish
     needs_skill_review = bool(
         supports_system_skill_review and settings.skill_review_enabled and not is_system_admin_publisher
     )
     notify_review_admins_after_publish = bool(
-        is_skill_like_publish and not needs_skill_review and not is_system_admin_publisher
+        is_moderated_publish and not needs_skill_review and not is_system_admin_publisher
     )
     initial_publish_result: str | None = None
-    if is_skill_like_publish:
+    if is_moderated_publish:
         initial_publish_result, _ = initial_skill_publish_state(
             skill_review_enabled=bool(supports_system_skill_review and settings.skill_review_enabled),
             is_system_admin_publisher=is_system_admin_publisher,
         )
-    initial_version_publish_result = initial_publish_result if is_skill_like_publish else PUBLISH_RESULT_SUCCESS
+    initial_version_publish_result = initial_publish_result if is_moderated_publish else PUBLISH_RESULT_SUCCESS
     _validate_asset_name_immutable_for_skill(existing_asset, name, plugin_type)
     _ensure_skill_review_model_configured(needs_skill_review)
 
@@ -1046,7 +1047,7 @@ def publish(
                 is not None
             )
             skip_listing_fields_for_pending_skill = (
-                is_skill_like_plugin_type(plugin_type) and mod_st == MODERATION_PENDING and had_any_approved_version
+                is_moderated_market_asset_type(plugin_type) and mod_st == MODERATION_PENDING and had_any_approved_version
             )
 
             existing_plugin_type = (
@@ -1232,10 +1233,10 @@ def _asset_matches_list_moderation_filter_retrieval(
     *,
     pending_version_asset_ids: set[str],
 ) -> bool:
-    """检索路径的 PENDING 筛选：Skill 仅含“待人工审核”的版本。"""
+    """检索路径的 PENDING 筛选：moderated 类型仅含“待人工审核”的版本。"""
     if ms != MODERATION_PENDING:
         return _asset_matches_list_moderation_filter(asset, ms)
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         return _asset_matches_list_moderation_filter(asset, ms)
     return asset.asset_id in pending_version_asset_ids
 
@@ -1247,7 +1248,7 @@ def _filter_skill_version_strings_for_viewer(
     viewer: ViewerContext,
     db: Session | None = None,
 ) -> List[str]:
-    if not is_skill_like_plugin_type(plugin_type):
+    if not is_moderated_market_asset_type(plugin_type):
         return [r.version for r in vrows]
     return [row.version for row in vrows if viewer.can_see_skill_version_row(asset, row, db)]
 
@@ -1259,7 +1260,7 @@ def _skill_version_moderation_map_for_list(
     db: Session | None = None,
 ) -> dict[str, str] | None:
     """发布者或审核员在列表/详情拉取时可拿到各版本审核状态，供前端版本下拉展示。"""
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         return None
     if viewer.skill_asset_access_source(asset, db) not in ("admin", "owner"):
         return None
@@ -1279,7 +1280,7 @@ def _skill_version_publish_result_map_for_list(
     db: Session | None = None,
 ) -> dict[str, str] | None:
     """发布者或审核员在列表/详情拉取时可拿到各版本发布阶段状态。"""
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         return None
     if viewer.skill_asset_access_source(asset, db) not in ("admin", "owner"):
         return None
@@ -1299,7 +1300,7 @@ def _skill_has_pending_version_for_viewer(
     asset: MarketAssetDB,
     db: Session | None = None,
 ) -> bool:
-    if not is_skill_like_plugin_type(plugin_type):
+    if not is_moderated_market_asset_type(plugin_type):
         return False
     if viewer.skill_asset_access_source(asset, db) not in ("admin", "owner"):
         return False
@@ -1328,7 +1329,7 @@ def _list_item_skill_like_public_latest_for_viewer(
     db: Session | None = None,
 ) -> PluginListItem:
     """非发布者、非审核管理员：列表 latest_version 与对外可装版本一致，避免暴露待审新版本号。"""
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         return item
     if viewer.skill_asset_access_source(asset, db) in ("admin", "owner"):
         return item
@@ -1368,7 +1369,7 @@ def _list_item_from_asset(
     item.skill_version_moderation = _skill_version_moderation_map_for_list(asset, vrows, item_viewer, db)
     item.skill_version_publish_result = _skill_version_publish_result_map_for_list(asset, vrows, item_viewer, db)
     item = _list_item_skill_like_public_latest_for_viewer(asset, item, item_viewer, db)
-    if market_public_scoped and is_skill_like_plugin_type(asset.plugin_type):
+    if market_public_scoped and is_moderated_market_asset_type(asset.plugin_type):
         plv = (getattr(asset, "public_latest_version", None) or "").strip()
         if plv:
             item = item.model_copy(
@@ -1558,7 +1559,7 @@ def list_plugins_service(
     if (
         not query.plugin_type
         and not query.plugin_type_exclude
-        and (query.asset_type or "").strip().lower() not in _WRAPPED_AGENT_ASSET_TYPES
+        and (query.asset_type or "").strip().lower() not in AGENT_ASSET_PLUGIN_TYPES
     ):
         query = query.model_copy(update={"plugin_type": "skill,swarmskill"})
     plugin_type = (query.plugin_type or "").strip()
@@ -1675,7 +1676,7 @@ def list_plugins_service(
                 ids_for_pending = [row[0].asset_id for row in ordered]
                 pending_extra: set[str] = set()
                 if ms_list == MODERATION_PENDING and any(
-                    is_skill_like_plugin_type(p.strip()) for p in plugin_type.split(",") if p.strip()
+                    is_moderated_market_asset_type(p.strip()) for p in plugin_type.split(",") if p.strip()
                 ):
                     pending_extra = version_repo.asset_ids_with_pending_moderation_version(ids_for_pending)
                 ordered = [
@@ -1782,7 +1783,7 @@ def _skill_visible_to_marketplace_viewer(
     """公开市场（首页关联详情/互动）：仅已发布对外可见，不含发布者/审核员 bypass。"""
     if (getattr(asset, "visibility", None) or "public").strip().lower() == "private":
         return False
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         return True
     return is_skill_asset_publicly_visible(
         publish_result=getattr(asset, "publish_result", None),
@@ -2437,7 +2438,7 @@ def _refresh_skill_asset_listing_fields_from_public_artifact(
     asset_repo = MarketAssetRepository(db)
     version_repo = MarketAssetVersionRepository(db)
     asset = asset_repo.get_by_asset_id(asset_id)
-    if not asset or not is_skill_like_plugin_type(asset.plugin_type):
+    if not asset or not is_moderated_market_asset_type(asset.plugin_type):
         return
     public_v = _compute_latest_approved_skill_version_row(asset_id=asset_id, version_repo=version_repo)
     if not public_v:
@@ -2516,11 +2517,11 @@ def moderate_skill_asset_service(
         skill_name=(getattr(asset, "name", None) or "").strip() or None,
         skill_display_name=(getattr(asset, "display_name", None) or "").strip() or None,
     )
-    if not is_skill_like_plugin_type(asset.plugin_type):
+    if not is_moderated_market_asset_type(asset.plugin_type):
         raise PublishError(
             code=400,
             error="not_skill",
-            message="仅支持对 Skill / TeamSkills 类型资源进行审核",
+            message="仅支持对 Skill / SwarmSkill / agent-plugin / agent-template / agent-mcp 类型资源进行审核",
             error_code="SKILLHUB_PLUGIN_NOT_SKILL",
             error_class="validation",
         )
@@ -2832,7 +2833,7 @@ def get_download_info(
             )
     else:
         pt = (asset.plugin_type or "").strip().lower()
-        if is_skill_like_plugin_type(pt) and not viewer.is_market_moderation_admin:
+        if is_moderated_market_asset_type(pt) and not viewer.is_market_moderation_admin:
             acl_source = viewer.skill_asset_access_source(asset, db)
             version_row = None
             if acl_source == "owner":
