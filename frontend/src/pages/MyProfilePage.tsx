@@ -45,7 +45,7 @@ import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
-import { MODERATED_MARKET_QUERY_VALUE, assetDetailPath, isAgentAssetPluginType } from '@/utils/pluginType'
+import { MARKET_TAB_PLUGIN_TYPES, MODERATED_MARKET_QUERY_VALUE, assetDetailPath, isAgentAssetPluginType, normalizePluginType } from '@/utils/pluginType'
 import { listMyGroups, listMyGroupSkills, revokeSkillFromGroup, type GroupItem, type MyGroupSkillItem } from '@/api/groups'
 import emptyDataIllustration from '@/assets/empty-data.svg'
 
@@ -103,6 +103,7 @@ export default function MyProfilePage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [search, setSearch] = useState('')
+  const [pendingTypeFilter, setPendingTypeFilter] = useState<'all' | (typeof MARKET_TAB_PLUGIN_TYPES)[number]>('all')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<MarketplacePluginItem | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -138,7 +139,10 @@ export default function MyProfilePage() {
 
   useEffect(() => {
     setPage(1)
-  }, [activeTab, search])
+  }, [activeTab, search, pendingTypeFilter])
+
+  const pendingPluginTypeQuery =
+    pendingTypeFilter === 'all' ? MODERATED_MARKET_QUERY_VALUE : pendingTypeFilter
 
   const publisherId = user?.id
   const isSkillTab = activeTab === 'skill'
@@ -173,12 +177,12 @@ export default function MyProfilePage() {
   )
 
   const pendingSkillsQuery = useQuery(
-    ['admin-pending-skills', page, pageSize],
+    ['admin-pending-skills', page, pageSize, pendingPluginTypeQuery],
     () =>
       getPlugins({
         page,
         page_size: pageSize,
-        plugin_type: MODERATED_MARKET_QUERY_VALUE,
+        plugin_type: pendingPluginTypeQuery,
         moderation_status: 'PENDING',
         order_by: 'update_time',
         desc: true,
@@ -186,6 +190,8 @@ export default function MyProfilePage() {
     {
       enabled: isMarketModerationAdmin && isPendingTab,
       keepPreviousData: true,
+      refetchOnMount: 'always',
+      staleTime: 0,
     },
   )
 
@@ -330,6 +336,10 @@ export default function MyProfilePage() {
   }
 
   const openReviewDetail = (row: MarketplacePluginItem) => {
+    if (isPendingTab) {
+      openDetail(row)
+      return
+    }
     const version = resolveSkillReviewVersion(row)
     if (!version) {
       window.alert(t('profile.missingVersion'))
@@ -722,7 +732,28 @@ export default function MyProfilePage() {
             ) : null}
 
             {(isSkillTab || isGroupsTab || isGroupSkillTab || isPendingTab || isStarsTab || isLikesTab) ? (
-              <div className="relative mt-4">
+              <div className="relative mt-4 space-y-3">
+                {isPendingTab ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="pending-type-filter" className="text-xs font-medium text-[#6B7280]">
+                      {t('profile.pendingTypeFilterLabel')}
+                    </label>
+                    <select
+                      id="pending-type-filter"
+                      value={pendingTypeFilter}
+                      onChange={e => setPendingTypeFilter(e.target.value as typeof pendingTypeFilter)}
+                      className="h-9 rounded-lg border border-[#E5E7EB] bg-white px-3 text-sm text-[#111827] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
+                    >
+                      <option value="all">{t('profile.pendingTypeFilterAll')}</option>
+                      {MARKET_TAB_PLUGIN_TYPES.map(type => (
+                        <option key={type} value={type}>
+                          {t(`plugins.marketTypeLabel.${type}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                <div className="relative">
                 <Search
                   className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
                   aria-hidden
@@ -734,6 +765,7 @@ export default function MyProfilePage() {
                   placeholder={t('profile.searchPlaceholder')}
                   className="h-10 w-full rounded-lg border border-[#E5E7EB] bg-white pl-10 pr-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
                 />
+                </div>
               </div>
             ) : null}
 
@@ -852,6 +884,7 @@ export default function MyProfilePage() {
                         showDelete={isSkillTab}
                         statusMode={isSkillTab ? 'publish' : 'moderation'}
                         showModerationStatus={isSkillTab || isPendingTab}
+                        showPluginType={isPendingTab}
                         onOpen={() => openDetail(row)}
                         onOpenReview={isPendingTab ? () => openReviewDetail(row) : undefined}
                         onDelete={() => setDeleteTarget(row)}
@@ -1019,6 +1052,8 @@ type SkillCardProps = {
   statusMode?: 'publish' | 'moderation'
   /** 收藏/点赞页不展示审核状态标签 */
   showModerationStatus?: boolean
+  /** 待审页展示资产类型（Skill / Agent 等） */
+  showPluginType?: boolean
   /** 该授权对当前用户的可见来源（admin/owner/group/public） */
   accessSource?: 'admin' | 'owner' | 'group' | 'public' | null
   /** 撤销组群授权回调；传入则展示撤销按钮 */
@@ -1121,6 +1156,7 @@ function SkillCard({
   showDelete = true,
   statusMode = 'publish',
   showModerationStatus = true,
+  showPluginType = false,
   accessSource,
   onRevoke,
   revoking,
@@ -1138,6 +1174,11 @@ function SkillCard({
   const version = item.latest_version?.trim()
   const { text: statusText, dot: statusDot } = skillModerationUi(item, t, statusMode)
   const isPrivate = String(item.visibility || 'public').toLowerCase() === 'private'
+  const pluginTypeKey = normalizePluginType(item.plugin_type)
+  const pluginTypeLabel =
+    pluginTypeKey && MARKET_TAB_PLUGIN_TYPES.includes(pluginTypeKey as (typeof MARKET_TAB_PLUGIN_TYPES)[number])
+      ? t(`plugins.marketTypeLabel.${pluginTypeKey}`)
+      : pluginTypeKey || '—'
 
   return (
     <div
@@ -1175,6 +1216,14 @@ function SkillCard({
           {title}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#6B7280]">
+          {showPluginType ? (
+            <>
+              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                {pluginTypeLabel}
+              </span>
+              <span className="text-[#D1D5DB]">·</span>
+            </>
+          ) : null}
           {groupName ? (
             <>
               <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
