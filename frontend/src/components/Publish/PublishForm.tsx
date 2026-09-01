@@ -50,6 +50,8 @@ const SKILL_ZIP_ERROR_KEYS: Record<string, string> = {
   AGENT_ZIP_UNSUPPORTED_TYPE: 'publish.agentErrorUnsupportedType',
   AGENT_ZIP_MISSING_NAME: 'publish.agentErrorMissingName',
   AGENT_ZIP_MISSING_VERSION: 'publish.agentErrorMissingVersion',
+  AGENT_ZIP_INVALID_MANIFEST: 'publish.agentErrorInvalidManifest',
+  AGENT_ZIP_UNRECOGNIZED_LAYOUT: 'publish.agentErrorUnrecognizedLayout',
 }
 
 const ZIP_ERROR_TO_FIELD: Record<string, PublishFieldKey> = {
@@ -690,6 +692,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       setPluginVersion(info.version)
       setSkillDisplayName(info.displayName || info.name)
       setSkillDescription(info.description)
+      setSkillTagsInput(info.tags.join(', '))
       setFile(nextFile)
     } catch (e) {
       applyErrorFromCode(e instanceof Error ? e.message : '', t('publish.agentZipInspectFailed'))
@@ -701,6 +704,13 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     if (!skillFormReady || uploading || successMsg || typeMismatchError) return
 
     if (!isAgentMode) {
+      const nameErrorKey = validateSkillName(skillPkgName)
+      if (nameErrorKey) {
+        setFieldErrors(prev => ({ ...prev, skillPkgName: t(nameErrorKey) }))
+        scrollToFirstError()
+        return
+      }
+    } else {
       const nameErrorKey = validateSkillName(skillPkgName)
       if (nameErrorKey) {
         setFieldErrors(prev => ({ ...prev, skillPkgName: t(nameErrorKey) }))
@@ -751,6 +761,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
         })
       }
       const checksumFresh = await sha256HexOfFile(zipFile)
+      const tags = skillTagsInput.split(/[,，]/).map(s => s.trim()).filter(Boolean)
       const data = await publishPlugin({
         file: zipFile,
         checksumSha256Hex: checksumFresh,
@@ -759,6 +770,14 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
         versionDesc: versionDesc.trim() || undefined,
         force,
         visibility,
+        ...(isAgentMode
+          ? {
+              assetName: skillPkgName.trim(),
+              displayName: skillDisplayName.trim() || undefined,
+              description: skillDescription.trim() || undefined,
+              tags: tags.length ? tags.join(',') : undefined,
+            }
+          : {}),
       })
       setFile(null)
       setChecksum('')
@@ -990,7 +1009,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
                 const skKey = validateSkillName(val)
                 setFieldErrors(prev => fieldErrorMerge(prev, 'skillPkgName', skKey ? t(skKey) : null))
               }}
-              disabled={skillMetadataLocked || isAgentMode}
+              disabled={skillMetadataLocked}
               placeholder={formFieldLabels.pkgNamePlaceholder}
               required
               aria-invalid={Boolean(fieldErrors.skillPkgName)}
@@ -1011,7 +1030,6 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
               }}
               placeholder="1.0.0"
               required
-              disabled={isAgentMode}
               aria-invalid={Boolean(fieldErrors.pluginVersion)}
             />
           </Field>
@@ -1026,15 +1044,13 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
                 setSkillDisplayName(e.target.value)
                 clearFieldError('skillDisplayName')
               }}
-              disabled={skillMetadataLocked || isAgentMode}
+              disabled={skillMetadataLocked}
               placeholder={formFieldLabels.displayName}
               required={!isAgentMode}
               aria-invalid={Boolean(fieldErrors.skillDisplayName)}
             />
           </Field>
 
-          {!isAgentMode ? (
-            <>
           <Field htmlFor={skillDescriptionId} label={formFieldLabels.description} hint={formFieldLabels.descriptionHelp} error={fieldErrors.skillDescription} fieldKey="skillDescription">
             <textarea
               id={skillDescriptionId}
@@ -1065,6 +1081,8 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
             />
           </Field>
 
+          {!isAgentMode ? (
+            <>
           <Field label={formFieldLabels.folder} required hint={formFieldLabels.folderHelp} error={fieldErrors.skillFolder} fieldKey="skillFolder">
             <input
               key={skillFolderInputKey}

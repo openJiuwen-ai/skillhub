@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -114,6 +115,31 @@ def _is_raw_agent_mcp_entry(entry: Path) -> bool:
     return (skills / "SKILL.md").is_file() or any(skills.glob("*/SKILL.md"))
 
 
+def _patch_native_agent_manifest(
+    payload_dir: Path,
+    *,
+    runtime_type: str,
+    name: str,
+    version: str,
+) -> None:
+    manifest_path = payload_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = load_json_object_file(manifest_path, label="manifest.json")
+    manifest["version"] = version
+    if runtime_type == RUNTIME_AGENT_PLUGIN:
+        manifest["id"] = name
+    elif runtime_type == RUNTIME_AGENT_TEMPLATE:
+        card = manifest.get("agentCard")
+        card = dict(card) if isinstance(card, dict) else {}
+        card["id"] = name
+        manifest["agentCard"] = card
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def _build_native_agent_staging(
     entry: Path,
     staging: Path,
@@ -124,6 +150,7 @@ def _build_native_agent_staging(
     default_author: str,
     default_tags: list[str],
     manifest: dict[str, Any] | None = None,
+    allow_publish_overrides: bool = False,
 ) -> tuple[str, str]:
     if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
         if manifest is None:
@@ -145,6 +172,16 @@ def _build_native_agent_staging(
             manifest.get("displayDescription")
         ) or localized_manifest_text(fallback_desc)
         manifest_tags = localized_manifest_tags(manifest.get("tags"))
+        override_name = (
+            _resolved_override_text(entry_overrides, "name", "")
+            if allow_publish_overrides
+            else ""
+        )
+        override_version = entry_overrides.get("version")
+        if allow_publish_overrides and override_name:
+            name = override_name
+        if allow_publish_overrides and override_version not in (None, ""):
+            version = str(override_version).strip()
     else:
         name = _resolved_override_text(entry_overrides, "name", entry.name)
         raw_version = entry_overrides.get("version")
@@ -159,10 +196,21 @@ def _build_native_agent_staging(
 
     display_name = _resolved_override_text(entry_overrides, "display_name", display_name or name)
     description = _resolved_override_text(entry_overrides, "description", description)
-    tags = list(default_tags) or manifest_tags
+    override_tags = entry_overrides.get("tags")
+    if isinstance(override_tags, list) and override_tags:
+        tags = [str(tag).strip() for tag in override_tags if str(tag).strip()]
+    else:
+        tags = list(default_tags) or manifest_tags
 
     staging.mkdir(parents=True, exist_ok=True)
     shutil.copytree(entry, staging / name, dirs_exist_ok=True)
+    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+        _patch_native_agent_manifest(
+            staging / name,
+            runtime_type=runtime_type,
+            name=name,
+            version=version,
+        )
     plugin_data: dict[str, Any] = {
         "name": name,
         "version": version,
@@ -395,6 +443,7 @@ def entry_to_publish_zip(
     default_tags: list[str],
     entry_name_hint: str | None = None,
     allow_multi_asset: bool = False,
+    allow_publish_overrides: bool = False,
 ) -> tuple[Path, str, str]:
     """归一化条目并打成临时 ZIP。返回 ``(zip_path, name, version)``；调用方须在完成后 ``unlink`` 该路径。
 
@@ -481,9 +530,10 @@ def entry_to_publish_zip(
                         version = ov
             elif entry_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
                 if entry_overrides.get("version") not in (None, ""):
-                    raise ValueError(
-                        "manifest entries.version 仅支持 Skill 和裸 agent-mcp 条目"
-                    )
+                    if not allow_publish_overrides:
+                        raise ValueError(
+                            "manifest entries.version 仅支持 Skill 和裸 agent-mcp 条目"
+                        )
                 manifest = load_json_object_file(
                     entry / "manifest.json", label="manifest.json"
                 )
@@ -496,6 +546,7 @@ def entry_to_publish_zip(
                     default_author=default_author,
                     default_tags=default_tags,
                     manifest=manifest,
+                    allow_publish_overrides=allow_publish_overrides,
                 )
             elif entry_type == RUNTIME_AGENT_MCP:
                 mcp_overrides = entry_overrides
@@ -509,6 +560,7 @@ def entry_to_publish_zip(
                     version_fallback=version_fallback,
                     default_author=default_author,
                     default_tags=default_tags,
+                    allow_publish_overrides=allow_publish_overrides,
                 )
             else:
                 raise ValueError("asset_layout_unrecognized")

@@ -18,6 +18,10 @@ class PluginPublishForm:
     version_desc: Optional[str]
     force: bool
     visibility: Literal["public", "private"] = "public"
+    asset_name: Optional[str] = None
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class AssetCreate(BaseModel):

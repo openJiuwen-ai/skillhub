@@ -403,6 +403,13 @@ def _normalize_asset_visibility(value: Optional[str]) -> str:
     return v
 
 
+def _parse_publish_tags(raw: Optional[str]) -> Optional[list[str]]:
+    if not raw or not raw.strip():
+        return None
+    tags = [part.strip() for part in raw.replace("，", ",").split(",") if part.strip()]
+    return tags or None
+
+
 def _parse_fail_fast_query(
     fail_fast: Optional[str] = Query(
         None,
@@ -473,12 +480,23 @@ class PublishFormOptional:
         version_desc: Optional[str] = Form(None),
         force: bool = Form(False),
         visibility: Optional[str] = Form("public"),
+        asset_name: Optional[str] = Form(
+            None,
+            description="市场包 name；裸 agent 包发布时必填或与 manifest.id 一致",
+        ),
+        display_name: Optional[str] = Form(None),
+        description: Optional[str] = Form(None),
+        tags: Optional[str] = Form(None, description="逗号分隔标签，写入 plugin.yaml metadata.tags"),
     ):
         self.plugin_id = plugin_id.strip() if plugin_id else None
         self.plugin_version = plugin_version.strip() if plugin_version else None
         self.version_desc = version_desc.strip() if version_desc else None
         self.force = force
         self.visibility = _normalize_asset_visibility(visibility)
+        self.asset_name = asset_name.strip() if asset_name else None
+        self.display_name = display_name.strip() if display_name else None
+        self.description = description.strip() if description else None
+        self.tags = tags.strip() if tags else None
 
 
 def build_publish_form(
@@ -493,6 +511,10 @@ def build_publish_form(
         version_desc=optional.version_desc,
         force=optional.force,
         visibility=optional.visibility,
+        asset_name=optional.asset_name,
+        display_name=optional.display_name,
+        description=optional.description,
+        tags=_parse_publish_tags(optional.tags),
     )
 
 
@@ -641,6 +663,10 @@ async def publish_plugin(
                 storage=storage,
                 publisher_name_override=publisher_name_override,
                 is_system_token=is_system_token,
+                asset_name=form.asset_name,
+                display_name=form.display_name,
+                description=form.description,
+                tags=form.tags,
             )
         except (PublishError, HTTPException) as exc:
             _raise_with_operation_failure_log("plugin publish", exc, filename=form.file.filename)

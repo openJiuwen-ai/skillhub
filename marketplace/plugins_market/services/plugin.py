@@ -626,6 +626,10 @@ def publish(
     visibility: str = "public",
     publisher_name_override: str | None = None,
     is_system_token: bool = False,
+    asset_name: str | None = None,
+    display_name: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
 ) -> PluginPublishResult:
     """Validate, resolve conflicts, upload to S3, write asset/version, return result. Raises PublishError on failure."""
     asset_visibility = (visibility or "public").strip().lower()
@@ -659,6 +663,34 @@ def publish(
             error="invalid_file_format",
             message="仅支持 .zip 格式的插件包文件",
         )
+
+    from plugins_market.imports.publish_wrap import (
+        PublishMetadataOverrides,
+        prepare_publish_zip_content,
+    )
+
+    publish_overrides = PublishMetadataOverrides(
+        asset_name=(asset_name or "").strip() or None,
+        version=(plugin_version or "").strip() or None,
+        display_name=(display_name or "").strip() or None,
+        description=(description or "").strip() or None,
+        tags=tags,
+    )
+    try:
+        content = prepare_publish_zip_content(
+            content,
+            filename=filename,
+            overrides=publish_overrides,
+            default_author=(publisher_name_override or user_id or "").strip() or "unknown",
+        )
+    except ValueError as exc:
+        raise PublishError(
+            code=400,
+            error="invalid_plugin_structure",
+            message=str(exc) or "资产包结构不合法",
+            error_code="SKILLHUB_PUBLISH_WRAP_FAILED",
+            error_class="validation",
+        ) from exc
 
     meta = extract_plugin_metadata(content)
     content_size = len(content)

@@ -713,6 +713,10 @@ export async function publishPlugin(params: {
   versionDesc?: string
   force?: boolean
   visibility?: 'public' | 'private'
+  assetName?: string
+  displayName?: string
+  description?: string
+  tags?: string
 }): Promise<PluginPublishResultData> {
   const token = getStoredGitCodeToken()
   const provider = getStoredOAuthProvider()
@@ -725,6 +729,10 @@ export async function publishPlugin(params: {
   if (params.pluginId?.trim()) form.append('plugin_id', params.pluginId.trim())
   if (params.pluginVersion?.trim()) form.append('plugin_version', params.pluginVersion.trim())
   if (params.versionDesc?.trim()) form.append('version_desc', params.versionDesc.trim())
+  if (params.assetName?.trim()) form.append('asset_name', params.assetName.trim())
+  if (params.displayName?.trim()) form.append('display_name', params.displayName.trim())
+  if (params.description?.trim()) form.append('description', params.description.trim())
+  if (params.tags?.trim()) form.append('tags', params.tags.trim())
   if (params.force) form.append('force', 'true')
   if (params.visibility) form.append('visibility', params.visibility)
 
