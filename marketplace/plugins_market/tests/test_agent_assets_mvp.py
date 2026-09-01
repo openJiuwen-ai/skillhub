@@ -202,6 +202,25 @@ def test_agent_template_rejects_invalid_subagent_json() -> None:
     assert exc_info.value.detail["error"] == "invalid_manifest_json"
 
 
+def test_agent_template_rejects_subagent_json_non_object_root() -> None:
+    content = _build_wrapped_zip(
+        "coach",
+        "agent-template",
+        {
+            "manifest.json": _template_manifest(
+                subagents=[{"dir": "./subagents/nutrition-planner"}]
+            ),
+            "README.md": "# Coach",
+            "persona/coach.md": "# Persona",
+            "subagents/nutrition-planner/.subagent.json": "[]",
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_template(content, "coach")
+    assert exc_info.value.detail["error"] == "invalid_manifest_json"
+    assert "根结构必须为对象" in exc_info.value.detail["message"]
+
+
 def test_agent_mcp_rejects_dangerous_second_server() -> None:
     content = _build_wrapped_zip(
         "dangerous-mcp",
@@ -224,6 +243,7 @@ def test_agent_mcp_rejects_dangerous_second_server() -> None:
     with pytest.raises(PublishError) as exc_info:
         _validate_mcp(content, "dangerous-mcp")
     assert exc_info.value.detail["error"] == "dangerous_content"
+    assert exc_info.value.detail["error_code"] == "SKILLHUB_DANGEROUS_CONTENT"
 
 
 def test_agent_plugin_rejects_dangerous_manifest_mcp_file() -> None:
@@ -252,6 +272,7 @@ def test_agent_plugin_rejects_dangerous_manifest_mcp_file() -> None:
     with pytest.raises(PublishError) as exc_info:
         _validate_plugin(content, "wellness-plugin")
     assert exc_info.value.detail["error"] == "dangerous_content"
+    assert exc_info.value.detail["error_code"] == "SKILLHUB_DANGEROUS_CONTENT"
 
 
 def test_agent_plugin_rejects_dangerous_tool_script() -> None:
@@ -267,6 +288,30 @@ def test_agent_plugin_rejects_dangerous_tool_script() -> None:
     with pytest.raises(PublishError) as exc_info:
         _validate_plugin(content, "wellness-plugin")
     assert exc_info.value.detail["error"] == "dangerous_content"
+    assert exc_info.value.detail["error_code"] == "SKILLHUB_DANGEROUS_CONTENT"
+
+
+def test_agent_plugin_reports_all_dangerous_scripts() -> None:
+    content = _build_wrapped_zip(
+        "wellness-plugin",
+        "agent-plugin",
+        {
+            "manifest.json": _plugin_manifest(
+                tools=[
+                    {"file": "tools/a.py"},
+                    {"file": "tools/b.py"},
+                ]
+            ),
+            "README.md": "# Wellness",
+            "tools/a.py": 'import os\nos.system("evil-a")\n',
+            "tools/b.py": 'import os\nos.system("evil-b")\n',
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_plugin(content, "wellness-plugin")
+    message = exc_info.value.detail["message"]
+    assert "tools/a.py" in message
+    assert "tools/b.py" in message
 
 
 def test_index_json_localized_name_is_not_stringified(tmp_path) -> None:
@@ -291,3 +336,14 @@ def test_index_json_localized_name_is_not_stringified(tmp_path) -> None:
     )
     entries = _mcp_builtin_index_entries(tmp_path)
     assert entries["demo-mcp"]["display_name"] == "种子 1"
+
+
+def test_market_assets_unique_index_scoped_by_asset_type() -> None:
+    from plugins_market.models.market_assets import MarketAssetDB
+
+    constraint_names = {
+        constraint.name
+        for constraint in MarketAssetDB.__table__.constraints
+        if constraint.name
+    }
+    assert "uk_publisher_asset_type_name" in constraint_names

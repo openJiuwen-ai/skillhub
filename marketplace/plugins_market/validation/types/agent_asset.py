@@ -8,7 +8,7 @@ import json
 import posixpath
 import zipfile
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
@@ -46,6 +46,16 @@ def _invalid(error: str, message: str) -> None:
         error=error,
         message=message,
         error_code="SKILLHUB_PLUGIN_MANIFEST_VALIDATION_FAILED",
+        error_class="validation",
+    )
+
+
+def _dangerous(message: str) -> NoReturn:
+    raise PublishError(
+        code=400,
+        error="dangerous_content",
+        message=message,
+        error_code="SKILLHUB_DANGEROUS_CONTENT",
         error_class="validation",
     )
 
@@ -143,13 +153,15 @@ def _validate_declared_skills(
     counter: DecompressCounter,
     *,
     error: str,
-) -> None:
+) -> set[str]:
+    """校验 manifest 声明的 skill 目录，返回已校验的目录名集合。"""
     if skills is None:
-        return
+        return set()
     if not isinstance(skills, list):
         _invalid(error, "manifest.skills 必须为数组")
     if not skills:
         _invalid(error, "manifest.skills 禁止为空数组，无 skill 时请整段省略")
+    declared: set[str] = set()
     for index, item in enumerate(skills):
         if not isinstance(item, dict):
             _invalid(error, f"manifest.skills[{index}] 必须为对象")
@@ -162,6 +174,8 @@ def _validate_declared_skills(
         raw = safe_read_zip_member(zf, original, counter)
         frontmatter, _ = parse_skill_frontmatter(raw)
         validate_skill_frontmatter(frontmatter, dir_name=skill_name, yaml_name=skill_name)
+        declared.add(skill_name)
+    return declared
 
 
 def _validate_bundled_skill_dirs(
@@ -171,11 +185,11 @@ def _validate_bundled_skill_dirs(
     counter: DecompressCounter,
     *,
     error: str,
+    skip_dirs: set[str] | None = None,
 ) -> None:
-    """校验内层 skills/ 下的每个技能目录（无论 manifest 是否声明）。
+    """校验内层 skills/ 下未在 manifest 声明的技能目录。
 
-    manifest.skills 声明项之外的目录同样会随包分发，缺 SKILL.md 或 frontmatter
-    非法（缺 description / name 与目录不一致）时不允许带病上架。
+    manifest.skills 已校验的目录通过 ``skip_dirs`` 跳过，避免重复读取。
     """
     skills_prefix = f"{payload_prefix}skills/"
     skill_dirs: set[str] = set()
@@ -185,7 +199,8 @@ def _validate_bundled_skill_dirs(
         parts = normalized[len(skills_prefix):].split("/")
         if len(parts) >= 2 and parts[0]:
             skill_dirs.add(parts[0])
-    for dir_name in sorted(skill_dirs):
+    excluded = skip_dirs or set()
+    for dir_name in sorted(skill_dirs - excluded):
         skill_path = f"{skills_prefix}{dir_name}/SKILL.md"
         original = members.get(skill_path)
         if original is None or not _member_exists(members, skill_path):
@@ -286,7 +301,7 @@ def _validate_agent_plugin_capabilities(
     if not any(isinstance(manifest.get(field), list) and manifest[field] for field in capability_fields):
         _invalid(error, "agent-plugin 至少必须声明一项 skills/tools/mcps/rails 能力")
 
-    _validate_declared_skills(
+    declared_skills = _validate_declared_skills(
         zf, members, payload_prefix, manifest.get("skills"), counter, error=error
     )
     _validate_declared_file_arrays(
@@ -299,7 +314,9 @@ def _validate_agent_plugin_capabilities(
     _validate_declared_subagents(
         zf, members, payload_prefix, manifest.get("subagents"), counter, error=error
     )
-    _validate_bundled_skill_dirs(zf, members, payload_prefix, counter, error=error)
+    _validate_bundled_skill_dirs(
+        zf, members, payload_prefix, counter, error=error, skip_dirs=declared_skills
+    )
 
 
 @dataclass(frozen=True)
@@ -390,7 +407,7 @@ def validate_agent_asset_layout(
         )
         if not _directory_has_file(members, f"{payload_prefix}{persona_dir}", ".md"):
             _invalid("missing_persona", "persona 目录必须至少包含一个 .md 文件")
-        _validate_declared_skills(
+        declared_skills = _validate_declared_skills(
             zf,
             members,
             payload_prefix,
@@ -419,6 +436,7 @@ def validate_agent_asset_layout(
             payload_prefix,
             counter,
             error="invalid_skill_md",
+            skip_dirs=declared_skills,
         )
         display_name = (
             localized_manifest_text(manifest.get("displayName")) or card_name
@@ -435,10 +453,10 @@ def validate_agent_asset_layout(
         zf, members, payload_prefix, manifest, counter
     )
     if mcp_hit:
-        _invalid("dangerous_content", f"{mcp_hit[0]} 包含危险命令（{mcp_hit[1]}）")
+        _dangerous(f"{mcp_hit[0]} 包含危险命令（{mcp_hit[1]}）")
     hit = find_dangerous_zip_script(zf, members, payload_prefix, counter)
     if hit:
-        _invalid("dangerous_content", f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
+        _dangerous(f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
 
     avatar = manifest.get("avatar")
     if avatar is not None:

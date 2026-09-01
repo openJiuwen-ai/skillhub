@@ -6,8 +6,10 @@
 但"免人工审核"不等于"免静态安全扫描"：结构合法的包仍可能携带命令注入、
 远程脚本下载执行等危险内容。本模块提供保守、低误报的规则集：
 
-- 命令字符串（mcp.json / cli.json）：下载后立即执行的命令链；
-- 脚本文件（.py/.sh 等）：os.system / os.popen / subprocess shell=True / 下载执行链。
+- 命令字符串（mcp.json command/args/env/headers、cli.json）：下载即执行链等；
+- 脚本文件（.py/.sh 等）：eval/exec、os.system、subprocess shell=True 等。
+
+规则集有意保守，无法覆盖全部 RCE 变体；命中多条时一并汇总返回。
 """
 
 from __future__ import annotations
@@ -47,6 +49,9 @@ _COMMAND_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (_SHELL_WRAPPED_DOWNLOAD_RE, "shell 包裹的下载执行命令"),
 )
 
+_EVAL_RE = re.compile(r"\beval\s*\(")
+_EXEC_RE = re.compile(r"\bexec\s*\(")
+
 _OS_SYSTEM_RE = re.compile(r"\bos\.system\s*\(")
 _OS_POPEN_RE = re.compile(r"\bos\.popen\s*\(")
 _SUBPROCESS_SHELL_RE = re.compile(
@@ -56,6 +61,8 @@ _SUBPROCESS_SHELL_RE = re.compile(
 _SCRIPT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (_PIPE_TO_SHELL_RE, "下载后直接执行的命令链"),
     (_SHELL_WRAPPED_DOWNLOAD_RE, "shell 包裹的下载执行命令"),
+    (_EVAL_RE, "eval 动态代码执行"),
+    (_EXEC_RE, "exec 动态代码执行"),
     (_OS_SYSTEM_RE, "os.system Shell 执行入口"),
     (_OS_POPEN_RE, "os.popen Shell 执行入口"),
     (_SUBPROCESS_SHELL_RE, "subprocess shell=True 执行入口"),
@@ -79,7 +86,7 @@ def find_dangerous_script_content(text: str) -> str | None:
 
 
 def scan_mcp_servers_payload(servers: Any, *, label: str) -> str | None:
-    """扫描 mcpServers 对象中的 command/args，命中时返回原因。"""
+    """扫描 mcpServers 对象中的 command/args/env/headers，命中时返回原因。"""
     if not isinstance(servers, dict):
         return None
     for server_name, config in servers.items():
@@ -97,6 +104,17 @@ def scan_mcp_servers_payload(servers: Any, *, label: str) -> str | None:
                     reason = find_dangerous_command(arg)
                     if reason:
                         return f"{label}.mcpServers.{server_name}.args[{index}]（{reason}）"
+        for map_label in ("env", "headers"):
+            map_value = config.get(map_label)
+            if not isinstance(map_value, dict):
+                continue
+            for key, item in map_value.items():
+                if isinstance(item, str):
+                    reason = find_dangerous_command(item)
+                    if reason:
+                        return (
+                            f"{label}.mcpServers.{server_name}.{map_label}.{key}（{reason}）"
+                        )
     return None
 
 
@@ -110,18 +128,15 @@ def find_dangerous_mcp_json(raw: bytes, *, label: str) -> str | None:
     return None
 
 
-def find_dangerous_zip_script(
+def _collect_dangerous_zip_scripts(
     zf,
     members: dict[str, str],
     payload_prefix: str,
     counter,
-) -> tuple[str, str] | None:
-    """扫描 ZIP 内层目录中的脚本文件，返回 (相对路径, 原因) 或 None。
-
-    ``members`` 为 归一化路径 -> 原始路径 的映射（见 wrapped_asset.normalized_member_map）。
-    """
+) -> list[tuple[str, str]]:
     from plugins_market.validation.zip_utils import safe_read_zip_member
 
+    hits: list[tuple[str, str]] = []
     for normalized, original in sorted(members.items()):
         if not normalized.startswith(payload_prefix):
             continue
@@ -132,8 +147,31 @@ def find_dangerous_zip_script(
         raw = safe_read_zip_member(zf, original, counter)
         reason = find_dangerous_script_content(raw.decode("utf-8", errors="replace"))
         if reason:
-            return normalized[len(payload_prefix):], reason
-    return None
+            hits.append((normalized[len(payload_prefix):], reason))
+    return hits
+
+
+def find_dangerous_zip_script(
+    zf,
+    members: dict[str, str],
+    payload_prefix: str,
+    counter,
+) -> tuple[str, str] | None:
+    """扫描 ZIP 内层目录中的脚本文件，返回 (相对路径汇总, 原因) 或 None。
+
+    命中多处时路径以逗号拼接（最多展示 5 处），避免只报第一处而漏报其余文件。
+    """
+    hits = _collect_dangerous_zip_scripts(zf, members, payload_prefix, counter)
+    if not hits:
+        return None
+    paths = [path for path, _ in hits]
+    reasons = {reason for _, reason in hits}
+    if len(paths) <= 5:
+        path_msg = ", ".join(paths)
+    else:
+        path_msg = ", ".join(paths[:5]) + f" 等{len(paths)}处"
+    reason_msg = next(iter(reasons)) if len(reasons) == 1 else "危险脚本内容"
+    return path_msg, reason_msg
 
 
 def find_dangerous_manifest_mcp_files(

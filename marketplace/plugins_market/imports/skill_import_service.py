@@ -74,6 +74,37 @@ def _skill_import_entry_version_desc(entry_overrides: dict[str, Any]) -> str | N
     return s or None
 
 
+def _resolve_import_fail_identity(entry: Path) -> tuple[str, str]:
+    """规范化失败时从 plugin.yaml / manifest.json 尽力补全 name 与 version。"""
+    fail_name, fail_version = "", ""
+    plugin_yaml_path = entry / "plugin.yaml"
+    if plugin_yaml_path.is_file():
+        try:
+            yaml_data = load_plugin_yaml(str(plugin_yaml_path))
+            fail_name = str(yaml_data.get("name") or "").strip()
+            fail_version = str(yaml_data.get("version") or "").strip()
+        except Exception:  # noqa: BLE001 - 尽力而为，不影响原始错误
+            pass
+    if fail_name and fail_version:
+        return fail_name, fail_version
+    manifest_path = entry / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = load_json_object_file(manifest_path, label="manifest.json")
+            if not fail_name:
+                fail_name = str(manifest.get("id") or manifest.get("name") or "").strip()
+                agent_card = manifest.get("agentCard")
+                if not fail_name and isinstance(agent_card, dict):
+                    fail_name = str(
+                        agent_card.get("id") or agent_card.get("name") or ""
+                    ).strip()
+            if not fail_version:
+                fail_version = str(manifest.get("version") or "").strip()
+        except Exception:  # noqa: BLE001 - 尽力而为，不影响原始错误
+            pass
+    return fail_name, fail_version
+
+
 def _read_import_json_object(path: Path, label: str) -> dict[str, Any]:
     try:
         return load_json_object_file(path, label=label, max_bytes=MAX_JSON_BYTES)
@@ -341,16 +372,7 @@ def skill_import_from_staging_dir(
                 **normalize_options,
             )
         except ValueError as e:
-            # 规范化失败时尽量从 plugin.yaml 补全名称/版本，便于客户端定位失败条目
-            fail_name, fail_version = "", ""
-            plugin_yaml_path = entry / "plugin.yaml"
-            if plugin_yaml_path.is_file():
-                try:
-                    yaml_data = load_plugin_yaml(str(plugin_yaml_path))
-                    fail_name = str(yaml_data.get("name") or "").strip()
-                    fail_version = str(yaml_data.get("version") or "").strip()
-                except Exception:  # noqa: BLE001 - 尽力而为，不影响原始错误
-                    pass
+            fail_name, fail_version = _resolve_import_fail_identity(entry)
             results.append(
                 item_result_model(
                     entry=entry_name,
@@ -398,7 +420,7 @@ def skill_import_from_staging_dir(
             )
             if after_publish_success is not None:
                 after_publish_success(entry_name, pr)
-            # 幂等命中（同名同版本同内容）视为跳过而非成功，避免污染批量统计与审计
+            # 幂等命中（同名同版本同内容）记 skipped 而非 ok；客户端应看 summary.skipped
             deduplicated = bool(getattr(pr, "deduplicated", False))
             result_fields: dict[str, Any] = {}
             if allow_multi_asset:
