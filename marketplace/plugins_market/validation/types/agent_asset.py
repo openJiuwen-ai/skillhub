@@ -358,12 +358,12 @@ def validate_agent_asset_layout(
 
     manifest = _read_manifest(zf, manifest_original, counter, error=manifest_error)
     version = _required_string(manifest, "version", error=manifest_error)
-    package_type = _required_string(manifest, "packageType", error=manifest_error)
+    package_type = _required_string(manifest, "package_type", error=manifest_error)
     expected_package_type = "plugin" if runtime_type == RUNTIME_AGENT_PLUGIN else "agent_template"
     if package_type != expected_package_type:
         _invalid(
             manifest_error,
-            f"manifest.packageType 必须为 {expected_package_type!r}，实际为 {package_type!r}",
+            f"manifest.package_type 必须为 {expected_package_type!r}，实际为 {package_type!r}",
         )
     if version != outer_version:
         _invalid(
@@ -382,22 +382,21 @@ def validate_agent_asset_layout(
             zf, members, payload_prefix, manifest, counter
         )
         display_name = localized_manifest_text(
-            manifest.get("displayName")
+            manifest.get("display_name")
         ) or localized_manifest_text(manifest.get("name"))
         short_desc = localized_manifest_text(
-            manifest.get("displayDescription")
+            manifest.get("display_description")
         ) or localized_manifest_text(
             manifest.get("description")
         )
         asset_type = RUNTIME_AGENT_PLUGIN
     elif runtime_type == RUNTIME_AGENT_TEMPLATE:
-        identity = _required_string(manifest, "agentCard.id", error="invalid_agent_card")
-        card_name = _required_string(manifest, "agentCard.name", error="invalid_agent_card")
-        card_desc = _required_string(manifest, "agentCard.description", error="invalid_agent_card")
+        identity = _required_string(manifest, "name", error="invalid_manifest_json")
+        template_desc = _required_string(manifest, "description", error="invalid_manifest_json")
         if identity != asset_name:
             _invalid(
-                "invalid_agent_card",
-                f"manifest.agentCard.id {identity!r} 必须与 plugin.yaml.name {asset_name!r} 一致",
+                "invalid_manifest_json",
+                f"manifest.name {identity!r} 必须与 plugin.yaml.name {asset_name!r} 一致",
             )
         persona = manifest.get("persona")
         if not isinstance(persona, dict):
@@ -439,10 +438,10 @@ def validate_agent_asset_layout(
             skip_dirs=declared_skills,
         )
         display_name = (
-            localized_manifest_text(manifest.get("displayName")) or card_name
+            localized_manifest_text(manifest.get("display_name")) or identity
         )
         short_desc = (
-            localized_manifest_text(manifest.get("displayDescription")) or card_desc
+            localized_manifest_text(manifest.get("display_description")) or template_desc
         )
         asset_type = RUNTIME_AGENT_TEMPLATE
     else:  # defensive guard
@@ -459,7 +458,7 @@ def validate_agent_asset_layout(
         _dangerous(f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
 
     avatar = manifest.get("avatar")
-    if avatar is not None:
+    if isinstance(avatar, str) and avatar.strip():
         avatar_path = _safe_relative_path(avatar, "avatar", error=manifest_error)
         if not _member_exists(members, f"{payload_prefix}{avatar_path}"):
             _invalid(manifest_error, f"manifest.avatar 指向的文件不存在：{avatar_path}")

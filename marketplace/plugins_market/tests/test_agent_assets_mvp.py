@@ -88,14 +88,11 @@ def _validate_mcp(content: bytes, name: str) -> dict:
 def _template_manifest(**extra: object) -> str:
     manifest: dict[str, object] = {
         "version": "1.0.0",
-        "packageType": "agent_template",
-        "agentCard": {
-            "id": "coach",
-            "name": "Coach",
-            "description": "Office wellness coach",
-        },
-        "displayName": {"zh": "职场教练"},
-        "displayDescription": {"zh": "帮助改善健康习惯"},
+        "package_type": "agent_template",
+        "name": "coach",
+        "description": "Office wellness coach",
+        "display_name": {"zh": "职场教练"},
+        "display_description": {"zh": "帮助改善健康习惯"},
         "persona": {"dir": "persona"},
     }
     manifest.update(extra)
@@ -105,7 +102,7 @@ def _template_manifest(**extra: object) -> str:
 def _plugin_manifest(**extra: object) -> str:
     manifest: dict[str, object] = {
         "version": "1.0.0",
-        "packageType": "plugin",
+        "package_type": "plugin",
         "id": "wellness-plugin",
         "name": "Wellness",
         "description": "Wellness tools",

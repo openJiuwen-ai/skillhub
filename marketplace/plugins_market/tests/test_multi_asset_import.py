@@ -83,12 +83,12 @@ def test_raw_agent_plugin_is_wrapped_from_native_manifest(tmp_path: Path) -> Non
     (entry / "tools").mkdir(parents=True)
     manifest = {
         "version": "1.2.3",
-        "packageType": "plugin",
+        "package_type": "plugin",
         "id": "wellness-life-steward",
         "name": "Wellness fallback",
         "description": "Fallback description",
-        "displayName": {"en": "Wellness", "zh": "健康生活插件"},
-        "displayDescription": {"en": "Health tools", "zh": "健康工具集"},
+        "display_name": {"en": "Wellness", "zh": "健康生活插件"},
+        "display_description": {"en": "Health tools", "zh": "健康工具集"},
         "tags": [{"en": "Health", "zh": "健康"}],
         "tools": [{"file": "tools/wellness.py"}],
     }
@@ -129,19 +129,16 @@ def test_raw_agent_plugin_rejects_manifest_version_override(tmp_path: Path) -> N
         _normalize(entry, version="2.0.0")
 
 
-def test_raw_agent_template_is_wrapped_from_agent_card(tmp_path: Path) -> None:
+def test_raw_agent_template_is_wrapped_from_manifest_name(tmp_path: Path) -> None:
     entry = tmp_path / "workplace-slim-coach"
     (entry / "persona").mkdir(parents=True)
     manifest = {
         "version": "2.0.0",
-        "packageType": "agent_template",
-        "agentCard": {
-            "id": "workplace-slim-coach",
-            "name": "Kaka",
-            "description": "Office wellness coach",
-        },
-        "displayName": {"zh": "职场轻盈教练"},
-        "displayDescription": {"zh": "帮助职场人改善健康习惯"},
+        "package_type": "agent_template",
+        "name": "workplace-slim-coach",
+        "description": "Office wellness coach",
+        "display_name": {"zh": "职场轻盈教练"},
+        "display_description": {"zh": "帮助职场人改善健康习惯"},
         "persona": {"dir": "persona"},
     }
     (entry / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -220,7 +217,7 @@ def _write_raw_agent_plugin(entry: Path, *, name: str = "wellness-plugin") -> No
         json.dumps(
             {
                 "version": "1.0.0",
-                "packageType": "plugin",
+                "package_type": "plugin",
                 "id": name,
                 "name": "Wellness",
                 "description": "Wellness tools",
@@ -699,7 +696,7 @@ def test_import_normalize_failure_includes_manifest_identity(tmp_path: Path) -> 
         json.dumps(
             {
                 "version": "2.3.4",
-                "packageType": "plugin",
+                "package_type": "plugin",
                 "id": "raw-agent-id",
                 "name": "Raw Agent",
                 "description": "Broken runtime",
@@ -749,7 +746,7 @@ def test_import_normalize_failure_falls_back_to_manifest_without_plugin_yaml(
         json.dumps(
             {
                 "version": "2.3.4",
-                "packageType": "plugin",
+                "package_type": "plugin",
                 "id": "raw-agent-id",
                 "name": "Raw Agent",
                 "description": "Broken runtime",

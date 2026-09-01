@@ -17,12 +17,12 @@ def _write_raw_agent_plugin(entry: Path, *, name: str = "wellness-plugin") -> No
     (entry / "tools").mkdir(parents=True)
     manifest = {
         "version": "1.2.3",
-        "packageType": "plugin",
+        "package_type": "plugin",
         "id": name,
         "name": "Wellness fallback",
         "description": "Fallback description",
-        "displayName": {"zh": "健康生活插件"},
-        "displayDescription": {"zh": "健康工具集"},
+        "display_name": {"zh": "健康生活插件"},
+        "display_description": {"zh": "健康工具集"},
         "tools": [{"file": "tools/wellness.py"}],
     }
     (entry / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")

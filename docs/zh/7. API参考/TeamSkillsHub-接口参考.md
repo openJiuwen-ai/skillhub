@@ -542,7 +542,7 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 | 条目形态 | 识别为 |
 |----------|--------|
 | 含 `plugin.yaml` 且 `runtime.type` ∈ `skill` / `agent-plugin` / `agent-template` / `agent-mcp` | 对应类型（标准包装条目） |
-| 裸目录含 `manifest.json` 且 `packageType` = `plugin` / `agent_template` | `agent-plugin` / `agent-template`（服务端自动生成外层 `plugin.yaml` 包装，名称取自 `manifest.id` / `agentCard.id`） |
+| 裸目录含 `manifest.json` 且 `package_type` = `plugin` / `agent_template` | `agent-plugin` / `agent-template`（服务端自动生成外层 `plugin.yaml` 包装，名称取自 `manifest.id` / `manifest.name`） |
 | 裸目录含 `mcp.json` / `cli.json`，或 `skills/` 下含 `SKILL.md` | `agent-mcp`（同样自动包装；名称默认取目录名，版本取 entries 覆盖值或回退值，支持 semver 或 git commit hex） |
 | 裸 Skill 目录（仅根目录含 `SKILL.md`，且未命中上述 agent 标识） | `skill` |
 
@@ -586,8 +586,8 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 | 类型 | 内层必需 | 关键校验 |
 |------|----------|----------|
-| `agent-plugin` | `manifest.json`（`packageType: "plugin"`）、`README.md` | `manifest.id == plugin.yaml.name`；`manifest.version == plugin.yaml.version`；至少声明一项 `skills/tools/mcps/rails` 能力且引用文件必须存在 |
-| `agent-template` | `manifest.json`（`packageType: "agent_template"`）、`README.md` | `agentCard.id == plugin.yaml.name`；`agentCard.name/description` 必填；`persona.dir` 必填且目录内至少一个 `.md` |
+| `agent-plugin` | `manifest.json`（`package_type: "plugin"`）、`README.md` | `manifest.id == plugin.yaml.name`；`manifest.version == plugin.yaml.version`；至少声明一项 `skills/tools/mcps/rails` 能力且引用文件必须存在 |
+| `agent-template` | `manifest.json`（`package_type: "agent_template"`）、`README.md` | `manifest.name == plugin.yaml.name`；`manifest.name/description` 必填；`persona.dir` 必填且目录内至少一个 `.md` |
 | `agent-mcp` | 至少一个入口：`mcp.json` / `cli.json` / `skills/**/SKILL.md` | `mcp.json.mcpServers` 非空；`cli.json` 各平台命令齐全；`token-schema.json` 的 `fields[].key` 必填且禁止保存凭据值；`mcp.json` 与 `cli.json` 中的 `${VAR}` 占位符必须在 token schema 中有录入项 |
 
 通用规则：一个包只允许一个外层 `plugin.yaml`（多个人则 400）；图标固定为 `<outer>/icon.png`（PNG，可选）；README 内容作为详情页描述。

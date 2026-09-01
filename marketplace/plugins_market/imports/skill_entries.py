@@ -130,10 +130,7 @@ def _patch_native_agent_manifest(
     if runtime_type == RUNTIME_AGENT_PLUGIN:
         manifest["id"] = name
     elif runtime_type == RUNTIME_AGENT_TEMPLATE:
-        card = manifest.get("agentCard")
-        card = dict(card) if isinstance(card, dict) else {}
-        card["id"] = name
-        manifest["agentCard"] = card
+        manifest["name"] = name
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -157,19 +154,17 @@ def _build_native_agent_staging(
             raise ValueError(
                 "manifest.json is required for agent-plugin/agent-template entries"
             )
-        card = manifest.get("agentCard")
-        card = card if isinstance(card, dict) else {}
         plugin_manifest = runtime_type == RUNTIME_AGENT_PLUGIN
-        identity = manifest.get("id") if plugin_manifest else card.get("id")
+        identity = manifest.get("id") if plugin_manifest else manifest.get("name")
         name = str(identity or "").strip()
         version = str(manifest.get("version") or "").strip()
-        fallback_name = manifest.get("name") if plugin_manifest else card.get("name")
-        fallback_desc = manifest.get("description") if plugin_manifest else card.get("description")
+        fallback_name = manifest.get("name") if plugin_manifest else manifest.get("name")
+        fallback_desc = manifest.get("description")
         display_name = localized_manifest_text(
-            manifest.get("displayName")
+            manifest.get("display_name")
         ) or localized_manifest_text(fallback_name)
         description = localized_manifest_text(
-            manifest.get("displayDescription")
+            manifest.get("display_description")
         ) or localized_manifest_text(fallback_desc)
         manifest_tags = localized_manifest_tags(manifest.get("tags"))
         override_name = (
@@ -238,7 +233,7 @@ def detect_import_entry_type(entry: Path) -> str | None:
     manifest_path = entry / "manifest.json"
     if manifest_path.is_file():
         package_type = load_json_object_file(manifest_path, label="manifest.json").get(
-            "packageType"
+            "package_type"
         )
         manifest_type = {
             "plugin": RUNTIME_AGENT_PLUGIN,

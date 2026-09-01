@@ -79,7 +79,7 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
     } catch {
       throw new Error('AGENT_ZIP_INVALID_MANIFEST')
     }
-    const packageType = firstNonEmpty(manifest.packageType)
+    const packageType = firstNonEmpty(manifest.package_type)
     const pluginType = normalizePluginType(
       packageType === 'plugin'
         ? 'agent-plugin'
@@ -90,28 +90,20 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
     if (!isAgentAssetPluginType(pluginType)) {
       throw new Error('AGENT_ZIP_UNSUPPORTED_TYPE')
     }
-    const card = manifest.agentCard
-    const cardRecord = card && typeof card === 'object' && !Array.isArray(card) ? (card as Record<string, unknown>) : {}
     const name =
       pluginType === 'agent-plugin'
         ? firstNonEmpty(manifest.id)
-        : firstNonEmpty(cardRecord.id)
+        : firstNonEmpty(manifest.name)
     const version = firstNonEmpty(manifest.version)
     if (!name) throw new Error('AGENT_ZIP_MISSING_NAME')
-    const fallbackName =
-      pluginType === 'agent-plugin'
-        ? localizedText(manifest.name)
-        : localizedText(cardRecord.name)
-    const fallbackDesc =
-      pluginType === 'agent-plugin'
-        ? localizedText(manifest.description)
-        : localizedText(cardRecord.description)
+    const fallbackName = localizedText(manifest.name)
+    const fallbackDesc = localizedText(manifest.description)
     return {
       pluginType,
       name,
       version,
-      displayName: localizedText(manifest.displayName) || fallbackName || name,
-      description: localizedText(manifest.displayDescription) || fallbackDesc,
+      displayName: localizedText(manifest.display_name) || fallbackName || name,
+      description: localizedText(manifest.display_description) || fallbackDesc,
       tags: localizedTags(manifest.tags),
       isBareNative: true,
     }
