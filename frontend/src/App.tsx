@@ -49,6 +49,7 @@ function App() {
               <Route path="/groups" element={<GroupsPage />} />
               <Route path="/groups/:groupId" element={<GroupDetailPage />} />
               <Route path="/skills/:assetId" element={<SkillDetailPage />} />
+              <Route path="/assets/:assetId" element={<SkillDetailPage />} />
               <Route path="/" element={<PluginMarketPage />} />
             </Route>
           </Routes>

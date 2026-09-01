@@ -42,7 +42,13 @@ import {
   formatMarketSkillVersionLabel,
   marketSkillVersionFilenameSegment,
 } from '@/utils/formatSkillVersionLabel'
-import { parseSkillLikePluginType, SKILL_LIKE_QUERY_VALUE, isSkillLikePluginType } from '@/utils/pluginType'
+import {
+  AGENT_ASSET_QUERY_VALUE,
+  SKILL_LIKE_QUERY_VALUE,
+  assetDetailPath,
+  isAgentAssetPluginType,
+  parseSkillLikePluginType,
+} from '@/utils/pluginType'
 
 function isCanceledRequest(err: unknown): boolean {
   if (axios.isCancel(err)) return true
@@ -510,19 +516,27 @@ export default function SkillDetailPage() {
   const fromPendingModerationEntry =
     locationState?.moderationContext === 'pending' ||
     routeSearchParams.get('moderation_status')?.trim().toUpperCase() === 'PENDING'
+  const isAssetRoute = location.pathname.startsWith('/assets/')
+  const detailTypeQuery = isAssetRoute ? AGENT_ASSET_QUERY_VALUE : SKILL_LIKE_QUERY_VALUE
+  const alternateTypeQuery = isAssetRoute ? SKILL_LIKE_QUERY_VALUE : AGENT_ASSET_QUERY_VALUE
 
   const detailQuery = useQuery<SkillDetailQueryItem | null>(
-    ['skill-detail-raw', assetId, requestedVersion, fromPendingModerationEntry],
+    ['skill-detail-raw', assetId, requestedVersion, fromPendingModerationEntry, detailTypeQuery],
     async () => {
-      const response = await getPlugins({
-        page: 1,
-        page_size: 1,
-        asset_id: assetId,
-        plugin_type: SKILL_LIKE_QUERY_VALUE,
-        moderation_status: fromPendingModerationEntry ? 'PENDING' : undefined,
-      })
-      const listItem = response.data.items.find(item => item.asset_id === assetId) ?? null
-      if (listItem) return listItem
+      const loadByType = async (pluginType: string) => {
+        const response = await getPlugins({
+          page: 1,
+          page_size: 1,
+          asset_id: assetId,
+          plugin_type: pluginType,
+          moderation_status: fromPendingModerationEntry ? 'PENDING' : undefined,
+        })
+        return response.data.items.find(item => item.asset_id === assetId) ?? null
+      }
+      const primary = await loadByType(detailTypeQuery)
+      if (primary) return primary
+      const alternate = await loadByType(alternateTypeQuery)
+      if (alternate) return alternate
       if (!requestedVersion) return null
       const versionDetail = await getPluginVersionDetail(assetId, requestedVersion)
       return versionDetailToListItem(versionDetail)
@@ -531,14 +545,29 @@ export default function SkillDetailPage() {
   )
 
   const skillRaw = detailQuery.data ?? null
+  const isAgentDetail = isAgentAssetPluginType(skillRaw?.plugin_type)
   const skill = useMemo(() => (skillRaw ? mapSkill(skillRaw) : null), [skillRaw])
   const versionList = skill?.allVersions?.length ? [...skill.allVersions].reverse() : []
 
   useEffect(() => {
+    if (!assetId || !skillRaw?.plugin_type) return
+    const targetPath = assetDetailPath(assetId, skillRaw.plugin_type)
+    const currentPath = isAssetRoute
+      ? `/assets/${encodeURIComponent(assetId)}`
+      : `/skills/${encodeURIComponent(assetId)}`
+    if (targetPath === currentPath) return
+    navigate(`${targetPath}${location.search}`, { replace: true, state: location.state })
+  }, [assetId, isAssetRoute, location.search, location.state, navigate, skillRaw?.plugin_type])
+
+  useEffect(() => {
+    if (isAgentDetail) {
+      setPlaygroundEnabled(false)
+      return
+    }
     getSiteConfig()
       .then(cfg => setPlaygroundEnabled(cfg.playground_enabled))
       .catch(() => {})
-  }, [])
+  }, [isAgentDetail])
 
   useEffect(() => {
     if (!skill) return
@@ -728,7 +757,7 @@ export default function SkillDetailPage() {
   const displayTags = tagsFromVersionApi !== null ? tagsFromVersionApi : skill?.tags ?? []
   const displayUpdateTime = updateTimeFromVersionApi ?? skill?.updateTime ?? null
   const publishType = parseSkillLikePluginType(skillRaw?.plugin_type) ?? null
-  const publishReady = publishType !== null
+  const publishReady = publishType !== null && !isAgentDetail
 
   const handlePublish = useCallback(() => {
     if (!publishType) return
@@ -754,6 +783,7 @@ export default function SkillDetailPage() {
     versionDetailViewerModerator,
   ])
   const canShowReviewDetailLink = useMemo(() => {
+    if (isAgentDetail) return false
     if (!skill || !selectedVersion.trim()) return false
     const hasReviewDetail = Boolean(
       securityReview && (
@@ -769,6 +799,7 @@ export default function SkillDetailPage() {
     return versionDetailViewerModerator === true
   }, [
     detailQuery.data?.viewer_is_market_moderation_admin,
+    isAgentDetail,
     isMarketModerationAdmin,
     isOwnSkill,
     publishResult,
@@ -887,7 +918,7 @@ export default function SkillDetailPage() {
       if (!skill || interactBusy) return
       if (!canToggleInteract) return
       if (!isAuthenticated) {
-        setPostLoginRedirect(`/skills/${encodeURIComponent(skill.assetId)}`)
+        setPostLoginRedirect(assetDetailPath(skill.assetId, skillRaw?.plugin_type))
         navigate('/login')
         return
       }
@@ -911,7 +942,7 @@ export default function SkillDetailPage() {
         setInteractBusy(null)
       }
     },
-    [canToggleInteract, interactBusy, isAuthenticated, navigate, queryClient, skill, t],
+    [canToggleInteract, interactBusy, isAuthenticated, navigate, queryClient, skill, skillRaw?.plugin_type, t],
   )
 
   /** 与 `AppHeader` 内层一致：左与 logo 对齐，右与登录/账号区对齐 */
@@ -947,10 +978,10 @@ export default function SkillDetailPage() {
             const status = axios.isAxiosError(err) ? err.response?.status : undefined
             const isNotFound = status === 404
             const headline = isNotFound
-              ? '该 Skill 不存在或已被删除'
+              ? (isAssetRoute ? t('plugins.assetPage.notFoundTitle') : t('plugins.skillPage.notFoundTitle'))
               : t('profile.noDetail')
             const sub = isNotFound
-              ? 'asset_id 无效，可能是 Skill 已被删除、版本号错误或来自旧的历史链接。'
+              ? (isAssetRoute ? t('plugins.assetPage.notFoundHint') : t('plugins.skillPage.notFoundHint'))
               : (axios.isAxiosError(err)
                 ? `加载详情失败（HTTP ${status ?? '?'}）：${err.message}`
                 : null)
@@ -1093,7 +1124,7 @@ export default function SkillDetailPage() {
                         {publishResultLabel}
                       </span>
                     ) : null}
-                    {canShowDownloadActions && playgroundEnabled && moderationStatus === 'APPROVED' ? (
+                    {canShowDownloadActions && !isAgentDetail && playgroundEnabled && moderationStatus === 'APPROVED' ? (
                       <button
                         type="button"
                         onClick={() => setPlaygroundOpen(true)}
@@ -1203,7 +1234,7 @@ export default function SkillDetailPage() {
                   </section>
                 ) : null}
 
-                <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_296px] xl:items-start">
+                <div className={`grid gap-8 xl:items-start ${isAgentDetail ? '' : 'xl:grid-cols-[minmax(0,1fr)_296px]'}`}>
                   <div className="min-w-0">
                     {/* Basic info */}
                     <section>
@@ -1390,13 +1421,15 @@ export default function SkillDetailPage() {
                       )}
                     </div>
                   </div>
-                  <aside className="xl:sticky xl:top-6">
-                    <SecurityReviewPanel
-                      review={securityReview}
-                      detailPath={canShowReviewDetailLink ? reviewDetailPath : ''}
-                      t={t}
-                    />
-                  </aside>
+                  {!isAgentDetail ? (
+                    <aside className="xl:sticky xl:top-6">
+                      <SecurityReviewPanel
+                        review={securityReview}
+                        detailPath={canShowReviewDetailLink ? reviewDetailPath : ''}
+                        t={t}
+                      />
+                    </aside>
+                  ) : null}
                 </div>
               </div>
             </article>
@@ -1443,7 +1476,7 @@ export default function SkillDetailPage() {
         </div>
       ) : null}
 
-      {playgroundEnabled && skill ? (
+      {!isAgentDetail && playgroundEnabled && skill ? (
         <PlaygroundDrawer
           open={playgroundOpen}
           skillId={skill.assetId}

@@ -123,10 +123,12 @@ export interface ObjectDisplay {
   text: string
   /** 非 Skill 类 / 缺信息的兜底——列里用灰色斜体渲染 */
   isPlaceholder: boolean
-  /** Skill 详情可点击跳转；其他形态恒为 false */
+  /** Skill / Agent 详情可点击跳转；其他形态恒为 false */
   clickable: boolean
-  /** 跳转 /skills/<slug> 用 */
+  /** 跳转详情用的 asset_id */
   slug: string | null
+  /** 用于 /skills vs /assets 分流 */
+  pluginType?: string | null
   /** hover 提示，可选 */
   title?: string
 }
@@ -173,25 +175,26 @@ export function pickObjectDisplay(item: ObjectLike): ObjectDisplay {
   // 市场资产 / unknown：跟原 pickSkillName 同优先级
   const fromExtraDisplay = String(extra.skill_display_name || '').trim()
   const extraSlug = String(extra.skill_name || '').trim()
-  // 优先用 resource_id (UUID) 当跳转 slug：/skills/:assetId 路由需要后端 asset_id (UUID)，
+  // 优先用 resource_id (UUID) 当跳转 slug：详情路由需要后端 asset_id (UUID)，
   // asset_name 是人类可读名，无法路由命中。仅当资源不存在或动作是"删除全部版本"时不可点。
   const isDeleteAll = String(item.action || '').trim().toUpperCase() === 'DELETE'
   const bestSlug = item.resource_id || extraSlug || item.asset_name || null
-  const clickable = kind === 'skill' && Boolean(bestSlug) && !isDeleteAll
+  const pluginType = item.asset_plugin_type || item.resource_type || null
+  const clickable = (kind === 'skill' || kind === 'agent_asset') && Boolean(bestSlug) && !isDeleteAll
   if (fromExtraDisplay) {
-    return { text: fromExtraDisplay, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: fromExtraDisplay, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (item.asset_display_name) {
-    return { text: item.asset_display_name, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: item.asset_display_name, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (extraSlug) {
-    return { text: extraSlug, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: extraSlug, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (item.asset_name) {
-    return { text: item.asset_name, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: item.asset_name, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (item.resource_id) {
-    return { text: item.resource_id, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: item.resource_id, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
 
   // 早拒兜底：连资源标识都没有

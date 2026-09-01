@@ -3,7 +3,7 @@
 import { useMemo } from 'react'
 import { usePluginListQuery, type MarketplacePluginItem, type MarketplacePluginListRequest } from '@/api'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
-import { isSkillLikePluginType } from '@/utils/pluginType'
+import { isModeratedMarketAssetType } from '@/utils/pluginType'
 
 export interface MarketPlugin {
   assetId: string
@@ -95,7 +95,7 @@ function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
     tags: item.tags || [],
     certification: item.certification || '',
     runTime: firstString(item.plugin_type, item.run_time),
-    latestVersion: isSkillLikePluginType(item.plugin_type)
+    latestVersion: isModeratedMarketAssetType(item.plugin_type)
       ? (accessSource === 'group' || accessSource === 'owner' || accessSource === 'admin'
         ? firstString(item.latest_version, item.public_latest_version)
         : firstString(item.public_latest_version, item.latest_version))

@@ -41,8 +41,12 @@
     "marketSubtitleCountSuffix": " 个",
     "marketTypeLabel": {
       "skill": "Skill",
-      "swarmskill": "Swarm Skills"
+      "swarmskill": "Swarm Skills",
+      "agent-plugin": "Agent 插件",
+      "agent-template": "Agent 模板",
+      "agent-mcp": "Agent MCP"
     },
+    "marketTypeTabsAria": "按资产类型切换市场",
     "searchPlaceholder": "搜索名称、描述、标签",
     "searchDisabledHint": "已选标签时搜索暂不可用，清空标签即可恢复搜索",
     "sidebarViewSwitchAria": "切换分类与标签视图",
@@ -88,7 +92,10 @@
     "noMatchingSkillDescription": "试试其他关键词，或切换到「插件」页签浏览插件",
     "noMatchingSkillByType": {
       "skill": "未找到匹配的 Skill",
-      "swarmskill": "未找到匹配的 Swarm Skill"
+      "swarmskill": "未找到匹配的 Swarm Skill",
+      "agent-plugin": "未找到匹配的 Agent 插件",
+      "agent-template": "未找到匹配的 Agent 模板",
+      "agent-mcp": "未找到匹配的 Agent MCP"
     },
     "pinnedBadge": "置顶",
     "pinnedBadgeAria": "置顶展示",
@@ -195,7 +202,13 @@
       "cancel": "取消",
       "submitModeration": "提交",
       "moderationSuccess": "审核已更新",
-      "moderationFailed": "审核操作失败"
+      "moderationFailed": "审核操作失败",
+      "notFoundTitle": "该 Skill 不存在或已被删除",
+      "notFoundHint": "asset_id 无效，可能是 Skill 已被删除、版本号错误或来自旧的历史链接。"
+    },
+    "assetPage": {
+      "notFoundTitle": "该资产不存在或已被删除",
+      "notFoundHint": "asset_id 无效，可能是资产已被删除、版本号错误或来自旧的历史链接。"
     },
     "githubWatch": {
       "starAll": "点赞鼓励",
@@ -367,7 +380,7 @@
     "brand": "openJiuwen",
     "sidebar": {
       "backToHome": "返回首页",
-      "mySkills": "我的 Skills",
+      "mySkills": "我的上传",
       "myGroups": "我的组群",
       "groupSkills": "组内 Skill",
       "myStars": "我的收藏",
@@ -378,8 +391,8 @@
       "logout": "退出登录",
       "bioPlaceholder": "这个用户还没有填写个人描述"
     },
-    "skillsTitle": "我的 Skills",
-    "skillsSubtitle": "管理你发布的所有技能 Skills",
+    "skillsTitle": "我的上传",
+    "skillsSubtitle": "查看你发布的 Skill / SwarmSkill / Agent 资产及状态",
     "groupsTitle": "我的组群",
     "groupsSubtitle": "快速查看你加入或管理的组群，完整管理请进入组群管理页",
     "groupSkillsTitle": "组内 Skill",

@@ -45,7 +45,7 @@ import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
-import { SKILL_LIKE_QUERY_VALUE } from '@/utils/pluginType'
+import { MODERATED_MARKET_QUERY_VALUE, assetDetailPath } from '@/utils/pluginType'
 import { listMyGroups, listMyGroupSkills, revokeSkillFromGroup, type GroupItem, type MyGroupSkillItem } from '@/api/groups'
 import emptyDataIllustration from '@/assets/empty-data.svg'
 
@@ -162,7 +162,7 @@ export default function MyProfilePage() {
         publisher_id: publisherId,
         order_by: 'update_time',
         desc: true,
-        plugin_type: SKILL_LIKE_QUERY_VALUE,
+        plugin_type: MODERATED_MARKET_QUERY_VALUE,
       }),
     {
       enabled: Boolean(publisherId) && isSkillTab,
@@ -178,7 +178,7 @@ export default function MyProfilePage() {
       getPlugins({
         page,
         page_size: pageSize,
-        plugin_type: SKILL_LIKE_QUERY_VALUE,
+        plugin_type: MODERATED_MARKET_QUERY_VALUE,
         moderation_status: 'PENDING',
         order_by: 'update_time',
         desc: true,
@@ -355,7 +355,7 @@ export default function MyProfilePage() {
     if (isPendingTab) {
       const version = resolveSkillReviewVersion(row)
       const query = version ? `?version=${encodeURIComponent(version)}&moderation_status=PENDING` : '?moderation_status=PENDING'
-      navigate(`/skills/${encodeURIComponent(row.asset_id)}${query}`, {
+      navigate(`${assetDetailPath(row.asset_id, row.plugin_type)}${query}`, {
         state: { fromProfile: true, moderationContext: 'pending' },
       })
       return
@@ -363,7 +363,7 @@ export default function MyProfilePage() {
     if (isStarsTab || isLikesTab) {
       const version = row.latest_version?.trim()
       const query = version ? `?version=${encodeURIComponent(version)}` : ''
-      navigate(`/skills/${encodeURIComponent(row.asset_id)}${query}`, { state: { fromProfile: true } })
+      navigate(`${assetDetailPath(row.asset_id, row.plugin_type)}${query}`, { state: { fromProfile: true } })
       return
     }
     const v = row.latest_version?.trim()

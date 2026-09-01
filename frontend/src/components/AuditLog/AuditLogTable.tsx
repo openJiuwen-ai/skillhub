@@ -3,6 +3,7 @@
 import { AlertCircle, Check, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { AuditLogListItem } from '@/api/audit'
+import { assetDetailPath } from '@/utils/pluginType'
 import { getObjectTypeLabel, pickObjectDisplay } from './badges'
 
 interface AuditLogTableProps {
@@ -118,10 +119,10 @@ export function AuditLogTable({
   onOpenDetail,
 }: AuditLogTableProps) {
   const navigate = useNavigate()
-  const handleOpenSkill = (item: AuditLogListItem, slug: string) => {
+  const handleOpenSkill = (item: AuditLogListItem, slug: string, pluginType?: string | null) => {
     const version = item.resource_version?.trim()
     const query = version && version.toLowerCase() !== 'all' ? `?version=${encodeURIComponent(version)}` : ''
-    navigate(`/skills/${encodeURIComponent(slug)}${query}`)
+    navigate(`${assetDetailPath(slug, pluginType || item.asset_plugin_type || item.resource_type)}${query}`)
   }
 
   return (
@@ -160,7 +161,7 @@ export function AuditLogTable({
                     {obj.clickable && obj.slug ? (
                       <button
                         type="button"
-                        onClick={() => handleOpenSkill(item, obj.slug as string)}
+                        onClick={() => handleOpenSkill(item, obj.slug as string, obj.pluginType)}
                         className="truncate text-left text-[#2563EB] hover:underline"
                       >
                         {obj.text}

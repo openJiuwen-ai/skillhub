@@ -74,7 +74,14 @@ import {
   formatMarketSkillVersionLabel,
   marketSkillVersionFilenameSegment,
 } from '@/utils/formatSkillVersionLabel'
-import { getPrimarySkillPluginType, parseSkillLikePluginType } from '@/utils/pluginType'
+import {
+  assetDetailPath,
+  getPrimarySkillPluginType,
+  isAgentAssetPluginType,
+  parseMarketTabType,
+  parseSkillLikePluginType,
+  type MarketTabPluginType,
+} from '@/utils/pluginType'
 
 const MARKETPLACE_ACTIVE_TYPE_KEY = 'skillhub.marketplace.activeType'
 
@@ -158,10 +165,40 @@ function SwarmHubGlyph({ className = '' }: { className?: string }) {
   )
 }
 
-type SkillTypeTab = 'skill' | 'swarmskill'
+type SkillTypeTab = MarketTabPluginType
 
 function getMarketTypeFromSearchParams(searchParams: URLSearchParams): SkillTypeTab | null {
-  return parseSkillLikePluginType(searchParams.get('type'))
+  return parseMarketTabType(searchParams.get('type'))
+}
+
+function AgentPluginGlyph({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect x="5" y="7" width="14" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M9 7V5.5a3 3 0 0 1 6 0V7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <circle cx="9.5" cy="12.5" r="1.1" fill="currentColor" />
+      <circle cx="14.5" cy="12.5" r="1.1" fill="currentColor" />
+    </svg>
+  )
+}
+
+function AgentTemplateGlyph({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <rect x="4.5" y="5" width="15" height="14" rx="2.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M8 9h8M8 12.5h8M8 16h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function AgentMcpGlyph({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12 5v2.2M12 16.8V19M5 12h2.2M16.8 12H19" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M7.05 7.05l1.56 1.56M15.39 15.39l1.56 1.56M16.95 7.05l-1.56 1.56M8.61 15.39l-1.56 1.56" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 type CategoryKey =
@@ -591,7 +628,7 @@ export default function PluginMarketPage() {
   const fallbackType = useMemo<SkillTypeTab>(() => {
     if (typeof window === 'undefined') return getPrimarySkillPluginType()
     try {
-      return parseSkillLikePluginType(window.sessionStorage.getItem(MARKETPLACE_ACTIVE_TYPE_KEY)) ?? getPrimarySkillPluginType()
+      return parseMarketTabType(window.sessionStorage.getItem(MARKETPLACE_ACTIVE_TYPE_KEY)) ?? getPrimarySkillPluginType()
     } catch {
       return getPrimarySkillPluginType()
     }
@@ -623,7 +660,7 @@ export default function PluginMarketPage() {
 
   useEffect(() => {
     const rawType = searchParams.get('type')
-    const normalizedType = parseSkillLikePluginType(rawType)
+    const normalizedType = parseMarketTabType(rawType)
     const resolvedType = normalizedType ?? fallbackType
     if (rawType === resolvedType) return
     setSearchParams(
@@ -682,6 +719,7 @@ export default function PluginMarketPage() {
     categoryId: activeCategoryId,
     tags: selectedTags.length ? selectedTags.join(',') : undefined,
     tagsMatch: 'all',
+    // 推荐精选目前仅 Skill/SwarmSkill 有召回；Agent Tab 退回按下载量，避免空列表。
     orderBy: selectedTags.length > 0
       ? 'install_count'
       : isHotCategory
@@ -689,9 +727,9 @@ export default function PluginMarketPage() {
         : isNewestCategory
           ? 'create_time'
           : isFeaturedCategory
-            ? 'recommend'
+            ? (isAgentAssetPluginType(activeType) ? 'install_count' : 'recommend')
             : undefined,
-    desc: isHotCategory || isNewestCategory ? true : undefined,
+    desc: isHotCategory || isNewestCategory || (isFeaturedCategory && isAgentAssetPluginType(activeType)) ? true : undefined,
   })
 
   const approvedSkillMarketTotalQuery = usePluginListQuery({
@@ -915,7 +953,7 @@ export default function PluginMarketPage() {
   const handleViewPlugin = (plugin: MarketPlugin) => {
     const version = defaultDownloadVersion(plugin)
     const query = version ? `?version=${encodeURIComponent(version)}` : ''
-    navigate(`/skills/${encodeURIComponent(plugin.assetId)}${query}`)
+    navigate(`${assetDetailPath(plugin.assetId, plugin.runTime || activeType)}${query}`)
   }
 
   const handleRefresh = async () => {
@@ -924,11 +962,13 @@ export default function PluginMarketPage() {
 
   const { openPublish } = usePublishDrawer()
   const handlePublishClick = useCallback(() => {
+    // M1：网页发布三类 Agent 尚未开放，Agent Tab 仍引导发 Skill/SwarmSkill。
+    const publishKind = parseSkillLikePluginType(activeType) ?? getPrimarySkillPluginType()
     if (isAuthenticated) {
-      openPublish(activeType)
+      openPublish(publishKind)
       return
     }
-    setPostLoginRedirect(`/profile/publish?kind=${activeType}`)
+    setPostLoginRedirect(`/profile/publish?kind=${publishKind}`)
     navigate('/login')
   }, [activeType, isAuthenticated, navigate, openPublish])
 
@@ -1528,26 +1568,37 @@ export default function PluginMarketPage() {
 
             <div className="mt-16 flex justify-center sm:mt-[72px]">
               <div
-                className="grid h-14 w-full max-w-[408px] grid-cols-2 gap-1 overflow-hidden rounded-[10px] bg-[linear-gradient(99.61deg,rgba(30,84,250,0.10)_0%,rgba(132,46,253,0.10)_100%)] p-0.5"
+                className="flex h-auto w-full max-w-[960px] flex-wrap justify-center gap-1 overflow-hidden rounded-[10px] bg-[linear-gradient(99.61deg,rgba(30,84,250,0.10)_0%,rgba(132,46,253,0.10)_100%)] p-0.5 sm:flex-nowrap"
                 role="tablist"
-                aria-label="skill type tabs"
+                aria-label={t('plugins.marketTypeTabsAria')}
               >
                 {([
                   {
-                    value: 'swarmskill',
-                    label: 'Swarm Skill',
+                    value: 'swarmskill' as const,
+                    label: t('plugins.marketTypeLabel.swarmskill'),
                     icon: SwarmHubGlyph,
-                    activeClasses: 'bg-white text-[#191919] shadow-[0_4px_16px_rgba(0,0,0,0.08)]',
-                    inactiveClasses: 'bg-transparent text-[#191919] hover:bg-transparent',
                   },
                   {
-                    value: 'skill',
-                    label: 'Skill',
+                    value: 'skill' as const,
+                    label: t('plugins.marketTypeLabel.skill'),
                     icon: SkillHubGlyph,
-                    activeClasses: 'bg-white text-[#191919] shadow-[0_4px_16px_rgba(0,0,0,0.08)]',
-                    inactiveClasses: 'bg-transparent text-[#191919] hover:bg-transparent',
                   },
-                ] as const).map(option => {
+                  {
+                    value: 'agent-plugin' as const,
+                    label: t('plugins.marketTypeLabel.agent-plugin'),
+                    icon: AgentPluginGlyph,
+                  },
+                  {
+                    value: 'agent-template' as const,
+                    label: t('plugins.marketTypeLabel.agent-template'),
+                    icon: AgentTemplateGlyph,
+                  },
+                  {
+                    value: 'agent-mcp' as const,
+                    label: t('plugins.marketTypeLabel.agent-mcp'),
+                    icon: AgentMcpGlyph,
+                  },
+                ]).map(option => {
                   const active = activeType === option.value
                   const Icon = option.icon
                   return (
@@ -1557,12 +1608,14 @@ export default function PluginMarketPage() {
                       role="tab"
                       aria-selected={active}
                       onClick={() => handleSetType(option.value)}
-                      className={`flex h-[52px] items-center justify-center gap-2 rounded-[10px] px-4 text-center transition-colors duration-200 ${
-                        active ? option.activeClasses : option.inactiveClasses
+                      className={`flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-[10px] px-2 py-2 text-center transition-colors duration-200 sm:min-h-[52px] sm:gap-2 sm:px-3 ${
+                        active
+                          ? 'bg-white text-[#191919] shadow-[0_4px_16px_rgba(0,0,0,0.08)]'
+                          : 'bg-transparent text-[#191919] hover:bg-white/40'
                       }`}
                     >
-                      <Icon className="h-5 w-5 shrink-0 text-[#191919]" />
-                      <span className="text-[16px] font-semibold leading-[22px] text-[#191919]">
+                      <Icon className="h-4 w-4 shrink-0 text-[#191919] sm:h-5 sm:w-5" />
+                      <span className="text-[12px] font-semibold leading-[16px] text-[#191919] sm:text-[14px] sm:leading-[20px]">
                         {option.label}
                       </span>
                     </button>

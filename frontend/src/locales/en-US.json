@@ -41,8 +41,12 @@
     "marketSubtitleCountSuffix": "",
     "marketTypeLabel": {
       "skill": "Skill",
-      "swarmskill": "Swarm Skills"
+      "swarmskill": "Swarm Skills",
+      "agent-plugin": "Agent Plugin",
+      "agent-template": "Agent Template",
+      "agent-mcp": "Agent MCP"
     },
+    "marketTypeTabsAria": "Switch marketplace asset type",
     "searchPlaceholder": "Search names, descriptions, tags",
     "searchDisabledHint": "Search is disabled while tags are selected. Clear tags to search.",
     "sidebarViewSwitchAria": "Switch between categories and tags",
@@ -88,7 +92,10 @@
     "noMatchingSkillDescription": "Try other keywords, or switch to the Plugins tab",
     "noMatchingSkillByType": {
       "skill": "No matching Skill",
-      "swarmskill": "No matching Swarm Skill"
+      "swarmskill": "No matching Swarm Skill",
+      "agent-plugin": "No matching Agent Plugin",
+      "agent-template": "No matching Agent Template",
+      "agent-mcp": "No matching Agent MCP"
     },
     "pinnedBadge": "Pinned",
     "pinnedBadgeAria": "Pinned for visibility",
@@ -195,7 +202,13 @@
       "cancel": "Cancel",
       "submitModeration": "Submit",
       "moderationSuccess": "Review updated",
-      "moderationFailed": "Review action failed"
+      "moderationFailed": "Review action failed",
+      "notFoundTitle": "This Skill does not exist or was deleted",
+      "notFoundHint": "Invalid asset_id. The Skill may have been deleted, the version is wrong, or the link is outdated."
+    },
+    "assetPage": {
+      "notFoundTitle": "This asset does not exist or was deleted",
+      "notFoundHint": "Invalid asset_id. The asset may have been deleted, the version is wrong, or the link is outdated."
     },
     "githubWatch": {
       "starAll": "Star us",
@@ -367,7 +380,7 @@
     "brand": "openJiuwen",
     "sidebar": {
       "backToHome": "Back to home",
-      "mySkills": "My Skills",
+      "mySkills": "My uploads",
       "myGroups": "My Groups",
       "groupSkills": "Group Skills",
       "myStars": "My favorites",
@@ -378,8 +391,8 @@
       "logout": "Log out",
       "bioPlaceholder": "This user hasn't added a bio yet."
     },
-    "skillsTitle": "My Skills",
-    "skillsSubtitle": "Manage all skills you have published",
+    "skillsTitle": "My uploads",
+    "skillsSubtitle": "View Skill / SwarmSkill / Agent assets you published",
     "groupsTitle": "My Groups",
     "groupsSubtitle": "Quickly view groups you joined or manage. Use Group Management for full controls.",
     "groupSkillsTitle": "Group Skills",
