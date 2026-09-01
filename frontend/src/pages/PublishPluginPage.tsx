@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
-import { getPrimarySkillPluginType, parseSkillLikePluginType } from '@/utils/pluginType'
+import { getPrimarySkillPluginType, parseMarketTabType } from '@/utils/pluginType'
 
 /**
  * `/profile/publish` 旧路由兼容：发布流已统一为右侧抽屉。
@@ -19,7 +19,7 @@ export default function PublishPluginPage() {
   const { openPublish } = usePublishDrawer()
   const publishType = useMemo(() => {
     const kind = new URLSearchParams(location.search).get('kind')
-    return parseSkillLikePluginType(kind) ?? getPrimarySkillPluginType()
+    return parseMarketTabType(kind) ?? getPrimarySkillPluginType()
   }, [location.search])
 
   useEffect(() => {

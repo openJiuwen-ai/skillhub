@@ -47,6 +47,7 @@ import {
   SKILL_LIKE_QUERY_VALUE,
   assetDetailPath,
   isAgentAssetPluginType,
+  parseAgentAssetPluginType,
   parseSkillLikePluginType,
 } from '@/utils/pluginType'
 
@@ -756,8 +757,11 @@ export default function SkillDetailPage() {
   const displayViewCount = viewCountFromVersionApi ?? skill?.viewCount ?? 0
   const displayTags = tagsFromVersionApi !== null ? tagsFromVersionApi : skill?.tags ?? []
   const displayUpdateTime = updateTimeFromVersionApi ?? skill?.updateTime ?? null
-  const publishType = parseSkillLikePluginType(skillRaw?.plugin_type) ?? null
-  const publishReady = publishType !== null && !isAgentDetail
+  const publishType =
+    parseSkillLikePluginType(skillRaw?.plugin_type) ??
+    parseAgentAssetPluginType(skillRaw?.plugin_type) ??
+    null
+  const publishReady = publishType !== null
 
   const handlePublish = useCallback(() => {
     if (!publishType) return

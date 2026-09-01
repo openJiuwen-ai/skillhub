@@ -128,5 +128,20 @@ class TestViewerAgentModeration(unittest.TestCase):
         self.assertFalse(outsider.can_view_skill_asset(asset, db=None))
 
 
+from plugins_market.core.moderation import is_moderated_market_asset_type
+from plugins_market.services.plugin import _ensure_agent_asset_publish_allowed
+
+
+class TestAgentPublishGates(unittest.TestCase):
+    def test_ensure_agent_allows_non_system(self):
+        # 不应再抛；登录用户网页发布由路由鉴权保证
+        _ensure_agent_asset_publish_allowed("agent-plugin", is_system_admin=False)
+        _ensure_agent_asset_publish_allowed("agent-mcp", is_system_admin=True)
+
+    def test_moderated_includes_agents_for_block_nonskill(self):
+        self.assertTrue(is_moderated_market_asset_type("agent-template"))
+        self.assertFalse(is_moderated_market_asset_type("tools"))
+
+
 if __name__ == "__main__":
     unittest.main()

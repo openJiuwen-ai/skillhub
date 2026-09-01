@@ -1,16 +1,20 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
-import { getPrimarySkillPluginType } from '@/utils/pluginType'
+import {
+  getPrimarySkillPluginType,
+  parseMarketTabType,
+  type MarketTabPluginType,
+} from '@/utils/pluginType'
 
-export type PublishDrawerType = 'skill' | 'swarmskill'
+export type PublishDrawerType = MarketTabPluginType
 
 type PublishDrawerContextValue = {
   /** 抽屉是否打开 */
   open: boolean
   /** 当前发布类型 */
   type: PublishDrawerType
-  /** 打开发布 Skill 抽屉 */
+  /** 打开发布抽屉 */
   openPublish: (type?: PublishDrawerType) => void
   /** 关闭抽屉 */
   closePublish: () => void
@@ -33,15 +37,13 @@ export function usePublishDrawer(): PublishDrawerContextValue {
  */
 export function PublishDrawerProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
-  const [type, setType] = useState<PublishDrawerType>(getPrimarySkillPluginType() as PublishDrawerType)
+  const [type, setType] = useState<PublishDrawerType>(getPrimarySkillPluginType())
 
-  const openPublish = useCallback(
-    (nextType: PublishDrawerType = getPrimarySkillPluginType() as PublishDrawerType) => {
-      setType(nextType)
-      setOpen(true)
-    },
-    [],
-  )
+  const openPublish = useCallback((nextType?: PublishDrawerType) => {
+    const resolved = parseMarketTabType(nextType) ?? getPrimarySkillPluginType()
+    setType(resolved)
+    setOpen(true)
+  }, [])
   const closePublish = useCallback(() => setOpen(false), [])
 
   const value = useMemo(

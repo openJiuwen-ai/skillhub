@@ -79,7 +79,6 @@ import {
   getPrimarySkillPluginType,
   isAgentAssetPluginType,
   parseMarketTabType,
-  parseSkillLikePluginType,
   type MarketTabPluginType,
 } from '@/utils/pluginType'
 
@@ -962,13 +961,11 @@ export default function PluginMarketPage() {
 
   const { openPublish } = usePublishDrawer()
   const handlePublishClick = useCallback(() => {
-    // M1：网页发布三类 Agent 尚未开放，Agent Tab 仍引导发 Skill/SwarmSkill。
-    const publishKind = parseSkillLikePluginType(activeType) ?? getPrimarySkillPluginType()
     if (isAuthenticated) {
-      openPublish(publishKind)
+      openPublish(activeType)
       return
     }
-    setPostLoginRedirect(`/profile/publish?kind=${publishKind}`)
+    setPostLoginRedirect(`/profile/publish?kind=${activeType}`)
     navigate('/login')
   }, [activeType, isAuthenticated, navigate, openPublish])
 

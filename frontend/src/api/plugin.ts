@@ -223,12 +223,14 @@ export async function getPluginArtifactDownload(assetId: string, version?: strin
 export class MarketplaceApiError extends Error {
   readonly code?: number
   readonly errorType?: string
+  readonly details?: unknown
 
-  constructor(message: string, code?: number, errorType?: string) {
+  constructor(message: string, code?: number, errorType?: string, details?: unknown) {
     super(message)
     this.name = 'MarketplaceApiError'
     this.code = code
     this.errorType = errorType
+    this.details = details
   }
 }
 
@@ -677,6 +679,32 @@ function publishErrorMessage(err: unknown, fallback: string): string {
  * POST /api/v1/plugins，multipart/form-data。
  * 使用独立 axios 请求，避免带默认 `Content-Type: application/json` 的实例破坏 multipart。
  */
+function formatPublishErrorDetails(details: unknown): string {
+  if (details == null) return ''
+  if (typeof details === 'string') return details.trim()
+  if (Array.isArray(details)) {
+    return details
+      .map(item => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object') {
+          const rec = item as Record<string, unknown>
+          return String(rec.message || rec.msg || rec.error || JSON.stringify(item))
+        }
+        return String(item)
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+  if (typeof details === 'object') {
+    try {
+      return JSON.stringify(details, null, 2)
+    } catch {
+      return String(details)
+    }
+  }
+  return String(details)
+}
+
 export async function publishPlugin(params: {
   file: File
   checksumSha256Hex: string
@@ -716,10 +744,18 @@ export async function publishPlugin(params: {
   } catch (e) {
     if (e instanceof MarketplaceApiError) throw e
     if (axios.isAxiosError(e)) {
-      const detail = (e.response?.data as { detail?: { message?: string; error?: string } })?.detail
+      const detail = (e.response?.data as {
+        detail?: { message?: string; error?: string; details?: unknown }
+      })?.detail
       const msg = detail?.message || e.message || '发布失败'
       const errorType = detail?.error
-      throw new MarketplaceApiError(msg, e.response?.status, errorType)
+      const detailsText = formatPublishErrorDetails(detail?.details)
+      throw new MarketplaceApiError(
+        detailsText ? `${msg}\n${detailsText}` : msg,
+        e.response?.status,
+        errorType,
+        detail?.details,
+      )
     }
     throw new Error(publishErrorMessage(e, '发布失败'))
   }

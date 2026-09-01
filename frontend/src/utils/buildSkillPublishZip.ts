@@ -138,7 +138,12 @@ type SkillFrontmatter = {
 }
 
 export type PublishPluginType = 'skill' | 'swarmskill'
-export type DetectedPublishPluginType = PublishPluginType | 'unknown'
+export type DetectedPublishPluginType =
+  | PublishPluginType
+  | 'agent-plugin'
+  | 'agent-template'
+  | 'agent-mcp'
+  | 'unknown'
 
 export function mapSkillFrontmatterKindToPluginType(kind: string | null | undefined): DetectedPublishPluginType {
   const normalized = kind?.trim().toLowerCase() ?? ''

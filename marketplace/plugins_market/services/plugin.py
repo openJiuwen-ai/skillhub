@@ -188,15 +188,9 @@ def _is_wrapped_agent_asset_type(plugin_type: str | None) -> bool:
 def _ensure_agent_asset_publish_allowed(
     plugin_type: str | None, *, is_system_admin: bool
 ) -> None:
-    """MVP gate: wrapped agent assets can only be published via the system identity."""
-    if _is_wrapped_agent_asset_type(plugin_type) and not is_system_admin:
-        raise PublishError(
-            code=403,
-            error="permission_denied",
-            message="首版仅允许系统管理员发布 agent-plugin / agent-template / agent-mcp 资产",
-            error_code="SKILLHUB_PERMISSION_DENIED",
-            error_class="permission",
-        )
+    """三类 Agent 资产允许已登录用户发布（鉴权在路由层完成）；保留钩子便于后续加配额等限制。"""
+    del plugin_type, is_system_admin
+    return
 
 
 def _should_use_retrieval_search(plugin_type: str | None) -> bool:
@@ -724,21 +718,16 @@ def publish(
             error_code="SKILLHUB_PLUGIN_VERSION_INVALID",
             error_class="validation",
         )
-    # 开关：开启后从发布入口直接拒绝非 skill-like 类型（tools / mcp-stdio / restful-api 等会执行代码的插件），
-    # 不进入后续上传/建库/审核流程，彻底消除“上传即生效”的任意代码执行风险。仅放行 skill / swarmskill。
-    if (
-        settings.block_nonskill_plugin_publish
-        and not is_skill_like_plugin_type(rt)
-        and not (
-            _is_wrapped_agent_asset_type(rt)
-            and is_system_token
-            and is_system_admin_publisher
-        )
-    ):
+    # 开关：开启后拒绝 tools / mcp-stdio / restful-api 等非 moderated 类型；
+    # 放行 Skill / SwarmSkill / 三类 Agent（人工审核或系统身份免审由 _moderation_for_publish 处理）。
+    if settings.block_nonskill_plugin_publish and not is_moderated_market_asset_type(rt):
         raise PublishError(
             code=403,
             error="plugin_type_publish_disabled",
-            message="当前仅支持发布 Skill / TeamSkills 类型插件；tools / mcp-stdio / restful-api 类型发布已关闭",
+            message=(
+                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-mcp；"
+                "tools / mcp-stdio / restful-api 类型发布已关闭"
+            ),
         )
     # Bearer 发布时，市场展示发布者应优先使用当前登录用户身份，而不是包内 metadata.author/publisher_name。
     if publisher_name_override is not None:
