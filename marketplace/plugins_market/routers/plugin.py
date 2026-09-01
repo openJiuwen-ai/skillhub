@@ -719,10 +719,10 @@ async def publish_plugin(
         return ResponseModel(
             code=status.HTTP_200_OK,
             message=(
-                "Skill 已提交，正在自动审查"
+                "资产已提交，正在自动审查"
                 if result.publish_result == PUBLISH_RESULT_REVIEWING
                 else (
-                    "Skill 已提交，等待人工审核"
+                    "资产已提交，等待人工审核"
                     if result.publish_result == PUBLISH_RESULT_PENDING_MODERATION
                     else "Publish plugin successfully"
                 )

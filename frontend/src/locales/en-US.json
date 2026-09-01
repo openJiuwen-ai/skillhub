@@ -462,7 +462,7 @@
     "fieldPkgNameAgentPlugin": "Agent plugin package name (name)",
     "fieldPkgNameAgentTemplate": "Agent template package name (name)",
     "fieldPkgNameAgentMcp": "Agent MCP package name (name)",
-    "fieldPkgNameAgentHelp": "Form field name: name. Prefilled from zip when possible; form input wins on submit and is written to plugin.yaml.",
+    "fieldPkgNameAgentHelp": "Field name: name. Prefilled from zip when possible; form input wins on submit (written to plugin.yaml / manifest.id). Renaming must match in-package paths and tool file references.",
     "namePlaceholderSkill": "my-demo-skill",
     "namePlaceholderSwarmSkill": "my-demo-swarmskill",
     "namePlaceholderAgentPlugin": "my-demo-plugin",

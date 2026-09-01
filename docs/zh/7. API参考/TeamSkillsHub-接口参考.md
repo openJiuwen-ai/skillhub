@@ -26,7 +26,7 @@
 | GET | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version` | 可选 Bearer 或 System Token | — |
 | GET | `/plugins/{asset_id}/versions/{version}/files` | 路径：`asset_id`、`version`；Query：`with_content` | 可选 Bearer 或 System Token | — |
 | GET | `/artifacts/{id}` | 路径：`id`；Query：`version`、`is_cli_download` | 可选 Bearer 或 System Token | — |
-| POST | `/plugins` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`plugin_id`、`plugin_version`、`version_desc`、`force`、`visibility`（agent-* 三类资产仅 System Token） | Bearer **或** System Token（二选一） | 登录用户 / 系统 |
+| POST | `/plugins` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`plugin_id`、`plugin_version`、`version_desc`、`force`、`visibility`、`asset_name`、`display_name`、`description`、`tags` | Bearer **或** System Token（二选一） | 登录用户 / 系统 |
 | GET | `/plugins/publish-template` | Query：`kind`（`plugin` \| `skill` \| `swarmskill`） | Bearer **或** System Token | 登录用户 / 系统 |
 | DELETE | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version`（`all`=删全部） | Bearer **或** System Token | 发布者 / 系统 |
 | POST | `/plugins/skill-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（仅保持原 Skill 集合包语义） | 仅 System Token | 系统 |
@@ -413,9 +413,9 @@ curl "https://swarmskills.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0
 
 ### `POST /plugins`
 
-发布市场资产（multipart zip）。Skill / Swarm Skill 保持原有 Bearer 或 X-System-Token 鉴权；`agent-plugin`、`agent-template`、`agent-mcp` 仅接受 X-System-Token。须携带 `X-Checksum-SHA256`。
+发布市场资产（multipart zip）。Skill / Swarm Skill / 三类 Agent 均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过人工审核。须携带 `X-Checksum-SHA256`。
 
-> 发布 agent-plugin / agent-template / agent-mcp 三类资产时**仅接受 X-System-Token**，包结构与错误码见「多类型资产」一节。
+> 三类 Agent 支持**裸原生包**（含 `manifest.json` / `mcp.json` 等）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「多类型资产」一节。
 
 **请求头**
 
@@ -429,12 +429,16 @@ Content-Type: multipart/form-data
 
 | 字段 | 必填 | 说明 |
 |------|:----:|------|
-| `file` | ✓ | `.zip` 市场资产包 |
+| `file` | ✓ | `.zip` 市场资产包（Skill 须含外层 `plugin.yaml`；Agent 可为裸包或包装包） |
 | `plugin_id` | | 已有资产发新版时填 `asset_id`；首次发布不传 |
-| `plugin_version` | | 如 `1.0.0`（不含 `v` 前缀）或 7 位小写 git commit；缺省从包内 `plugin.yaml` 读取 |
+| `plugin_version` | | 如 `1.0.0`（不含 `v` 前缀）或 7 位小写 git commit；缺省从包内 `plugin.yaml` / manifest 读取 |
 | `version_desc` | | 版本更新说明 |
 | `force` | | `true` 强制覆盖同版本 |
-| `visibility` | | `public`（默认）或 `private`；`private` 对 Skill 和三类 agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
+| `visibility` | | `public`（默认）或 `private`；对 Skill 和三类 agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
+| `asset_name` | | 市场外层 `plugin.yaml.name`；Agent 裸包/包装包均可覆盖，并同步 patch 内层 `manifest.id`（须与包内路径一致） |
+| `display_name` | | 展示名；表单优先于包内 |
+| `description` | | 简短描述；表单优先于包内 |
+| `tags` | | 逗号分隔标签；表单优先于包内 `metadata.tags` |
 
 **示例**
 
@@ -590,7 +594,11 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 ### 发布（`POST /plugins`）
 
-三类资产**仅系统管理员可发布**：必须使用 `X-System-Token`（Bearer 用户令牌发布会被 403 拒绝）；跳过人工审核，但包校验不跳过。`plugin_version` 若显式传入，必须与服务端从包内解析出的市场版本一致（agent-plugin / agent-template 对应内层 manifest 版本，agent-mcp 对应外层 `plugin.yaml.version`）。
+三类 Agent 与 Skill / SwarmSkill 相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入人工审核（`publish_result: pending_moderation`）；系统管理员身份可跳过人工审核。包校验不跳过。
+
+**裸包与表单元数据**：可上传不含外层 `plugin.yaml` 的原生 Agent 包，或通过 `asset_name` / `plugin_version` / `display_name` / `description` / `tags` 覆盖包装包元数据；服务端调用与 Git 同步相同的 `entry_to_publish_zip` 逻辑生成标准市场布局。
+
+对已包装 Agent 资产，若显式传入 `plugin_version` 且与包内市场版本不一致，返回 `400 invalid_version`（须与内层 manifest / 外层 yaml 一致）。Skill 包装包可通过 `plugin_version` 等字段覆盖外层 yaml 后发布。
 
 响应 `data` 在原有字段基础上新增/保证返回：`asset_id`（与 `plugin_id` 同值）、`asset_type`、`plugin_type`。
 
@@ -598,8 +606,8 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 | 状态码 | error | 说明 |
 |--------|-------|------|
-| `403` | `permission_denied` | 非系统 Token 发布 agent-plugin / agent-template / agent-mcp |
-| `400` | `invalid_version` | 请求版本与服务端从包内解析出的市场版本不一致 |
+| `400` | `invalid_version` | Agent 包装包：请求版本与包内市场版本不一致 |
+| `400` | `invalid_plugin_structure` | 裸包布局无法识别；或表单元数据覆盖不支持的类型 |
 | `400` | `invalid_plugin_structure` | 包内存在多个外层 `plugin.yaml` |
 | `400` | `invalid_agent_mcp` / `invalid_agent_plugin_manifest` / `invalid_manifest_json` 等 | 内层包校验失败（message 含具体字段路径） |
 | `422` | `plugin_type_immutable` | 已发布资产的 `asset_type`/`plugin_type` 不可变更 |

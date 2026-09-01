@@ -39,6 +39,7 @@ from plugins_market.core.moderation import (
     is_moderated_market_asset_type,
     is_skill_like_plugin_type,
     is_wrapped_agent_asset_type,
+    moderated_asset_type_label,
     moderation_coalesce_display,
     normalize_skill_like_plugin_type,
 )
@@ -2546,6 +2547,7 @@ def moderate_skill_asset_service(
             error_code="SKILLHUB_PLUGIN_NOT_SKILL",
             error_class="validation",
         )
+    asset_label = moderated_asset_type_label(asset.plugin_type)
     if (
         not settings.allow_self_moderation
         and (auth.acting_user_id or "").strip() == (asset.publisher_id or "").strip()
@@ -2553,7 +2555,7 @@ def moderate_skill_asset_service(
         raise BusinessError(
             code=403,
             error="self_moderation_forbidden",
-            message="审核员不能审核自己发布的 Skill",
+            message=f"审核员不能审核自己发布的{asset_label}",
             error_code="SKILLHUB_REVIEW_SELF_MODERATION_FORBIDDEN",
             error_class="permission",
         )
@@ -2578,7 +2580,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message="Skill 仍处于系统审查中，暂不可执行人工审核",
+                message=f"{asset_label} 仍处于系统审查中，暂不可执行人工审核",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2588,7 +2590,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message="当前 Skill 未进入人工审核阶段",
+                message=f"当前{asset_label}未进入人工审核阶段",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2611,7 +2613,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message="Skill 仍处于系统审查中，暂不可执行人工审核",
+                message=f"{asset_label} 仍处于系统审查中，暂不可执行人工审核",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2619,7 +2621,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message="当前 Skill 未进入人工审核阶段",
+                message=f"当前{asset_label}未进入人工审核阶段",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2686,9 +2688,9 @@ def moderate_skill_asset_service(
         rr_audit = (getattr(vrow, "moderation_reject_reason", None) or "").strip() or None
     act_upper = Action.APPROVE if act == "approve" else Action.REJECT
     if act == "approve":
-        detail_cn = f"审核通过 Skill「{dn}」({sn}) v{vstr}"
+        detail_cn = f"审核通过{asset_label}「{dn}」({sn}) v{vstr}"
     else:
-        detail_cn = f"驳回 Skill「{dn}」({sn}) v{vstr}，原因：{rr_audit or '—'}"
+        detail_cn = f"驳回{asset_label}「{dn}」({sn}) v{vstr}，原因：{rr_audit or '—'}"
     audit_log(
         event_type=EVENT_SKILL_MODERATION,
         action=act_upper,

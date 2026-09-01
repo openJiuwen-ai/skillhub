@@ -219,3 +219,40 @@ def test_moderate_agent_plugin_pending_to_approved(mock_refresh):
     db.refresh(version)
     assert version.publish_result == PUBLISH_RESULT_SUCCESS
     assert version.moderation_status == MODERATION_APPROVED
+
+
+def test_moderate_agent_self_publish_forbidden_message():
+    db = _db()
+    asset = _agent_asset(
+        asset_id="agent-self",
+        publisher_id="mod-admin",
+        moderation_status=MODERATION_PENDING,
+        publish_result=PUBLISH_RESULT_PENDING_MODERATION,
+        public_latest_version=None,
+    )
+    version = _version(
+        asset_id=asset.asset_id,
+        version="1.0.0",
+        moderation_status=MODERATION_PENDING,
+        publish_result=PUBLISH_RESULT_PENDING_MODERATION,
+    )
+    db.add(asset)
+    db.add(version)
+    db.commit()
+
+    with pytest.raises(Exception) as exc:
+        moderate_skill_asset_service(
+            asset_id=asset.asset_id,
+            action="approve",
+            reason=None,
+            version="1.0.0",
+            auth=_mod_admin("mod-admin"),
+            db=db,
+            storage=None,
+        )
+
+    from plugins_market.core.errors import BusinessError
+
+    assert isinstance(exc.value, BusinessError)
+    assert exc.value.error == "self_moderation_forbidden"
+    assert "Agent 插件" in exc.value.message

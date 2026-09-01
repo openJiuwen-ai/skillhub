@@ -55,6 +55,18 @@ def is_moderated_market_asset_type(plugin_type: str | None) -> bool:
     return normalize_market_plugin_type(plugin_type) in MODERATED_MARKET_ASSET_TYPES
 
 
+def moderated_asset_type_label(plugin_type: str | None) -> str:
+    """审核/错误文案中的资产类型中文简称。"""
+    labels = {
+        "skill": "Skill",
+        "swarmskill": "SwarmSkill",
+        RUNTIME_AGENT_PLUGIN: "Agent 插件",
+        RUNTIME_AGENT_TEMPLATE: "Agent 模版",
+        RUNTIME_AGENT_MCP: "Agent MCP",
+    }
+    return labels.get(normalize_market_plugin_type(plugin_type), "市场资产")
+
+
 def moderation_coalesce_display(status: str | None) -> str:
     """空值视为已通过（兼容旧数据）。"""
     s = (status or "").strip()

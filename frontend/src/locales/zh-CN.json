@@ -462,7 +462,7 @@
     "fieldPkgNameAgentPlugin": "Agent 插件包名",
     "fieldPkgNameAgentTemplate": "Agent 模板包名",
     "fieldPkgNameAgentMcp": "Agent MCP 包名",
-    "fieldPkgNameAgentHelp": "字段名：name。可从 zip 预填；提交时以表单输入为准，服务端写入 plugin.yaml。",
+    "fieldPkgNameAgentHelp": "字段名：name。可从 zip 预填；提交时以表单为准并写入 plugin.yaml / manifest.id。改名须与包内目录及 tools 路径一致。",
     "namePlaceholderSkill": "my-demo-skill",
     "namePlaceholderSwarmSkill": "my-demo-swarmskill",
     "namePlaceholderAgentPlugin": "my-demo-plugin",

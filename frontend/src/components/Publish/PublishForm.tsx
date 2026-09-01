@@ -703,20 +703,11 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     e.preventDefault()
     if (!skillFormReady || uploading || successMsg || typeMismatchError) return
 
-    if (!isAgentMode) {
-      const nameErrorKey = validateSkillName(skillPkgName)
-      if (nameErrorKey) {
-        setFieldErrors(prev => ({ ...prev, skillPkgName: t(nameErrorKey) }))
-        scrollToFirstError()
-        return
-      }
-    } else {
-      const nameErrorKey = validateSkillName(skillPkgName)
-      if (nameErrorKey) {
-        setFieldErrors(prev => ({ ...prev, skillPkgName: t(nameErrorKey) }))
-        scrollToFirstError()
-        return
-      }
+    const nameErrorKey = validateSkillName(skillPkgName)
+    if (nameErrorKey) {
+      setFieldErrors(prev => ({ ...prev, skillPkgName: t(nameErrorKey) }))
+      scrollToFirstError()
+      return
     }
     const versionErrorKey = validatePluginVersion(pluginVersion)
     if (versionErrorKey) {
