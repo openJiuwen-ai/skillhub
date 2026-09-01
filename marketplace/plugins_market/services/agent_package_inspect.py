@@ -92,7 +92,7 @@ def _read_persona_markdown(
         text = _read_zip_text(zf, raw)
         if text is None:
             continue
-        rel = normalized[len(prefix) :]
+        rel = normalized[len(prefix):]
         parts.append((rel, text.strip()))
     if not parts:
         return None

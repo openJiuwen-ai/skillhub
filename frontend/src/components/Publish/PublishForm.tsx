@@ -619,6 +619,20 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     return next
   }, [fieldErrors, skillIconFile])
 
+  const formFieldLabels = useMemo(() => resolvePublishFormFieldLabels(selectedType, t), [selectedType, t])
+  const fieldLabelByKey = useMemo(
+    (): Record<PublishFieldKey, string> => ({
+      skillPkgName: formFieldLabels.pkgName,
+      pluginVersion: t('publish.fieldVersionSkill'),
+      skillDisplayName: formFieldLabels.displayName,
+      skillDescription: formFieldLabels.description,
+      skillTags: formFieldLabels.tags,
+      skillFolder: formFieldLabels.folder,
+      skillIcon: formFieldLabels.icon,
+    }),
+    [formFieldLabels, t],
+  )
+
   const canSubmit = Boolean(
     skillFormReady &&
       !uploading &&
@@ -640,19 +654,6 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     { value: 'agent-template' as const, label: t('publish.typeAgentTemplate') },
     { value: 'agent-mcp' as const, label: t('publish.typeAgentMcp') },
   ]
-  const formFieldLabels = useMemo(() => resolvePublishFormFieldLabels(selectedType, t), [selectedType, t])
-  const fieldLabelByKey = useMemo(
-    (): Record<PublishFieldKey, string> => ({
-      skillPkgName: formFieldLabels.pkgName,
-      pluginVersion: t('publish.fieldVersionSkill'),
-      skillDisplayName: formFieldLabels.displayName,
-      skillDescription: formFieldLabels.description,
-      skillTags: formFieldLabels.tags,
-      skillFolder: formFieldLabels.folder,
-      skillIcon: formFieldLabels.icon,
-    }),
-    [formFieldLabels, t],
-  )
   const detectedTypeLabel =
     detectedType === 'swarmskill'
       ? t('publish.typeSwarmSkill')

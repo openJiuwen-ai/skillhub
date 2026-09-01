@@ -12,6 +12,7 @@ import { pluginCardTooltipProps } from '@/components/Common/pluginCardTooltip'
 import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
 import { Breadcrumbs } from '@/components/Common/Breadcrumbs'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
+import { VersionFileTree } from '@/components/Common/VersionFileTree'
 import { defaultVersionPreviewDoc, isTextFile } from '@/utils/fileTypeUtils'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
 import {
@@ -799,7 +800,7 @@ export default function AssetDetailPage() {
           setFileContentLoading(false)
         })
     },
-    [skill, selectedVersion],
+    [skill, selectedVersion, t],
   )
 
   useEffect(() => {
@@ -1475,7 +1476,7 @@ export default function AssetDetailPage() {
                       {activeTab === 'files' && (
                         <div className="flex h-[480px] overflow-hidden rounded-lg border border-slate-200">
                       {/* File list */}
-                      <div className="w-64 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50">
+                      <div className="w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50">
                         {fileListLoading ? (
                           <div className="flex h-full items-center justify-center">
                             <CircularProgress size={20} />
@@ -1487,24 +1488,12 @@ export default function AssetDetailPage() {
                         ) : fileList.length === 0 ? (
                           <p className="p-3 text-xs text-slate-400">{t('plugins.detail.filesEmpty')}</p>
                         ) : (
-                          <ul className="py-1">
-                            {fileList.map(f => (
-                              <li key={f.path}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFileClick(f.path)}
-                                  className={`w-full truncate px-3 py-1.5 text-left text-xs transition ${
-                                    selectedFile === f.path
-                                      ? 'bg-indigo-50 font-medium text-indigo-700'
-                                      : 'text-slate-700 hover:bg-slate-100'
-                                  }`}
-                                  title={f.path}
-                                >
-                                  {f.path}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
+                          <VersionFileTree
+                            files={fileList}
+                            selectedPath={selectedFile}
+                            onSelectFile={handleFileClick}
+                            ariaLabel={t('plugins.detail.filesTreeAriaLabel')}
+                          />
                         )}
                       </div>
 

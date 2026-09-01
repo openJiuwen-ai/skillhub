@@ -179,7 +179,8 @@
       "filesLoading": "Loading file list…",
       "filesEmpty": "No files in this version.",
       "filesListError": "Failed to load file list",
-      "filesContentError": "Failed to load file content"
+      "filesContentError": "Failed to load file content",
+      "filesTreeAriaLabel": "Package file tree"
     },
     "skillPage": {
       "backHome": "Back to home",

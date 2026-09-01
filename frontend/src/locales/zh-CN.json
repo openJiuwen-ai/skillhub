@@ -179,7 +179,8 @@
       "filesLoading": "正在加载文件列表…",
       "filesEmpty": "该版本暂无文件。",
       "filesListError": "获取文件列表失败",
-      "filesContentError": "获取文件内容失败"
+      "filesContentError": "获取文件内容失败",
+      "filesTreeAriaLabel": "版本包文件树"
     },
     "skillPage": {
       "backHome": "返回主页",
