@@ -12,7 +12,7 @@ import { pluginCardTooltipProps } from '@/components/Common/pluginCardTooltip'
 import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
 import { Breadcrumbs } from '@/components/Common/Breadcrumbs'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
-import { isTextFile } from '@/utils/fileTypeUtils'
+import { defaultVersionPreviewDoc, isTextFile } from '@/utils/fileTypeUtils'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
 import {
   getPluginArtifactDownload,
@@ -100,11 +100,11 @@ function normalizePublishResult(
   return 'publish_success'
 }
 
-type SkillDetailQueryItem = MarketplacePluginItem & {
+type AssetDetailQueryItem = MarketplacePluginItem & {
   __versionDetail?: PluginVersionDetailData
 }
 
-function versionDetailToListItem(raw: PluginVersionDetailData): SkillDetailQueryItem {
+function versionDetailToListItem(raw: PluginVersionDetailData): AssetDetailQueryItem {
   return {
     asset_id: raw.asset_id,
     asset_type: raw.asset_type,
@@ -565,7 +565,7 @@ function SkillHeaderIcon({ displayName, iconUri }: { displayName: string; iconUr
   )
 }
 
-export default function SkillDetailPage() {
+export default function AssetDetailPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const location = useLocation()
@@ -629,8 +629,8 @@ export default function SkillDetailPage() {
   const detailTypeQuery = isAssetRoute ? AGENT_ASSET_QUERY_VALUE : SKILL_LIKE_QUERY_VALUE
   const alternateTypeQuery = isAssetRoute ? SKILL_LIKE_QUERY_VALUE : AGENT_ASSET_QUERY_VALUE
 
-  const detailQuery = useQuery<SkillDetailQueryItem | null>(
-    ['skill-detail-raw', assetId, requestedVersion, fromPendingModerationEntry, detailTypeQuery],
+  const detailQuery = useQuery<AssetDetailQueryItem | null>(
+    ['asset-detail-raw', assetId, requestedVersion, fromPendingModerationEntry, detailTypeQuery],
     async () => {
       const loadByType = async (pluginType: string) => {
         const response = await getPlugins({
@@ -811,7 +811,8 @@ export default function SkillDetailPage() {
     setFileListError(null)
     setFileContent(null)
     setFileContentError(null)
-    void getVersionFileList(skill.assetId, selectedVersion, { withContent: 'workflow.md', signal: ac.signal })
+    const previewDoc = defaultVersionPreviewDoc(isAgentDetail)
+    void getVersionFileList(skill.assetId, selectedVersion, { withContent: previewDoc, signal: ac.signal })
       .then(data => {
         if (ac.signal.aborted) return
         setFileList(data.files)
@@ -820,8 +821,10 @@ export default function SkillDetailPage() {
           setSelectedFile(data.content_path)
           setFileContent(data.content)
         } else {
-          // SKILL.md 不存在时优先选第一个 .md，否则第一个可预览文件
+          // 默认文档不存在时：Agent 优先 README.md，Skill 优先 SKILL.md，否则第一个可预览文本
+          const preferredMd = isAgentDetail ? 'readme.md' : 'skill.md'
           const first =
+            data.files.find(f => f.path.split('/').pop()?.toLowerCase() === preferredMd) ??
             data.files.find(f => f.path.toLowerCase().endsWith('.md')) ??
             data.files.find(f => isTextFile(f.path))
           if (first) handleFileClick(first.path)
@@ -833,7 +836,7 @@ export default function SkillDetailPage() {
         setFileListLoading(false)
       })
     return () => ac.abort()
-  }, [activeTab, skill?.assetId, selectedVersion, handleFileClick])
+  }, [activeTab, handleFileClick, isAgentDetail, selectedVersion, skill])
 
   const displayInstallCount = installCountFromVersionApi ?? skill?.installCount ?? 0
   const isOwnSkill = useMemo(
@@ -957,7 +960,7 @@ export default function SkillDetailPage() {
       setPublishFailedReason('')
       setModerationStatus('APPROVED')
       setModerationRejectReason('')
-      void queryClient.invalidateQueries(['skill-detail-raw', assetId])
+      void queryClient.invalidateQueries(['asset-detail-raw', assetId])
       void queryClient.invalidateQueries({ queryKey: ['admin-pending-skills'] })
       void queryClient.invalidateQueries({ queryKey: ['skill-moderation-audit-history'] })
       window.alert(t('plugins.skillPage.moderationSuccess'))
@@ -989,7 +992,7 @@ export default function SkillDetailPage() {
       setModerationRejectReason(reason)
       setRejectDialogOpen(false)
       setRejectDraft('')
-      void queryClient.invalidateQueries(['skill-detail-raw', assetId])
+      void queryClient.invalidateQueries(['asset-detail-raw', assetId])
       void queryClient.invalidateQueries({ queryKey: ['admin-pending-skills'] })
       void queryClient.invalidateQueries({ queryKey: ['skill-moderation-audit-history'] })
       window.alert(t('plugins.skillPage.moderationSuccess'))
