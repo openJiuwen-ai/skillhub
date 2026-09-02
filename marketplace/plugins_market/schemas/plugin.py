@@ -252,7 +252,10 @@ class PluginVersionDetail(BaseModel):
     )
     update_time: Optional[int] = Field(
         None,
-        description="当前查看的版本记录上传时间（market_asset_versions.create_time，毫秒）",
+        description=(
+            "详情页更新时间（毫秒）：优先资产 update_time（审核通过会刷新），"
+            "否则版本 create_time"
+        ),
     )
     viewer_is_market_moderation_admin: bool = Field(
         False,

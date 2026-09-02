@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -202,6 +203,7 @@ def test_moderate_agent_plugin_pending_to_approved(mock_refresh):
     db.add(asset)
     db.add(version)
     db.commit()
+    old_update_time = asset.update_time
 
     result = moderate_skill_asset_service(
         asset_id=asset.asset_id,
@@ -217,8 +219,11 @@ def test_moderate_agent_plugin_pending_to_approved(mock_refresh):
     assert result.publish_result == PUBLISH_RESULT_SUCCESS
     assert result.moderation_status == MODERATION_APPROVED
     db.refresh(version)
+    db.refresh(asset)
     assert version.publish_result == PUBLISH_RESULT_SUCCESS
     assert version.moderation_status == MODERATION_APPROVED
+    assert asset.update_time is not None
+    assert int(asset.update_time) > int(old_update_time or 0)
 
 
 def test_moderate_agent_self_publish_forbidden_message():
@@ -256,3 +261,20 @@ def test_moderate_agent_self_publish_forbidden_message():
     assert isinstance(exc.value, BusinessError)
     assert exc.value.error == "self_moderation_forbidden"
     assert "Agent 插件" in exc.value.message
+
+
+def test_version_detail_update_time_uses_newer_asset_or_version_timestamp():
+    from plugins_market.services.plugin import _version_detail_update_time_ms
+
+    assert _version_detail_update_time_ms(
+        SimpleNamespace(update_time=200),
+        SimpleNamespace(create_time=100),
+    ) == 200
+    assert _version_detail_update_time_ms(
+        SimpleNamespace(update_time=50),
+        SimpleNamespace(create_time=80),
+    ) == 80
+    assert _version_detail_update_time_ms(
+        SimpleNamespace(update_time=None),
+        SimpleNamespace(create_time=12),
+    ) == 12
