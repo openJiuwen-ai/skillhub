@@ -118,12 +118,12 @@ def _market_translate_message_for_cli(msg: str) -> str:
 
     m_quoted = re.search(r"'([^']+)'", text)
     quoted = m_quoted.group(1).strip() if m_quoted else ""
-    if "asset not found" in lower or "not found" in lower:
+    if "asset not found" in lower:
         return f"Asset '{quoted}' not found." if quoted else "Asset not found."
-    if "不存在" in text or "未找到" in text:
+    plugin_missing = "插件" in text or "plugin" in lower or "skill" in lower
+    if plugin_missing and ("不存在" in text or "未找到" in text):
         return f"Asset '{quoted}' not found." if quoted else "Asset not found."
-    # Fallback for mojibake output in non-UTF8 terminals (often contains replacement chars like "�").
-    if "�" in text and quoted:
+    if "�" in text and quoted and plugin_missing:
         return f"Asset '{quoted}' not found."
 
     return text
@@ -197,16 +197,20 @@ def _redact_url_for_cli_error(url: str) -> str:
     return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
+def _market_wrong_url_404_message(resp: Response) -> str:
+    prev = (resp.text or "")[:240].replace("\n", " ").strip()
+    return (
+        f"HTTP 404 from market URL (wrong host/port/path or marketplace unreachable). "
+        f"Check URL and path; base URL is from --market-url or OPENJIUWEN_MARKET_URL. Preview: {prev!r}"
+    )
+
+
 def _market_format_http_error(resp: Response) -> str:
     """Build a user-facing error line from a failed HTTP response (shared by market client calls)."""
     status = resp.status_code
     ct = (resp.headers.get("content-type") or "").lower()
     if status == 404 and "application/json" not in ct:
-        prev = (resp.text or "")[:240].replace("\n", " ").strip()
-        return (
-            f"HTTP 404 from market URL (wrong host/port/path or not the marketplace API). "
-            f"Check URL and path; base URL is from --market-url or OPENJIUWEN_MARKET_URL. Preview: {prev!r}"
-        )
+        return _market_wrong_url_404_message(resp)
     try:
         j = resp.json()
     except Exception as exc:
@@ -216,6 +220,12 @@ def _market_format_http_error(resp: Response) -> str:
         else:
             msg = f"HTTP {status} (failed to parse error body: {exc})"
         return msg
+
+    if status == 404:
+        human = _market_humanize_error_body(j) if isinstance(j, dict) else None
+        generic_404 = (human or "").strip().lower() in {"", "not found", "not found."}
+        if generic_404:
+            return _market_wrong_url_404_message(resp)
 
     if isinstance(j, dict):
         human = _market_humanize_error_body(j)
