@@ -65,3 +65,39 @@ def test_extract_agent_template_profile() -> None:
     kinds = {item["kind"] for item in profile["capabilities"]}
     assert kinds == {"skill", "tool", "mcp"}
     assert profile["manifest_tags"] == ["健康"]
+
+
+def test_extract_agent_mcp_profile() -> None:
+    manifest = {
+        "version": "1.0.0",
+        "package_type": "mcp",
+        "id": "amap",
+        "name": "高德地图",
+        "description": "Map MCP",
+        "category": "Location",
+        "source": "builtin",
+        "integration": {"type": "remote-mcp", "file": "mcp.json"},
+        "credentials": {"type": "token", "file": "token-schema.json"},
+        "skills": [{"dir": "skills/search"}],
+        "examples": {"zh": ["查询附近的餐厅"]},
+        "tags": [{"zh": "地图"}],
+    }
+    zf = _build_zip(
+        {
+            "manifest.json": json.dumps(manifest),
+            "mcp.json": json.dumps({"mcpServers": {"demo": {"url": "https://example.com/mcp"}}}),
+            "skills/search/SKILL.md": (
+                "---\nname: search\ndescription: Search skill\n---\n"
+            ),
+        }
+    )
+    with zf:
+        profile = extract_agent_package_profile(zf)
+    assert profile is not None
+    assert profile["package_type"] == "mcp"
+    assert profile["integration_type"] == "remote-mcp"
+    assert profile["credentials_type"] == "token"
+    assert profile["category"] == "Location"
+    assert profile["quick_inputs"] == ["查询附近的餐厅"]
+    kinds = {item["kind"] for item in profile["capabilities"]}
+    assert kinds == {"skill", "integration"}

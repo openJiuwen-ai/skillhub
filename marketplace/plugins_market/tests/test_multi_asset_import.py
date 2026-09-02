@@ -47,6 +47,34 @@ def _zip_text(package: Path, suffix: str) -> str:
         return zf.read(member).decode("utf-8")
 
 
+def _write_mcp_manifest_entry(
+    mcp_dir: Path,
+    *,
+    asset_id: str = "amap",
+    version: str = "1.0.0",
+    name: str = "Amap",
+    description: str = "Map tools",
+) -> None:
+    mcp_dir.mkdir(parents=True, exist_ok=True)
+    (mcp_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": version,
+                "package_type": "mcp",
+                "id": asset_id,
+                "name": name,
+                "description": description,
+                "integration": {"type": "remote-mcp", "file": "mcp.json"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (mcp_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": {asset_id: {"url": "https://example.com/mcp"}}}),
+        encoding="utf-8",
+    )
+
+
 def test_raw_team_skill_preserves_kind_and_roles(tmp_path: Path) -> None:
     entry = tmp_path / "team-entry"
     entry.mkdir()
@@ -160,11 +188,25 @@ def test_raw_agent_template_is_wrapped_from_manifest_name(tmp_path: Path) -> Non
 def test_raw_agent_mcp_is_wrapped_from_entry_name_and_overrides(tmp_path: Path) -> None:
     entry = tmp_path / "amap"
     entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": "3.1.4",
+                "package_type": "mcp",
+                "id": "amap",
+                "name": "高德地图",
+                "description": "地图查询能力",
+                "display_name": {"zh": "高德地图"},
+                "display_description": {"zh": "地图查询能力"},
+                "integration": {"type": "remote-mcp", "file": "mcp.json"},
+            }
+        ),
+        encoding="utf-8",
+    )
     (entry / "mcp.json").write_text(
         json.dumps({"mcpServers": {"amap-maps": {"url": "https://example.com/mcp"}}}),
         encoding="utf-8",
     )
-    (entry / "README.md").write_text("# Amap", encoding="utf-8")
 
     package, name, version = _normalize(
         entry,
@@ -293,11 +335,7 @@ def test_mixed_asset_collection_returns_precise_types_and_uses_system_token(
 ) -> None:
     _write_raw_agent_plugin(tmp_path / "wellness-plugin")
     mcp = tmp_path / "amap"
-    mcp.mkdir()
-    (mcp / "mcp.json").write_text(
-        json.dumps({"mcpServers": {"amap": {"url": "https://example.com/mcp"}}}),
-        encoding="utf-8",
-    )
+    _write_mcp_manifest_entry(mcp, asset_id="amap", name="Amap", description="Map tools")
     (tmp_path / "manifest.json").write_text(
         json.dumps(
             {
@@ -341,10 +379,12 @@ def test_mcp_builtin_index_supplies_per_asset_market_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mcp = tmp_path / "amap"
-    mcp.mkdir()
-    (mcp / "mcp.json").write_text(
-        json.dumps({"mcpServers": {"amap": {"url": "https://example.com/mcp"}}}),
-        encoding="utf-8",
+    _write_mcp_manifest_entry(
+        mcp,
+        asset_id="amap",
+        version="1.0.0",
+        name="placeholder",
+        description="placeholder",
     )
     (tmp_path / "index.json").write_text(
         json.dumps(
@@ -386,7 +426,7 @@ def test_mcp_builtin_index_supplies_per_asset_market_metadata(
     assert result.summary.ok == 1
     assert published_meta[0]["display_name"] == "高德地图"
     assert published_meta[0]["short_desc"] == "地图查询能力"
-    assert published_meta[0]["version"] == "0.0.1"
+    assert published_meta[0]["version"] == "1.0.0"
 
 
 def test_mcp_builtin_index_rejects_duplicate_source(tmp_path: Path) -> None:

@@ -107,12 +107,11 @@ def _resolved_override_text(overrides: dict[str, Any], key: str, fallback: str) 
 
 
 def _is_raw_agent_mcp_entry(entry: Path) -> bool:
-    if (entry / "mcp.json").is_file() or (entry / "cli.json").is_file():
-        return True
-    skills = entry / "skills"
-    if not skills.is_dir():
+    manifest_path = entry / "manifest.json"
+    if not manifest_path.is_file():
         return False
-    return (skills / "SKILL.md").is_file() or any(skills.glob("*/SKILL.md"))
+    package_type = load_json_object_file(manifest_path, label="manifest.json").get("package_type")
+    return package_type == "mcp"
 
 
 def _patch_native_agent_manifest(
@@ -131,6 +130,8 @@ def _patch_native_agent_manifest(
         manifest["id"] = name
     elif runtime_type == RUNTIME_AGENT_TEMPLATE:
         manifest["name"] = name
+    elif runtime_type == RUNTIME_AGENT_MCP:
+        manifest["id"] = name
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -149,16 +150,20 @@ def _build_native_agent_staging(
     manifest: dict[str, Any] | None = None,
     allow_publish_overrides: bool = False,
 ) -> tuple[str, str]:
-    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP):
         if manifest is None:
-            raise ValueError(
-                "manifest.json is required for agent-plugin/agent-template entries"
+            manifest = load_json_object_file(
+                entry / "manifest.json", label="manifest.json"
             )
         plugin_manifest = runtime_type == RUNTIME_AGENT_PLUGIN
-        identity = manifest.get("id") if plugin_manifest else manifest.get("name")
+        mcp_manifest = runtime_type == RUNTIME_AGENT_MCP
+        if mcp_manifest:
+            identity = manifest.get("id")
+        else:
+            identity = manifest.get("id") if plugin_manifest else manifest.get("name")
         name = str(identity or "").strip()
         version = str(manifest.get("version") or "").strip()
-        fallback_name = manifest.get("name") if plugin_manifest else manifest.get("name")
+        fallback_name = manifest.get("name")
         fallback_desc = manifest.get("description")
         display_name = localized_manifest_text(
             manifest.get("display_name")
@@ -199,7 +204,7 @@ def _build_native_agent_staging(
 
     staging.mkdir(parents=True, exist_ok=True)
     shutil.copytree(entry, staging / name, dirs_exist_ok=True)
-    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP):
         _patch_native_agent_manifest(
             staging / name,
             runtime_type=runtime_type,
@@ -238,11 +243,10 @@ def detect_import_entry_type(entry: Path) -> str | None:
         manifest_type = {
             "plugin": RUNTIME_AGENT_PLUGIN,
             "agent_template": RUNTIME_AGENT_TEMPLATE,
+            "mcp": RUNTIME_AGENT_MCP,
         }.get(package_type)
         if manifest_type is not None:
             return manifest_type
-    if _is_raw_agent_mcp_entry(entry):
-        return RUNTIME_AGENT_MCP
     return RUNTIME_SKILL if is_simple_skill_entry(entry) else None
 
 

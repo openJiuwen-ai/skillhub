@@ -3142,7 +3142,7 @@ def _load_agent_package_profile_for_version(
     plugin_type: str | None,
 ) -> AgentPackageProfile | None:
     normalized = (plugin_type or "").strip().lower()
-    if normalized not in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+    if normalized not in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP):
         return None
     from plugins_market.core.cache import cache_get, cache_set  # noqa: PLC0415
 

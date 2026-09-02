@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Read-only inspection of agent-plugin / agent-template inner manifest for detail API."""
+"""Read-only inspection of agent inner manifest for detail API."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import zipfile
 from typing import Any
 
 from plugins_market.validation.localized_manifest import (
+    localized_manifest_examples,
     localized_manifest_text,
     localized_manifest_tags,
 )
@@ -30,7 +31,6 @@ def _find_inner_manifest_member(names: list[str]) -> str | None:
             candidates.append(normalized)
     if not candidates:
         return None
-    # Prefer nested inner payload: outer/name/manifest.json
     candidates.sort(key=lambda item: (-item.count("/"), len(item)))
     return candidates[0]
 
@@ -100,59 +100,58 @@ def _read_persona_markdown(
     return "\n\n---\n\n".join(body for _, body in parts if body)
 
 
-def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
-    """Parse inner manifest.json (+ persona/skills) for agent detail display."""
-    names = [info.filename for info in zf.infolist() if not info.is_dir()]
-    manifest_member = _find_inner_manifest_member(names)
-    if not manifest_member:
-        return None
-    raw_manifest = _read_zip_text(zf, manifest_member)
-    if not raw_manifest:
-        return None
-    try:
-        manifest = json.loads(raw_manifest)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(manifest, dict):
-        return None
+def _append_skill_capabilities(
+    zf: zipfile.ZipFile,
+    names: list[str],
+    payload_prefix: str,
+    skills: Any,
+    capabilities: list[dict[str, str]],
+) -> None:
+    if not isinstance(skills, list):
+        return
+    for index, entry in enumerate(skills):
+        if not isinstance(entry, dict):
+            continue
+        rel_dir = entry.get("dir")
+        if not isinstance(rel_dir, str) or not rel_dir.strip():
+            continue
+        skill_rel = rel_dir.strip().replace("\\", "/").removeprefix("./").rstrip("/")
+        skill_path = f"{payload_prefix}{skill_rel}/SKILL.md"
+        if skill_rel == "skills":
+            flat_path = f"{payload_prefix}skills/SKILL.md"
+            if flat_path in {_normalize_zip_path(n) for n in names}:
+                skill_path = flat_path
+        skill_member = next(
+            (n for n in names if _normalize_zip_path(n) == skill_path),
+            None,
+        )
+        skill_name = posixpath.basename(skill_rel) or f"skill-{index + 1}"
+        skill_desc = ""
+        if skill_member:
+            skill_raw = _read_zip_text(zf, skill_member)
+            if skill_raw:
+                frontmatter, _ = parse_skill_frontmatter(skill_raw.encode("utf-8"))
+                skill_name = str(frontmatter.get("name") or skill_name)
+                skill_desc = str(frontmatter.get("description") or "")
+        capabilities.append(
+            {
+                "kind": "skill",
+                "id": skill_name,
+                "name": skill_name,
+                "description": skill_desc,
+            }
+        )
 
-    package_type = manifest.get("package_type")
-    if package_type not in ("plugin", "agent_template"):
-        return None
 
-    prefix = _payload_prefix(manifest_member)
+def _extract_plugin_template_profile(
+    zf: zipfile.ZipFile,
+    names: list[str],
+    manifest: dict[str, Any],
+    prefix: str,
+    package_type: str,
+) -> dict[str, Any]:
     capabilities: list[dict[str, str]] = []
-
-    skills = manifest.get("skills")
-    if isinstance(skills, list):
-        for index, entry in enumerate(skills):
-            if not isinstance(entry, dict):
-                continue
-            rel_dir = entry.get("dir")
-            if not isinstance(rel_dir, str) or not rel_dir.strip():
-                continue
-            skill_rel = rel_dir.strip().replace("\\", "/").removeprefix("./").rstrip("/")
-            skill_path = f"{prefix}{skill_rel}/SKILL.md"
-            skill_member = next(
-                (n for n in names if _normalize_zip_path(n) == skill_path),
-                None,
-            )
-            skill_name = posixpath.basename(skill_rel) or f"skill-{index + 1}"
-            skill_desc = ""
-            if skill_member:
-                skill_raw = _read_zip_text(zf, skill_member)
-                if skill_raw:
-                    frontmatter, _ = parse_skill_frontmatter(skill_raw.encode("utf-8"))
-                    skill_name = str(frontmatter.get("name") or skill_name)
-                    skill_desc = str(frontmatter.get("description") or "")
-            capabilities.append(
-                {
-                    "kind": "skill",
-                    "id": skill_name,
-                    "name": skill_name,
-                    "description": skill_desc,
-                }
-            )
+    _append_skill_capabilities(zf, names, prefix, manifest.get("skills"), capabilities)
 
     for field, kind in (("tools", "tool"), ("rails", "rail")):
         entries = manifest.get(field)
@@ -192,16 +191,97 @@ def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
             if text:
                 quick_inputs.append(text)
 
-    category = manifest.get("category")
-    source = manifest.get("source")
-
-    return {
+    profile = {
         "package_type": package_type,
-        "category": category if isinstance(category, str) and category.strip() else None,
-        "source": source if isinstance(source, str) and source.strip() else None,
+        "category": manifest.get("category") if isinstance(manifest.get("category"), str) else None,
+        "source": manifest.get("source") if isinstance(manifest.get("source"), str) else None,
         "default_init_input": _localized_item_text(manifest.get("default_init_input")) or None,
         "quick_inputs": quick_inputs,
         "persona_markdown": persona_markdown,
         "capabilities": capabilities,
         "manifest_tags": localized_manifest_tags(manifest.get("tags")),
     }
+    for key in ("category", "source"):
+        value = profile.get(key)
+        if isinstance(value, str) and not value.strip():
+            profile[key] = None
+    return profile
+
+
+def _extract_mcp_profile(
+    zf: zipfile.ZipFile,
+    names: list[str],
+    manifest: dict[str, Any],
+    prefix: str,
+) -> dict[str, Any]:
+    capabilities: list[dict[str, str]] = []
+    _append_skill_capabilities(zf, names, prefix, manifest.get("skills"), capabilities)
+
+    integration = manifest.get("integration")
+    integration_type: str | None = None
+    if isinstance(integration, dict):
+        raw_type = integration.get("type")
+        if isinstance(raw_type, str) and raw_type.strip():
+            integration_type = raw_type.strip()
+        integration_file = integration.get("file")
+        if isinstance(integration_file, str) and integration_file.strip():
+            rel = integration_file.strip().replace("\\", "/").removeprefix("./")
+            capabilities.append(
+                {
+                    "kind": "integration",
+                    "id": rel,
+                    "name": integration_type or rel,
+                    "description": rel,
+                }
+            )
+
+    credentials = manifest.get("credentials")
+    credentials_type: str | None = None
+    if isinstance(credentials, dict):
+        raw_cred = credentials.get("type")
+        if isinstance(raw_cred, str) and raw_cred.strip():
+            credentials_type = raw_cred.strip()
+
+    quick_inputs = localized_manifest_examples(manifest.get("examples"))
+
+    category = manifest.get("category")
+    source = manifest.get("source")
+
+    return {
+        "package_type": "mcp",
+        "category": category if isinstance(category, str) and category.strip() else None,
+        "source": source if isinstance(source, str) and source.strip() else None,
+        "integration_type": integration_type,
+        "credentials_type": credentials_type,
+        "quick_inputs": quick_inputs,
+        "capabilities": capabilities,
+        "manifest_tags": localized_manifest_tags(manifest.get("tags")),
+    }
+
+
+def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
+    """Parse inner manifest.json for agent-plugin / agent-template / agent-mcp detail display."""
+    names = [info.filename for info in zf.infolist() if not info.is_dir()]
+    manifest_member = _find_inner_manifest_member(names)
+    if not manifest_member:
+        return None
+    raw_manifest = _read_zip_text(zf, manifest_member)
+    if not raw_manifest:
+        return None
+    try:
+        manifest = json.loads(raw_manifest)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(manifest, dict):
+        return None
+
+    package_type = manifest.get("package_type")
+    prefix = _payload_prefix(manifest_member)
+
+    if package_type in ("plugin", "agent_template"):
+        return _extract_plugin_template_profile(zf, names, manifest, prefix, package_type)
+
+    if package_type == "mcp":
+        return _extract_mcp_profile(zf, names, manifest, prefix)
+
+    return None

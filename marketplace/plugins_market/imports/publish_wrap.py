@@ -16,6 +16,7 @@ from typing import Any
 from plugins_market.core.errors import PublishError
 from plugins_market.imports.bundle_safe_extract import skill_import_extract_zip_to_dir
 from plugins_market.imports.skill_entries import detect_import_entry_type, entry_to_publish_zip
+from plugins_market.imports.yaml_util import load_json_object_file
 from plugins_market.validation._pipeline import _find_plugin_yaml_path
 from plugins_market.validation.constants import (
     RUNTIME_AGENT_MCP,
@@ -268,13 +269,21 @@ def prepare_publish_zip_content(
                 error_class="validation",
             )
         if entry_type == RUNTIME_AGENT_MCP and not entry_overrides.get("version"):
-            raise PublishError(
-                code=400,
-                error="invalid_plugin_config",
-                message="裸 agent-mcp 发布须提供 version（plugin_version 或表单版本号）",
-                error_code="SKILLHUB_PUBLISH_MCP_VERSION_REQUIRED",
-                error_class="validation",
-            )
+            manifest_path = entry / "manifest.json"
+            manifest_version = ""
+            if manifest_path.is_file():
+                manifest_version = str(
+                    load_json_object_file(manifest_path, label="manifest.json").get("version")
+                    or ""
+                ).strip()
+            if not manifest_version:
+                raise PublishError(
+                    code=400,
+                    error="invalid_plugin_config",
+                    message="裸 agent-mcp 发布须提供 version（manifest.json、plugin_version 或表单版本号）",
+                    error_code="SKILLHUB_PUBLISH_MCP_VERSION_REQUIRED",
+                    error_class="validation",
+                )
         return _normalize_entry_to_bytes(
             entry,
             entry_key=entry.name,

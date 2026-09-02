@@ -112,6 +112,23 @@ def _plugin_manifest(**extra: object) -> str:
     return json.dumps(manifest)
 
 
+def _mcp_manifest(asset_id: str, **extra: object) -> str:
+    manifest: dict[str, object] = {
+        "version": "1.0.0",
+        "package_type": "mcp",
+        "id": asset_id,
+        "name": asset_id,
+        "description": "Test MCP asset",
+        "integration": {"type": "remote-mcp", "file": "mcp.json"},
+    }
+    manifest.update(extra)
+    return json.dumps(manifest)
+
+
+def _remote_mcp_json() -> str:
+    return json.dumps({"mcpServers": {"demo": {"url": "https://example.com/mcp"}}})
+
+
 def test_agent_template_without_skills_is_allowed() -> None:
     content = _build_wrapped_zip(
         "coach",
@@ -165,7 +182,7 @@ def test_agent_template_rejects_invalid_non_first_skill() -> None:
     assert "缺少 SKILL.md" in exc_info.value.detail["message"]
 
 
-def test_agent_template_validates_undeclared_on_disk_skill() -> None:
+def test_agent_template_allows_undeclared_on_disk_skill() -> None:
     content = _build_wrapped_zip(
         "coach",
         "agent-template",
@@ -176,9 +193,8 @@ def test_agent_template_validates_undeclared_on_disk_skill() -> None:
             "skills/meal-planner/SKILL.md": "---\nname: meal-planner\n---\n",
         },
     )
-    with pytest.raises(PublishError) as exc_info:
-        _validate_template(content, "coach")
-    assert exc_info.value.detail["error"] == "invalid_skill_md"
+    result = _validate_template(content, "coach")
+    assert result["asset_type"] == "agent-template"
 
 
 def test_agent_template_rejects_invalid_subagent_json() -> None:
@@ -257,11 +273,64 @@ def test_agent_plugin_accepts_connector_without_tools() -> None:
     assert result["asset_type"] == "agent-plugin"
 
 
+def test_agent_template_without_persona_is_allowed() -> None:
+    content = _build_wrapped_zip(
+        "coach",
+        "agent-template",
+        {
+            "manifest.json": json.dumps(
+                {
+                    "version": "1.0.0",
+                    "package_type": "agent_template",
+                    "name": "coach",
+                    "description": "Office wellness coach",
+                }
+            ),
+        },
+    )
+    result = _validate_template(content, "coach")
+    assert result["asset_type"] == "agent-template"
+
+
+def test_agent_mcp_rejects_missing_manifest() -> None:
+    content = _build_wrapped_zip(
+        "legacy-mcp",
+        "agent-mcp",
+        {
+            "mcp.json": _remote_mcp_json(),
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_mcp(content, "legacy-mcp")
+    assert "manifest.json" in exc_info.value.detail["message"]
+
+
+def test_agent_mcp_accepts_manifest_remote() -> None:
+    content = _build_wrapped_zip(
+        "amap",
+        "agent-mcp",
+        {
+            "manifest.json": _mcp_manifest(
+                "amap",
+                display_name={"zh": "高德地图"},
+                description="地图查询",
+                category="Location",
+                source="builtin",
+            ),
+            "mcp.json": _remote_mcp_json(),
+        },
+    )
+    result = _validate_mcp(content, "amap")
+    assert result["asset_type"] == "agent-mcp"
+    assert result["integration_type"] == "remote-mcp"
+
+
 def test_agent_mcp_rejects_dangerous_second_server() -> None:
     content = _build_wrapped_zip(
         "dangerous-mcp",
         "agent-mcp",
         {
+            "manifest.json": _mcp_manifest("dangerous-mcp"),
             "mcp.json": json.dumps(
                 {
                     "mcpServers": {
@@ -273,7 +342,6 @@ def test_agent_mcp_rejects_dangerous_second_server() -> None:
                     }
                 }
             ),
-            "README.md": "# MCP",
         },
     )
     with pytest.raises(PublishError) as exc_info:

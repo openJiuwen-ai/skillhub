@@ -80,11 +80,22 @@ def test_prepare_publish_wraps_bare_agent_plugin_with_form_overrides(tmp_path: P
 def test_prepare_publish_wraps_bare_agent_mcp_requires_version(tmp_path: Path) -> None:
     entry = tmp_path / "amap"
     entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "package_type": "mcp",
+                "id": "amap",
+                "name": "高德地图",
+                "description": "地图查询能力",
+                "integration": {"type": "remote-mcp", "file": "mcp.json"},
+            }
+        ),
+        encoding="utf-8",
+    )
     (entry / "mcp.json").write_text(
         json.dumps({"mcpServers": {"amap-maps": {"url": "https://example.com/mcp"}}}),
         encoding="utf-8",
     )
-    (entry / "README.md").write_text("# Amap", encoding="utf-8")
     raw_zip = tmp_path / "raw.zip"
     _zip_dir(entry, raw_zip)
 
@@ -95,6 +106,39 @@ def test_prepare_publish_wraps_bare_agent_mcp_requires_version(tmp_path: Path) -
             overrides=PublishMetadataOverrides(asset_name="amap"),
             default_author="tester",
         )
+
+
+def test_prepare_publish_wraps_bare_agent_mcp_with_manifest_version(tmp_path: Path) -> None:
+    entry = tmp_path / "amap"
+    entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": "3.1.4",
+                "package_type": "mcp",
+                "id": "amap",
+                "name": "高德地图",
+                "description": "地图查询能力",
+                "integration": {"type": "remote-mcp", "file": "mcp.json"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (entry / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"amap-maps": {"url": "https://example.com/mcp"}}}),
+        encoding="utf-8",
+    )
+    raw_zip = tmp_path / "raw.zip"
+    _zip_dir(entry, raw_zip)
+
+    wrapped = prepare_publish_zip_content(
+        raw_zip.read_bytes(),
+        filename="amap.zip",
+        overrides=PublishMetadataOverrides(asset_name="amap"),
+        default_author="tester",
+    )
+    plugin_yaml = yaml.safe_load(_zip_text(wrapped, "/plugin.yaml"))
+    assert plugin_yaml["version"] == "3.1.4"
 
 
 def _write_wrapped_skill(entry: Path, *, name: str = "demo-skill") -> None:

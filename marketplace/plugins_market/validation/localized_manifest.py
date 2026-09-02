@@ -29,3 +29,21 @@ def localized_manifest_tags(value: Any) -> list[str]:
             seen.add(label)
             result.append(label)
     return result
+
+
+def localized_manifest_examples(value: Any) -> list[str]:
+    """Flatten manifest examples (locale map or list) into display strings."""
+    if isinstance(value, dict):
+        result: list[str] = []
+        for locale in ("zh", "en"):
+            items = value.get(locale)
+            if isinstance(items, list):
+                for item in items:
+                    text = localized_manifest_text(item)
+                    if text:
+                        result.append(text)
+        if result:
+            return result
+    if isinstance(value, list):
+        return [text for item in value if (text := localized_manifest_text(item))]
+    return []

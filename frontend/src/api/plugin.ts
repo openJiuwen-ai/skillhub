@@ -478,6 +478,8 @@ export interface AgentPackageProfileData {
   package_type?: string | null
   category?: string | null
   source?: string | null
+  integration_type?: string | null
+  credentials_type?: string | null
   default_init_input?: string | null
   quick_inputs?: string[]
   persona_markdown?: string | null

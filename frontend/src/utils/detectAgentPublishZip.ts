@@ -62,12 +62,6 @@ function findManifestPath(paths: string[]): string | null {
   return normalized.find(p => p === 'manifest.json') ?? null
 }
 
-function findBareMcpMarker(paths: string[]): boolean {
-  const normalized = paths.map(p => p.replace(/\\/g, '/').replace(/\/$/, ''))
-  if (normalized.some(p => p === 'mcp.json' || p === 'cli.json')) return true
-  if (normalized.some(p => p.endsWith('/mcp.json') || p.endsWith('/cli.json'))) return true
-  return normalized.some(p => /\/skills\/(?:[^/]+\/)?SKILL\.md$/i.test(p))
-}
 
 async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZipInspectResult> {
   const manifestPath = findManifestPath(paths)
@@ -80,6 +74,21 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
       throw new Error('AGENT_ZIP_INVALID_MANIFEST')
     }
     const packageType = firstNonEmpty(manifest.package_type)
+    if (packageType === 'mcp') {
+      const name = firstNonEmpty(manifest.id)
+      const version = firstNonEmpty(manifest.version)
+      if (!name) throw new Error('AGENT_ZIP_MISSING_NAME')
+      const fallbackDesc = localizedText(manifest.description)
+      return {
+        pluginType: 'agent-mcp',
+        name,
+        version,
+        displayName: localizedText(manifest.display_name) || localizedText(manifest.name) || name,
+        description: localizedText(manifest.display_description) || fallbackDesc,
+        tags: localizedTags(manifest.tags),
+        isBareNative: true,
+      }
+    }
     const pluginType = normalizePluginType(
       packageType === 'plugin'
         ? 'agent-plugin'
@@ -105,22 +114,6 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
       displayName: localizedText(manifest.display_name) || fallbackName || name,
       description: localizedText(manifest.display_description) || fallbackDesc,
       tags: localizedTags(manifest.tags),
-      isBareNative: true,
-    }
-  }
-
-  if (findBareMcpMarker(paths)) {
-    const topDir =
-      paths
-        .map(p => p.replace(/\\/g, '/').split('/')[0])
-        .find(part => part && !part.startsWith('.')) || 'asset'
-    return {
-      pluginType: 'agent-mcp',
-      name: topDir,
-      version: '',
-      displayName: topDir,
-      description: '',
-      tags: [],
       isBareNative: true,
     }
   }

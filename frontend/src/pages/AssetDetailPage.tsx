@@ -434,6 +434,7 @@ function agentCapabilityKindLabel(kind: string, t: (key: string) => string): str
   if (normalized === 'tool') return t('plugins.skillPage.agentCapabilityKindTool')
   if (normalized === 'rail') return t('plugins.skillPage.agentCapabilityKindRail')
   if (normalized === 'mcp') return t('plugins.skillPage.agentCapabilityKindMcp')
+  if (normalized === 'integration') return t('plugins.skillPage.agentCapabilityKindIntegration')
   return kind
 }
 
@@ -446,7 +447,13 @@ function AgentPackageProfilePanel({
 }) {
   const capabilities = profile.capabilities ?? []
   const quickInputs = profile.quick_inputs ?? []
-  const hasMeta = Boolean(profile.category?.trim() || profile.source?.trim())
+  const isMcp = profile.package_type === 'mcp'
+  const hasMeta = Boolean(
+    profile.category?.trim()
+    || profile.source?.trim()
+    || profile.integration_type?.trim()
+    || profile.credentials_type?.trim(),
+  )
   const hasCapabilities = capabilities.length > 0
   const hasPersona = Boolean(profile.persona_markdown?.trim())
   const hasQuickInputs = quickInputs.length > 0
@@ -470,6 +477,18 @@ function AgentPackageProfilePanel({
               <div>
                 <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentSource')}</div>
                 <div className="mt-1 text-[13px] text-[#404040]">{profile.source}</div>
+              </div>
+            ) : null}
+            {profile.integration_type?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentIntegrationType')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.integration_type}</div>
+              </div>
+            ) : null}
+            {profile.credentials_type?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentCredentialsType')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.credentials_type}</div>
               </div>
             ) : null}
           </div>
@@ -516,7 +535,9 @@ function AgentPackageProfilePanel({
       {hasQuickInputs ? (
         <section>
           <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
-            {t('plugins.skillPage.agentQuickInputsHeading')}
+            {isMcp
+              ? t('plugins.skillPage.agentExamplesHeading')
+              : t('plugins.skillPage.agentQuickInputsHeading')}
           </h2>
           <div className="flex flex-wrap gap-2">
             {quickInputs.map((text, index) => (

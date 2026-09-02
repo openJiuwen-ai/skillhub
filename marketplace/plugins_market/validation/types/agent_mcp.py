@@ -1,22 +1,30 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Validation for independently wrapped JiuwenSwarm MCP packages."""
+"""Validation for JiuwenSwarm MCP packages (manifest.json driven)."""
 
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import urllib.parse
 import zipfile
 from typing import Any, NoReturn
 
 from plugins_market.core.errors import PublishError
-from plugins_market.validation.constants import MAX_JSON_BYTES, RUNTIME_AGENT_MCP
-from plugins_market.validation.content_security import (
-    find_dangerous_command,
-    find_dangerous_zip_script,
+from plugins_market.validation.constants import (
+    DISPLAY_NAME_MAX_LEN,
+    MAX_JSON_BYTES,
+    PLUGIN_TAGS_MAX_COUNT,
+    PLUGIN_TAG_MAX_LEN,
+    PLUGIN_YAML_DESCRIPTION_MAX_LEN,
+    RUNTIME_AGENT_MCP,
 )
-from plugins_market.validation.types.skill import parse_skill_frontmatter, validate_skill_frontmatter
+from plugins_market.validation.content_security import find_dangerous_zip_script
+from plugins_market.validation.localized_manifest import (
+    localized_manifest_tags,
+    localized_manifest_text,
+)
 from plugins_market.validation.types.wrapped_asset import validate_wrapped_outer_layout
 from plugins_market.validation.zip_utils import DecompressCounter, safe_read_zip_member, validate_png_icon_bytes
 
@@ -33,6 +41,7 @@ _TRANSPORTS = {
     "stdio",
 }
 _SECRET_KEY_RE = re.compile(r"(?:token|secret|password|api[_-]?key|authorization|credential)", re.I)
+_INTEGRATION_TYPES = frozenset({"stdio-mcp", "remote-mcp", "cli", "skill-only"})
 
 
 def _invalid(message: str) -> NoReturn:
@@ -46,7 +55,6 @@ def _invalid(message: str) -> NoReturn:
 
 
 def _dangerous(message: str) -> NoReturn:
-    """危险内容：单独错误码，便于调用方与安全审计区分结构错误。"""
     raise PublishError(
         code=400,
         error="dangerous_content",
@@ -56,10 +64,52 @@ def _dangerous(message: str) -> NoReturn:
     )
 
 
-def _scan_command_string(command: str, label: str) -> None:
-    reason = find_dangerous_command(command)
-    if reason:
-        _dangerous(f"{label} 包含危险命令（{reason}）")
+def _required_string(data: dict[str, Any], field: str) -> str:
+    value: Any = data
+    for part in field.split("."):
+        if not isinstance(value, dict):
+            value = None
+            break
+        value = value.get(part)
+    if not isinstance(value, str) or not value.strip():
+        _invalid(f"manifest.{field} 必填且必须为非空字符串")
+    return value.strip()
+
+
+def _safe_relative_path(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        _invalid(f"manifest.{field} 必须为非空相对路径")
+    raw = value.strip().replace("\\", "/")
+    if raw.startswith("/") or (len(raw) >= 2 and raw[1] == ":"):
+        _invalid(f"manifest.{field} 不得使用绝对路径")
+    if ".." in raw.split("/"):
+        _invalid(f"manifest.{field} 不得包含 '..' 路径段")
+    normalized = posixpath.normpath(raw)
+    if normalized in ("", ".", "..") or normalized.startswith("../"):
+        _invalid(f"manifest.{field} 不得越出内层资产目录")
+    return normalized.removeprefix("./")
+
+
+def _member_exists(members: dict[str, str], path: str) -> bool:
+    original = members.get(path)
+    return original is not None and not original.replace("\\", "/").endswith("/")
+
+
+def _read_manifest(
+    zf: zipfile.ZipFile,
+    original_path: str,
+    counter: DecompressCounter,
+) -> dict[str, Any]:
+    raw = safe_read_zip_member(zf, original_path, counter)
+    if len(raw) > MAX_JSON_BYTES:
+        _invalid(f"manifest.json 超过大小上限（最大 {MAX_JSON_BYTES // 1024 // 1024} MB）")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _invalid(f"manifest.json 不是合法 UTF-8 JSON：{exc}")
+    if not isinstance(value, dict):
+        _invalid("manifest.json 根结构必须为对象")
+    return value
 
 
 def _read_json(
@@ -78,6 +128,14 @@ def _read_json(
     if not isinstance(value, dict):
         _invalid(f"{label} 根结构必须为对象")
     return value
+
+
+def _scan_command_string(command: str, label: str) -> None:
+    from plugins_market.validation.content_security import find_dangerous_command
+
+    reason = find_dangerous_command(command)
+    if reason:
+        _dangerous(f"{label} 包含危险命令（{reason}）")
 
 
 def _validate_platform_commands(value: Any, label: str) -> None:
@@ -149,7 +207,8 @@ def _validate_string_map(value: Any, label: str) -> None:
             _invalid(f"{label}.{key} 禁止硬编码凭据，必须使用 ${{VAR}} 占位符")
 
 
-def _validate_mcp(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _validate_mcp(data: dict[str, Any]) -> str:
+    """Return inferred integration type from mcp.json first server."""
     servers = data.get("mcpServers")
     if not isinstance(servers, dict) or not servers:
         _invalid("mcp.json.mcpServers 必须为非空对象")
@@ -197,12 +256,11 @@ def _validate_mcp(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             _invalid(f"mcp server {server_name!r} 的 timeout 必须为正数毫秒")
 
     if first is None:
-        # servers 非空已在上文校验，此处仅为类型收窄的防御分支
         _invalid("mcp.json.mcpServers 必须为非空对象")
     if isinstance(first.get("command"), str) and first["command"].strip():
-        return "stdio-mcp", first
+        return "stdio-mcp"
     if isinstance(first.get("url"), str) and first["url"].strip():
-        return "remote-mcp", first
+        return "remote-mcp"
     _invalid("mcp.json 首个 server 没有可用的 command 或 url")
 
 
@@ -240,35 +298,67 @@ def _validate_token_schema(data: dict[str, Any]) -> set[str]:
     return keys
 
 
-def _validate_bundled_skills(
+def _validate_market_fields(display_name: str, short_desc: str, tags: list[str]) -> None:
+    if len(display_name) > DISPLAY_NAME_MAX_LEN:
+        _invalid(f"内层 manifest 派生的展示名不得超过 {DISPLAY_NAME_MAX_LEN} 个字符")
+    if len(short_desc) > PLUGIN_YAML_DESCRIPTION_MAX_LEN:
+        _invalid(f"内层 manifest 派生的描述不得超过 {PLUGIN_YAML_DESCRIPTION_MAX_LEN} 个字符")
+    if len(tags) > PLUGIN_TAGS_MAX_COUNT:
+        _invalid(f"内层 manifest 派生的标签不得超过 {PLUGIN_TAGS_MAX_COUNT} 个")
+    for index, tag in enumerate(tags):
+        if len(tag) > PLUGIN_TAG_MAX_LEN:
+            _invalid(f"内层 manifest.tags[{index}] 派生值不得超过 {PLUGIN_TAG_MAX_LEN} 个字符")
+
+
+def _validate_declared_skills(
     zf: zipfile.ZipFile,
     members: dict[str, str],
     payload_prefix: str,
+    skills: Any,
     counter: DecompressCounter,
-    *,
-    has_mcp: bool,
+) -> int:
+    if skills is None:
+        return 0
+    if not isinstance(skills, list):
+        _invalid("manifest.skills 必须为数组")
+    count = 0
+    for index, item in enumerate(skills):
+        if not isinstance(item, dict):
+            _invalid(f"manifest.skills[{index}] 必须为对象")
+        relative = _safe_relative_path(item.get("dir"), f"skills[{index}].dir")
+        skill_name = posixpath.basename(relative.rstrip("/"))
+        skill_path = f"{payload_prefix}{relative}/SKILL.md"
+        flat_path = f"{payload_prefix}{relative.rstrip('/')}"
+        if relative.rstrip("/").endswith("SKILL.md") or relative == "SKILL.md":
+            _invalid(f"manifest.skills[{index}].dir 应指向 Skill 目录而非 SKILL.md 文件")
+        original = members.get(skill_path)
+        if original is None and flat_path.endswith("/SKILL.md"):
+            original = members.get(flat_path)
+        if original is None and relative == "skills":
+            flat_skill = f"{payload_prefix}skills/SKILL.md"
+            original = members.get(flat_skill)
+            if original is not None:
+                skill_path = flat_skill
+                skill_name = "skills"
+        if original is None:
+            _invalid(f"manifest.skills[{index}] 声明的目录缺少 SKILL.md：{relative}")
+        count += 1
+    return count
+
+
+def _count_skill_only_md(
+    members: dict[str, str],
+    payload_prefix: str,
 ) -> int:
     count = 0
-    for normalized, original in sorted(members.items()):
+    for normalized in members:
         if not normalized.startswith(payload_prefix) or not normalized.endswith("/SKILL.md"):
             continue
         relative = normalized[len(payload_prefix):]
         parts = relative.split("/")
         is_flat = parts == ["skills", "SKILL.md"]
         is_nested = len(parts) == 3 and parts[0] == "skills" and parts[-1] == "SKILL.md"
-        is_special = parts == ["skill", "SKILL.md"]
-        if not (is_flat or is_nested or is_special):
-            continue
-        if is_special and not has_mcp:
-            _invalid("skill/SKILL.md 仅允许作为带 mcp.json 包的附属 Skill")
-        raw = safe_read_zip_member(zf, original, counter)
-        fm, _ = parse_skill_frontmatter(raw)
-        fm_name = fm.get("name")
-        expected_name = parts[1] if is_nested else fm_name
-        if not isinstance(expected_name, str):
-            _invalid(f"{relative} frontmatter name 必填")
-        validate_skill_frontmatter(fm, dir_name=expected_name, yaml_name=expected_name)
-        if not is_special:
+        if is_flat or is_nested:
             count += 1
     return count
 
@@ -279,10 +369,27 @@ def _validate_payload_scripts(
     payload_prefix: str,
     counter: DecompressCounter,
 ) -> None:
-    """扫描内层脚本文件（.py/.sh 等）中的危险执行内容。"""
     hit = find_dangerous_zip_script(zf, members, payload_prefix, counter)
     if hit:
         _dangerous(f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
+
+
+def _scan_mcp_json_security(
+    zf: zipfile.ZipFile,
+    members: dict[str, str],
+    payload_prefix: str,
+    mcp_relative: str,
+    counter: DecompressCounter,
+) -> None:
+    from plugins_market.validation.content_security import find_dangerous_mcp_json
+
+    original = members.get(f"{payload_prefix}{mcp_relative}")
+    if original is None:
+        return
+    raw = safe_read_zip_member(zf, original, counter)
+    reason = find_dangerous_mcp_json(raw, label=mcp_relative)
+    if reason:
+        _dangerous(f"{mcp_relative} 包含危险命令（{reason}）")
 
 
 def validate_agent_mcp_layout(
@@ -291,70 +398,155 @@ def validate_agent_mcp_layout(
     asset_name: str,
     counter: DecompressCounter,
 ) -> dict[str, Any]:
-    """Validate one native MCP payload and derive its runtime integration form."""
+    """Validate one MCP payload declared by manifest.json."""
     members = validate_wrapped_outer_layout(zf, prefix, asset_name)
     outer = prefix.rstrip("/")
     payload_prefix = f"{outer}/{asset_name}/"
+    manifest_path = f"{payload_prefix}manifest.json"
+    manifest_original = members.get(manifest_path)
+    if manifest_original is None or not _member_exists(members, manifest_path):
+        _invalid(f"内层目录 {asset_name!r} 缺少 manifest.json")
 
-    mcp_path = f"{payload_prefix}mcp.json"
-    cli_path = f"{payload_prefix}cli.json"
-    token_path = f"{payload_prefix}token-schema.json"
-    has_mcp = mcp_path in members
-    has_cli = cli_path in members
+    manifest = _read_manifest(zf, manifest_original, counter)
+    package_type = _required_string(manifest, "package_type")
+    if package_type != "mcp":
+        _invalid(f"manifest.package_type 必须为 'mcp'，实际为 {package_type!r}")
+
+    identity = _required_string(manifest, "id")
+    if identity != asset_name:
+        _invalid(
+            f"manifest.id {identity!r} 必须与 plugin.yaml.name {asset_name!r} 一致"
+        )
+    version = _required_string(manifest, "version")
+    name = _required_string(manifest, "name")
+    description = _required_string(manifest, "description")
+
+    integration = manifest.get("integration")
+    if not isinstance(integration, dict):
+        _invalid("manifest.integration 必须为对象")
+    integration_type = integration.get("type")
+    if not isinstance(integration_type, str) or integration_type.strip() not in _INTEGRATION_TYPES:
+        _invalid(
+            "manifest.integration.type 必须为 stdio-mcp、remote-mcp、cli 或 skill-only"
+        )
+    integration_type = integration_type.strip()
+
+    integration_file: str | None = None
+    if integration_type in ("stdio-mcp", "remote-mcp", "cli"):
+        integration_file = _safe_relative_path(integration.get("file"), "integration.file")
+        if not _member_exists(members, f"{payload_prefix}{integration_file}"):
+            _invalid(f"manifest.integration.file 指向的文件不存在：{integration_file}")
+    elif integration.get("file") not in (None, ""):
+        _invalid("manifest.integration.file 仅适用于 stdio-mcp、remote-mcp 或 cli")
+
+    credentials_type: str | None = None
+    credentials = manifest.get("credentials")
+    token_schema_keys: set[str] = set()
+    if credentials is not None:
+        if not isinstance(credentials, dict):
+            _invalid("manifest.credentials 必须为对象")
+        cred_type = credentials.get("type")
+        if not isinstance(cred_type, str) or not cred_type.strip():
+            _invalid("manifest.credentials.type 必填且必须为非空字符串")
+        credentials_type = cred_type.strip()
+        cred_file = credentials.get("file")
+        if credentials_type == "token":
+            token_relative = _safe_relative_path(cred_file, "credentials.file")
+            token_path = f"{payload_prefix}{token_relative}"
+            if not _member_exists(members, token_path):
+                _invalid(f"manifest.credentials.file 指向的文件不存在：{token_relative}")
+            schema = _read_json(zf, members[token_path], counter, "token-schema.json")
+            token_schema_keys = _validate_token_schema(schema)
+        elif cred_file not in (None, ""):
+            _invalid("manifest.credentials.file 仅适用于 credentials.type=token")
+
+    icon_bytes = b""
+    icon_field = manifest.get("icon")
+    if isinstance(icon_field, str) and icon_field.strip():
+        icon_relative = _safe_relative_path(icon_field, "icon")
+        icon_member = f"{payload_prefix}{icon_relative}"
+        if not _member_exists(members, icon_member):
+            _invalid(f"manifest.icon 指向的文件不存在：{icon_relative}")
+        raw_icon = safe_read_zip_member(zf, members[icon_member], counter)
+        if icon_relative.lower().endswith(".png"):
+            validate_png_icon_bytes(raw_icon, path=icon_member)
+        icon_bytes = raw_icon
+
+    skill_count = _validate_declared_skills(
+        zf, members, payload_prefix, manifest.get("skills"), counter
+    )
 
     mcp_data: dict[str, Any] | None = None
     cli_data: dict[str, Any] | None = None
-    mcp_integration: str | None = None
-    if has_mcp:
-        mcp_data = _read_json(zf, members[mcp_path], counter, "mcp.json")
-        mcp_integration, _ = _validate_mcp(mcp_data)
-
-    if has_cli:
-        cli_data = _read_json(zf, members[cli_path], counter, "cli.json")
-        _validate_cli(cli_data)
-
-    skill_count = _validate_bundled_skills(
-        zf, members, payload_prefix, counter, has_mcp=has_mcp
-    )
-    _validate_payload_scripts(zf, members, payload_prefix, counter)
-    if has_cli:
-        integration_type = "cli"
-    elif mcp_integration is not None:
-        integration_type = mcp_integration
-    elif skill_count:
-        integration_type = "skill-only"
-    else:
-        _invalid("agent-mcp 内层缺少可用入口：mcp.json、cli.json 或 skills/**/SKILL.md")
-
-    schema_keys: set[str] = set()
-    if token_path in members:
-        schema = _read_json(zf, members[token_path], counter, "token-schema.json")
-        schema_keys = _validate_token_schema(schema)
     placeholders: set[str] = set()
-    if mcp_data is not None:
+
+    if integration_type in ("stdio-mcp", "remote-mcp"):
+        assert integration_file is not None
+        mcp_data = _read_json(
+            zf,
+            members[f"{payload_prefix}{integration_file}"],
+            counter,
+            integration_file,
+        )
+        inferred = _validate_mcp(mcp_data)
+        if inferred != integration_type:
+            _invalid(
+                f"manifest.integration.type 为 {integration_type!r}，"
+                f"但 {integration_file} 内容对应 {inferred!r}"
+            )
+        _scan_mcp_json_security(zf, members, payload_prefix, integration_file, counter)
         placeholders.update(_collect_placeholders(mcp_data))
-    if cli_data is not None:
+    elif integration_type == "cli":
+        assert integration_file is not None
+        if not integration_file.lower().endswith("cli.json"):
+            _invalid("manifest.integration.file 在 cli 类型下应指向 cli.json")
+        cli_data = _read_json(
+            zf,
+            members[f"{payload_prefix}{integration_file}"],
+            counter,
+            integration_file,
+        )
+        _validate_cli(cli_data)
         placeholders.update(_collect_placeholders(cli_data))
-    missing = sorted(placeholders - schema_keys)
-    if missing:
-        _invalid(f"agent-mcp 凭据占位符没有 token schema 录入项：{', '.join(missing)}")
+    elif integration_type == "skill-only":
+        if skill_count == 0:
+            skill_count = _count_skill_only_md(members, payload_prefix)
+        if skill_count < 1:
+            _invalid("skill-only MCP 至少必须包含一个 skills/**/SKILL.md")
+
+    if placeholders and credentials_type != "cli-oauth":
+        missing = sorted(placeholders - token_schema_keys)
+        if missing:
+            _invalid(f"agent-mcp 凭据占位符没有 token schema 录入项：{', '.join(missing)}")
+
+    _validate_payload_scripts(zf, members, payload_prefix, counter)
 
     readme_path = f"{payload_prefix}README.md"
     detail_desc = ""
-    if readme_path in members:
+    if _member_exists(members, readme_path):
         detail_desc = safe_read_zip_member(zf, members[readme_path], counter).decode(
             "utf-8", errors="replace"
         )
 
-    outer_icon = f"{outer}/icon.png"
-    icon_bytes = b""
-    if outer_icon in members:
-        icon_bytes = safe_read_zip_member(zf, members[outer_icon], counter)
-        validate_png_icon_bytes(icon_bytes, path=outer_icon)
+    if not icon_bytes:
+        outer_icon = f"{outer}/icon.png"
+        if outer_icon in members:
+            icon_bytes = safe_read_zip_member(zf, members[outer_icon], counter)
+            validate_png_icon_bytes(icon_bytes, path=outer_icon)
+
+    display_name = localized_manifest_text(manifest.get("display_name")) or name
+    short_desc = localized_manifest_text(manifest.get("display_description")) or description
+    tags = localized_manifest_tags(manifest.get("tags"))
+    _validate_market_fields(display_name or asset_name, short_desc, tags)
 
     return {
         "asset_type": RUNTIME_AGENT_MCP,
         "integration_type": integration_type,
+        "credentials_type": credentials_type,
+        "version": version,
+        "display_name": display_name or asset_name,
+        "short_desc": short_desc,
+        "tags": tags,
         "detail_desc": detail_desc,
         "icon_bytes": icon_bytes,
     }

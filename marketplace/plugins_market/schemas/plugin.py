@@ -192,6 +192,12 @@ class AgentPackageProfile(BaseModel):
     package_type: Optional[str] = None
     category: Optional[str] = None
     source: Optional[str] = None
+    integration_type: Optional[str] = Field(
+        None, description="agent-mcp manifest.integration.type"
+    )
+    credentials_type: Optional[str] = Field(
+        None, description="agent-mcp manifest.credentials.type"
+    )
     default_init_input: Optional[str] = None
     quick_inputs: List[str] = Field(default_factory=list)
     persona_markdown: Optional[str] = None
@@ -262,7 +268,7 @@ class PluginVersionDetail(BaseModel):
     )
     agent_package_profile: Optional[AgentPackageProfile] = Field(
         None,
-        description="agent-plugin / agent-template 内层 manifest 只读摘要（能力、persona、推荐提示词）",
+        description="agent-plugin / agent-template / agent-mcp 内层 manifest 只读摘要",
     )
 
 

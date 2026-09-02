@@ -212,10 +212,14 @@
       "agentCapabilitiesHeading": "能力清单",
       "agentPersonaHeading": "Persona",
       "agentQuickInputsHeading": "推荐提示词",
+      "agentExamplesHeading": "示例提示",
+      "agentIntegrationType": "集成类型",
+      "agentCredentialsType": "凭据类型",
       "agentCapabilityKindSkill": "Skill",
       "agentCapabilityKindTool": "Tool",
       "agentCapabilityKindRail": "Rail",
-      "agentCapabilityKindMcp": "MCP"
+      "agentCapabilityKindMcp": "MCP",
+      "agentCapabilityKindIntegration": "集成"
     },
     "assetPage": {
       "notFoundTitle": "该资产不存在或已被删除",

@@ -212,10 +212,14 @@
       "agentCapabilitiesHeading": "Capabilities",
       "agentPersonaHeading": "Persona",
       "agentQuickInputsHeading": "Suggested prompts",
+      "agentExamplesHeading": "Example prompts",
+      "agentIntegrationType": "Integration type",
+      "agentCredentialsType": "Credentials type",
       "agentCapabilityKindSkill": "Skill",
       "agentCapabilityKindTool": "Tool",
       "agentCapabilityKindRail": "Rail",
-      "agentCapabilityKindMcp": "MCP"
+      "agentCapabilityKindMcp": "MCP",
+      "agentCapabilityKindIntegration": "Integration"
     },
     "assetPage": {
       "notFoundTitle": "This asset does not exist or was deleted",

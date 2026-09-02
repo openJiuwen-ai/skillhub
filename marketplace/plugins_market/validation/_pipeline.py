@@ -80,6 +80,23 @@ def _plugin_prefix(plugin_yaml_path: str) -> str:
     return path.rsplit("/", 1)[0] + "/"
 
 
+def _merge_agent_market_fields(
+    public: PluginYamlPublicFields,
+    layout: dict[str, Any],
+) -> PluginYamlPublicFields:
+    """Outer plugin.yaml (form/import overrides) wins; manifest layout fills gaps."""
+    yaml_tags = list(public.tags or [])
+    layout_tags = layout.get("tags") or []
+    return PluginYamlPublicFields(
+        name=public.name,
+        display_name=public.display_name or layout.get("display_name") or public.name,
+        short_desc=public.short_desc or layout.get("short_desc") or "",
+        publisher_name=public.publisher_name,
+        tags=yaml_tags if yaml_tags else layout_tags,
+        runtime_type=public.runtime_type,
+    )
+
+
 def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
     """Full validation pipeline for a plugin zip.
 
@@ -216,14 +233,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             extra_meta = {"asset_type": layout["asset_type"]}
             detail_desc = layout["detail_desc"]
             icon_bytes = layout["icon_bytes"]
-            public = PluginYamlPublicFields(
-                name=public.name,
-                display_name=layout["display_name"],
-                short_desc=layout["short_desc"],
-                publisher_name=public.publisher_name,
-                tags=layout["tags"],
-                runtime_type=public.runtime_type,
-            )
+            public = _merge_agent_market_fields(public, layout)
 
         elif rt == RUNTIME_AGENT_MCP:
             layout = validate_agent_mcp_layout(
@@ -238,6 +248,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             }
             detail_desc = layout["detail_desc"]
             icon_bytes = layout["icon_bytes"]
+            public = _merge_agent_market_fields(public, layout)
 
         else:
             # Should not reach here; validate_plugin_yaml_public already guards this
