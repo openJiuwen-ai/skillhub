@@ -1389,6 +1389,91 @@ def _list_item_from_asset(
     return _list_item_with_viewer_flag(item, viewer, asset, db)
 
 
+def filter_recommend_ranked_ids(
+    item_ids: List[str],
+    *,
+    plugin_type: str,
+    db: Session,
+    viewer: ViewerContext,
+) -> List[str]:
+    """Filter recall ids with the same market rules as GET /plugins?order_by=recommend.
+
+    Drops OFFLINE / unknown / wrong plugin_type / ACL-invisible assets, then
+    applies pin_order before keeping the remaining recall order.
+    """
+    if not item_ids:
+        return []
+    repo = MarketAssetRepository(db)
+    meta_rows = (
+        db.query(
+            MarketAssetDB.asset_id,
+            MarketAssetDB.plugin_type,
+            MarketAssetDB.category_id,
+            MarketAssetDB.pin_order,
+        )
+        .filter(
+            MarketAssetDB.asset_id.in_(item_ids),
+            MarketAssetDB.status != "OFFLINE",
+        )
+        .all()
+    )
+    meta = {r.asset_id: r for r in meta_rows}
+    pt_list = [p.strip().lower() for p in (plugin_type or "").split(",") if p.strip()]
+    ordered_ids: list[str] = []
+    for iid in item_ids:
+        row = meta.get(iid)
+        if row is None:
+            continue
+        if pt_list and (row.plugin_type or "").strip().lower() not in pt_list:
+            continue
+        ordered_ids.append(iid)
+
+    pinned = [aid for aid in ordered_ids if meta[aid].pin_order is not None]
+    pinned.sort(key=lambda aid: int(meta[aid].pin_order or 0))
+    unpinned = [aid for aid in ordered_ids if meta[aid].pin_order is None]
+    ordered_ids = pinned + unpinned
+
+    rows_with_path = repo.get_assets_with_file_paths(ordered_ids, viewer=viewer)
+    visible = {asset.asset_id for asset, _fp, _hi in rows_with_path}
+    return [aid for aid in ordered_ids if aid in visible]
+
+
+def hydrate_plugin_list_items(
+    asset_ids: List[str],
+    *,
+    db: Session,
+    storage: S3StorageClient,
+    viewer: ViewerContext,
+    market_public_scoped: bool,
+) -> List[PluginListItem]:
+    """Build PluginListItem cards for already-filtered asset ids (recall/page order)."""
+    if not asset_ids:
+        return []
+    repo = MarketAssetRepository(db)
+    version_repo = MarketAssetVersionRepository(db)
+    rows_with_path = repo.get_assets_with_file_paths(asset_ids, viewer=viewer)
+    rows_map = {asset.asset_id: (asset, fp, hi) for asset, fp, hi in rows_with_path}
+    page_slice = [rows_map[aid] for aid in asset_ids if aid in rows_map]
+    page_asset_ids = [asset.asset_id for asset, _fp, _hi in page_slice]
+    vrows = version_repo.list_all_by_asset_ids(page_asset_ids)
+    vmap: Dict[str, List[MarketAssetVersionDB]] = defaultdict(list)
+    for row in vrows:
+        vmap[row.asset_id].append(row)
+    return [
+        _list_item_from_asset(
+            asset,
+            latest_file_path,
+            has_icon,
+            storage,
+            vmap.get(asset.asset_id, []),
+            viewer,
+            market_public_scoped=market_public_scoped,
+            db=db,
+        )
+        for asset, latest_file_path, has_icon in page_slice
+    ]
+
+
 def _recommend_ranked_asset_ids(*, user_id: str, plugin_type: str) -> Tuple[List[str], str]:
     """Homepage featured recall IDs, capped at rec_list_top_k. Caller handles empty/errors."""
     from plugins_market.recommender.bootstrap import apply_recommender_settings_to_env
@@ -1479,7 +1564,8 @@ def list_plugins_service(
     plugin_type = (query.plugin_type or "").strip()
 
     # Personalized recommend path: homepage「推荐精选」only (no keyword/category_id/tags).
-    # 「全部」and category tabs use MySQL install_count. POST /api/v1/recommend is unchanged.
+    # 「全部」and category tabs use MySQL install_count.
+    # POST /api/v1/recommend reuses the same filter + card hydrate after recall.
     category_id = (query.category_id or "").strip()
     order_by = (query.order_by or "").strip()
     use_recommend = (
@@ -1499,41 +1585,12 @@ def list_plugins_service(
                 plugin_type=plugin_type,
             )
             if item_ids:
-                # Lightweight meta filter first (OFFLINE + plugin_type).
-                meta_rows = (
-                    db.query(
-                        MarketAssetDB.asset_id,
-                        MarketAssetDB.plugin_type,
-                        MarketAssetDB.category_id,
-                        MarketAssetDB.pin_order,
-                    )
-                    .filter(
-                        MarketAssetDB.asset_id.in_(item_ids),
-                        MarketAssetDB.status != "OFFLINE",
-                    )
-                    .all()
+                ordered_ids = filter_recommend_ranked_ids(
+                    item_ids,
+                    plugin_type=plugin_type,
+                    db=db,
+                    viewer=viewer,
                 )
-                meta = {r.asset_id: r for r in meta_rows}
-                pt_list = [p.strip().lower() for p in plugin_type.split(",") if p.strip()]
-                ordered_ids: list[str] = []
-                for iid in item_ids:
-                    row = meta.get(iid)
-                    if row is None:
-                        continue
-                    if pt_list and (row.plugin_type or "").strip().lower() not in pt_list:
-                        continue
-                    ordered_ids.append(iid)
-
-                pinned = [aid for aid in ordered_ids if meta[aid].pin_order is not None]
-                pinned.sort(key=lambda aid: int(meta[aid].pin_order or 0))
-                unpinned = [aid for aid in ordered_ids if meta[aid].pin_order is None]
-                ordered_ids = pinned + unpinned
-
-                # Same ACL/moderation as the card hydrate. Counting only OFFLINE
-                # left total ahead of items (e.g. 6 records, 4 cards).
-                rows_with_path = repo.get_assets_with_file_paths(ordered_ids, viewer=viewer)
-                rows_map = {asset.asset_id: (asset, fp, hi) for asset, fp, hi in rows_with_path}
-                ordered_ids = [aid for aid in ordered_ids if aid in rows_map]
                 logger.info(
                     "recommend path: source=%s user_id=%s ranked=%d visible=%d top_k=%s",
                     rec_source,
@@ -1546,25 +1603,13 @@ def list_plugins_service(
                 total = len(ordered_ids)
                 start = (query.page - 1) * query.page_size
                 page_asset_ids = ordered_ids[start:start + query.page_size]
-                page_slice = [rows_map[aid] for aid in page_asset_ids]
-                vrows = version_repo.list_all_by_asset_ids(page_asset_ids)
-                vmap: Dict[str, List[MarketAssetVersionDB]] = defaultdict(list)
-                for r in vrows:
-                    vmap[r.asset_id].append(r)
-                items = []
-                for asset, latest_file_path, has_icon in page_slice:
-                    items.append(
-                        _list_item_from_asset(
-                            asset,
-                            latest_file_path,
-                            has_icon,
-                            storage,
-                            vmap.get(asset.asset_id, []),
-                            viewer,
-                            market_public_scoped=market_public_scoped,
-                            db=db,
-                        )
-                    )
+                items = hydrate_plugin_list_items(
+                    page_asset_ids,
+                    db=db,
+                    storage=storage,
+                    viewer=viewer,
+                    market_public_scoped=market_public_scoped,
+                )
                 return PluginListResponse(
                     page=query.page,
                     page_size=query.page_size,

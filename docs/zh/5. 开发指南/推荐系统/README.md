@@ -24,7 +24,7 @@
 | `recommender/shared/config.py` | 从 **进程环境变量** 读配置（`os.getenv`） |
 | `plugins_market/recommender/` | 与 marketplace Settings / 列表 / APScheduler 的桥接 |
 | `plugins_market/routers/recommender.py` | HTTP API |
-| `plugins_market/services/plugin.py` | 「推荐精选」列表 `order_by=recommend` 的 hydrate 分页 |
+| `plugins_market/services/plugin.py` | 列表 `order_by=recommend` 与 `POST /recommend` 共用的过滤 + 卡片 hydrate |
 
 两层配置：
 
@@ -218,12 +218,12 @@ flowchart TD
 | | `GET /api/v1/plugins?order_by=recommend` | `POST /api/v1/recommend` |
 |--|--|--|
 | 调用 | 内部直接 `run_recommend_for_user`（不走 HTTP 鉴权） | 可选鉴权：有效 Bearer / System Token 才个性化；否则空 `user_id` 冷启动 |
-| `top_k` | `MARKET_REC_LIST_TOP_K`（默认 50），再按 page 切片 hydrate；失败兜底也截断到该上限 | 请求体 `top_k`（1–500） |
-| 返回 | 完整插件列表项（当前页才查详情）；`total` 为 hydrate 后条数（≤ top_k） | `{asset_id, score}` |
+| `top_k` | `MARKET_REC_LIST_TOP_K`（默认 50），再按 page 切片 hydrate；失败兜底也截断到该上限 | 请求体 `top_k`（1–500）；服务端适量超召再滤，可见条数可能更少 |
+| 返回 | 完整插件列表项（当前页才查详情）；`total` 为 hydrate 后条数（≤ top_k） | 与列表项相同的卡片字段 + `score`；不可见 id 已过滤 |
 | 失败 | 记日志后回退 `install_count` | `503` 未启用 / `500` 内部错误 |
 | `category_id` | 有值则**不走推荐**，按下载量查表 | 可选；过滤 Milvus / TopK |
 
-「全部」与分类页签不走上表左侧路径，直接 MySQL `install_count`。列表 hydrate 会过滤 `OFFLINE`、plugin_type；置顶 `pin_order` 插到未置顶前面。
+「全部」与分类页签不走上表左侧路径，直接 MySQL `install_count`。列表与 POST 的 hydrate 共用：过滤 `OFFLINE`、plugin_type、审核 / ACL；置顶 `pin_order` 插到未置顶前面。
 
 市场前端侧边栏「推荐精选」数量 **不调** `order_by=recommend`：始终 `min(已上架数, rec_list_top_k)`（`GET /site/config`），进入该 Tab 后也不改成列表 `total`。
 
