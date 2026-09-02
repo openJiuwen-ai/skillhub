@@ -40,7 +40,7 @@
 | `credentials_type` | — | — | ✓ |
 | `persona_markdown` | — | ✓ | — |
 | `quick_inputs` | ✓ | ✓ | ✓（来自 manifest `examples`） |
-| `capabilities[]` | skill/tool/rail/mcp | 同左 | skill/integration |
+| `capabilities[]` | skill/tool/rail/mcp/subagent | 同左 | skill/integration |
 | `manifest_tags` | ✓ | ✓ | ✓ |
 
 `capabilities[]` 每项：`kind`、`id`、`name`、`description`。
@@ -75,7 +75,7 @@
 ## 示例
 
 ```bash
-# 列表：Agent MCP
+# 列表：Agent 连接器
 curl "http://127.0.0.1:8100/api/v1/plugins?plugin_type=agent-mcp&page=1&page_size=20"
 
 # 详情

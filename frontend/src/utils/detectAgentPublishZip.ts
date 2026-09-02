@@ -122,7 +122,7 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
 }
 
 /**
- * 轻量探测 Agent 发布 zip：支持市场包装包（plugin.yaml）与裸原生包（manifest.json / mcp.json）。
+ * 轻量探测 Agent 发布 zip：支持市场包装包（plugin.yaml）与裸原生包（manifest.json）。
  * 完整包校验仍由服务端完成；表单字段以用户输入为准覆盖预填值。
  */
 export async function inspectAgentPublishZip(file: File): Promise<AgentZipInspectResult> {

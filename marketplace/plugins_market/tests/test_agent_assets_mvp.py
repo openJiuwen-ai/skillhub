@@ -79,10 +79,19 @@ def _validate_plugin(content: bytes, name: str) -> dict:
         )
 
 
-def _validate_mcp(content: bytes, name: str) -> dict:
+def _validate_mcp(content: bytes, name: str, *, outer_version: str = "1.0.0") -> dict:
     counter = DecompressCounter()
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        return validate_agent_mcp_layout(zf, f"{name}/", name, counter)
+        return validate_agent_mcp_layout(
+            zf, f"{name}/", name, counter, outer_version=outer_version
+        )
+
+
+_MIN_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def _template_manifest(**extra: object) -> str:
@@ -143,7 +152,7 @@ def test_agent_template_without_skills_is_allowed() -> None:
     assert result["asset_type"] == "agent-template"
 
 
-def test_agent_template_rejects_empty_skills_array() -> None:
+def test_agent_template_allows_empty_skills_array() -> None:
     content = _build_wrapped_zip(
         "coach",
         "agent-template",
@@ -153,9 +162,8 @@ def test_agent_template_rejects_empty_skills_array() -> None:
             "persona/coach.md": "# Persona",
         },
     )
-    with pytest.raises(PublishError) as exc_info:
-        _validate_template(content, "coach")
-    assert "manifest.skills 禁止为空数组" in exc_info.value.detail["message"]
+    result = _validate_template(content, "coach")
+    assert result["asset_type"] == "agent-template"
 
 
 def test_agent_template_rejects_invalid_non_first_skill() -> None:
@@ -303,6 +311,50 @@ def test_agent_mcp_rejects_missing_manifest() -> None:
     with pytest.raises(PublishError) as exc_info:
         _validate_mcp(content, "legacy-mcp")
     assert "manifest.json" in exc_info.value.detail["message"]
+
+
+def test_agent_mcp_rejects_version_mismatch() -> None:
+    content = _build_wrapped_zip(
+        "amap",
+        "agent-mcp",
+        {
+            "manifest.json": _mcp_manifest("amap", version="2.0.0"),
+            "mcp.json": _remote_mcp_json(),
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_mcp(content, "amap")
+    assert "版本不一致" in exc_info.value.detail["message"]
+
+
+def test_agent_mcp_rejects_non_png_icon() -> None:
+    content = _build_wrapped_zip(
+        "amap",
+        "agent-mcp",
+        {
+            "manifest.json": _mcp_manifest("amap", icon="icon.svg"),
+            "mcp.json": _remote_mcp_json(),
+            "icon.svg": "<svg/>",
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_mcp(content, "amap")
+    assert "PNG" in exc_info.value.detail["message"]
+
+
+def test_agent_mcp_accepts_png_icon() -> None:
+    content = _build_wrapped_zip(
+        "amap",
+        "agent-mcp",
+        {
+            "manifest.json": _mcp_manifest("amap", icon="icon.png"),
+            "mcp.json": _remote_mcp_json(),
+            "icon.png": _MIN_PNG,
+        },
+    )
+    result = _validate_mcp(content, "amap")
+    assert result["asset_type"] == "agent-mcp"
+    assert result["icon_bytes"]
 
 
 def test_agent_mcp_accepts_manifest_remote() -> None:

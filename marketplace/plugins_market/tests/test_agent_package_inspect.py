@@ -41,6 +41,7 @@ def test_extract_agent_template_profile() -> None:
         ],
         "mcps": [{"connector": "amap"}],
         "skills": [{"dir": "./skills/profile-manager"}],
+        "subagents": [{"dir": "subagents/researcher", "display_name": {"zh": "研究员"}}],
         "tags": [{"zh": "健康"}],
     }
     zf = _build_zip(
@@ -63,7 +64,10 @@ def test_extract_agent_template_profile() -> None:
     assert profile["quick_inputs"] == ["开始", "复盘"]
     assert "Coach persona" in (profile["persona_markdown"] or "")
     kinds = {item["kind"] for item in profile["capabilities"]}
-    assert kinds == {"skill", "tool", "mcp"}
+    assert kinds == {"skill", "tool", "mcp", "subagent"}
+    subagent = next(item for item in profile["capabilities"] if item["kind"] == "subagent")
+    assert subagent["id"] == "subagents/researcher"
+    assert subagent["name"] == "研究员"
     assert profile["manifest_tags"] == ["健康"]
 
 

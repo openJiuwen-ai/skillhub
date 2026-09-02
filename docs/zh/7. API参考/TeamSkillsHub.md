@@ -45,7 +45,7 @@
 
 | 方法 | 路径 | 鉴权 | 摘要 |
 |------|------|------|------|
-| POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；三类 agent 资产仅 System Token；请求头 **`X-Checksum-SHA256`** | 发布市场资产（multipart zip） [#核心资源] |
+| POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；Skill / SwarmSkill / 三类 Agent 均支持；请求头 **`X-Checksum-SHA256`** | 发布市场资产（multipart zip） [#核心资源] |
 | GET | `/api/v1/plugins` | **无需**（可选 Bearer 或 X-System-Token 用于个性化展示） | 市场资产分页列表；支持 `asset_type` / `plugin_type` 与标签过滤 [#核心资源] |
 | GET | `/api/v1/plugins/tags` | **无需** | 按 `plugin_type` 聚合市场资产标签 `(tag, count)` [#核心资源] |
 | GET | `/api/v1/plugins/publish-template` | Bearer **`或`** `X-System-Token` | 发布页 Skill 模板 zip 预签名 GET [#核心资源] |
@@ -242,8 +242,9 @@ paths:
       summary: 发布市场资产
       description: |
         上传并发布单个市场资产。鉴权需二选一：Authorization Bearer 或 X-System-Token（必须且只能提供一个）。
-        Skill / Swarm Skill 保持原有鉴权与审核流程；agent-plugin、agent-template、agent-mcp 仅允许 X-System-Token，
-        服务端根据包内 plugin.yaml.runtime.type 与内层原生包派生 asset_type / plugin_type，客户端不单独传类型字段。
+        Skill / SwarmSkill / 三类 Agent 均支持 Bearer 或 X-System-Token（必须且仅能一种）。
+        普通用户发布 Agent 资产进入人工审核；系统管理员可跳过。服务端根据包内 plugin.yaml.runtime.type
+        与内层原生包派生 asset_type / plugin_type，客户端不单独传类型字段。
         visibility=private 对 Skill 与三类 agent 资产均生效，仅发布者和系统管理员可查看详情或下载，且不会进入公开列表。
       operationId: publishSkill
       tags:

@@ -62,7 +62,7 @@ def moderated_asset_type_label(plugin_type: str | None) -> str:
         "swarmskill": "SwarmSkill",
         RUNTIME_AGENT_PLUGIN: "Agent 插件",
         RUNTIME_AGENT_TEMPLATE: "Agent 模版",
-        RUNTIME_AGENT_MCP: "Agent MCP",
+        RUNTIME_AGENT_MCP: "Agent 连接器",
     }
     return labels.get(normalize_market_plugin_type(plugin_type), "市场资产")
 

@@ -176,6 +176,26 @@ def _extract_plugin_template_profile(
             if summary:
                 capabilities.append(summary)
 
+    subagents = manifest.get("subagents")
+    if isinstance(subagents, list):
+        for index, item in enumerate(subagents):
+            if not isinstance(item, dict):
+                continue
+            rel_dir = item.get("dir")
+            if not isinstance(rel_dir, str) or not rel_dir.strip():
+                continue
+            rel = rel_dir.strip().replace("\\", "/").removeprefix("./").rstrip("/")
+            base = posixpath.basename(rel) or rel
+            name, description = _capability_label(item, fallback=base or f"subagent-{index + 1}")
+            capabilities.append(
+                {
+                    "kind": "subagent",
+                    "id": rel,
+                    "name": name,
+                    "description": description,
+                }
+            )
+
     persona_markdown: str | None = None
     persona = manifest.get("persona")
     if isinstance(persona, dict):

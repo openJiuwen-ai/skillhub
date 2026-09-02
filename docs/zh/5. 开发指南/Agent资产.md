@@ -8,7 +8,7 @@ SkillHub 市场除 Skill / SwarmSkill 外，支持三类 JiuwenSwarm Agent 资�
 |--------|---------------|----------|------|
 | Agent 插件 | `agent-plugin` | `manifest.json`（`package_type: plugin`） | 挂载能力，无独立 Agent 身份 |
 | Agent 模板 | `agent-template` | `manifest.json`（`package_type: agent_template`） | 完整 Agent 角色包 |
-| Agent MCP | `agent-mcp` | `manifest.json`（`package_type: mcp`） | MCP / CLI / Skill-only 集成包 |
+| Agent 连接器 | `agent-mcp` | `manifest.json`（`package_type: mcp`） | MCP / CLI / Skill-only 集成包 |
 
 `asset_type` 与 `plugin_type` 同值。对象存储前缀分别为 `agent-plugins/`、`agent-templates/`、`agent-mcps/`。
 
@@ -40,7 +40,7 @@ Hub 只做**包结构与安全**校验，**不比 JiuwenSwarm 运行时更严**�
 | Agent 模板 `persona` | 可选；声明则校验目录内存在 `.md` |
 | 内层 `skills/` | 仅校验 manifest 声明路径存在 `SKILL.md`，**不校验** SKILL frontmatter |
 | Agent 插件能力 | **不要求**至少一种能力组件 |
-| Agent MCP | **必须**有 `manifest.json`；**拒绝**无 manifest 的旧包（仅 `mcp.json` 等） |
+| Agent 连接器 | **必须**有 `manifest.json`；**拒绝**无 manifest 的旧包（仅 `mcp.json` 等） |
 
 ## 发布与审核
 
@@ -99,7 +99,7 @@ Hub 只做**包结构与安全**校验，**不比 JiuwenSwarm 运行时更严**�
 - `model.file`：指向的 JSON 顶层须含 `model` 字段。
 - `subagents[].dir`：目录内至少一个 `.subagent.json`（合法 JSON 对象）。
 
-## Agent MCP（`package_type: mcp`）
+## Agent 连接器（`package_type: mcp`）
 
 **必填：** `version`、`package_type`、`id`（须等于 `plugin.yaml.name`）、`name`、`description`、`integration.type`
 

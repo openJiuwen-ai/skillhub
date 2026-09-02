@@ -154,7 +154,7 @@ def _validate_declared_skills(
     if not isinstance(skills, list):
         _invalid(error, "manifest.skills 必须为数组")
     if not skills:
-        _invalid(error, "manifest.skills 禁止为空数组，无 skill 时请整段省略")
+        return
     for index, item in enumerate(skills):
         if not isinstance(item, dict):
             _invalid(error, f"manifest.skills[{index}] 必须为对象")

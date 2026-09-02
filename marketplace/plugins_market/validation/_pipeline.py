@@ -241,6 +241,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
                 prefix,
                 public.name,
                 counter,
+                outer_version=version,
             )
             extra_meta = {
                 "asset_type": layout["asset_type"],

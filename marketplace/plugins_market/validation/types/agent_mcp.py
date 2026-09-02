@@ -397,6 +397,8 @@ def validate_agent_mcp_layout(
     prefix: str,
     asset_name: str,
     counter: DecompressCounter,
+    *,
+    outer_version: str,
 ) -> dict[str, Any]:
     """Validate one MCP payload declared by manifest.json."""
     members = validate_wrapped_outer_layout(zf, prefix, asset_name)
@@ -418,6 +420,10 @@ def validate_agent_mcp_layout(
             f"manifest.id {identity!r} 必须与 plugin.yaml.name {asset_name!r} 一致"
         )
     version = _required_string(manifest, "version")
+    if version != outer_version:
+        _invalid(
+            f"plugin.yaml 与 manifest.json 版本不一致：{outer_version!r} != {version!r}"
+        )
     name = _required_string(manifest, "name")
     description = _required_string(manifest, "description")
 
@@ -467,9 +473,10 @@ def validate_agent_mcp_layout(
         icon_member = f"{payload_prefix}{icon_relative}"
         if not _member_exists(members, icon_member):
             _invalid(f"manifest.icon 指向的文件不存在：{icon_relative}")
+        if not icon_relative.lower().endswith(".png"):
+            _invalid("manifest.icon 必须为 PNG 文件（.png 后缀）")
         raw_icon = safe_read_zip_member(zf, members[icon_member], counter)
-        if icon_relative.lower().endswith(".png"):
-            validate_png_icon_bytes(raw_icon, path=icon_member)
+        validate_png_icon_bytes(raw_icon, path=icon_member)
         icon_bytes = raw_icon
 
     skill_count = _validate_declared_skills(
@@ -481,7 +488,8 @@ def validate_agent_mcp_layout(
     placeholders: set[str] = set()
 
     if integration_type in ("stdio-mcp", "remote-mcp"):
-        assert integration_file is not None
+        if integration_file is None:
+            _invalid("manifest.integration.file 必填")
         mcp_data = _read_json(
             zf,
             members[f"{payload_prefix}{integration_file}"],
@@ -497,7 +505,8 @@ def validate_agent_mcp_layout(
         _scan_mcp_json_security(zf, members, payload_prefix, integration_file, counter)
         placeholders.update(_collect_placeholders(mcp_data))
     elif integration_type == "cli":
-        assert integration_file is not None
+        if integration_file is None:
+            _invalid("manifest.integration.file 必填")
         if not integration_file.lower().endswith("cli.json"):
             _invalid("manifest.integration.file 在 cli 类型下应指向 cli.json")
         cli_data = _read_json(

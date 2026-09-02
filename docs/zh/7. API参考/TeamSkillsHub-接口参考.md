@@ -567,9 +567,9 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 |------|---------------|----------|
 | Agent 插件 | `agent-plugin` | `manifest.json`（`package_type: plugin`） |
 | Agent 模板 | `agent-template` | `manifest.json`（`package_type: agent_template`） |
-| Agent MCP | `agent-mcp` | `manifest.json`（`package_type: mcp`） |
+| Agent 连接器 | `agent-mcp` | `manifest.json`（`package_type: mcp`） |
 
-**包结构：** 外层 `plugin.yaml` + 内层 `<name>/manifest.json`；可上传裸原生包由服务端自动包装。MCP **必须**含 manifest，**拒绝**无 manifest 旧包。
+**包结构：** 外层 `plugin.yaml` + 内层 `<name>/manifest.json`；可上传裸原生包由服务端自动包装。连接器包 **必须**含 manifest，**拒绝**无 manifest 旧包。
 
 **检索：** 须显式传 `plugin_type`；默认列表不含 Agent 资产。`search_keyword` 走 DB 关键词匹配。
 

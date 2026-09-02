@@ -12,7 +12,7 @@
 | [RESTful API 格式](./插件类型格式/RESTful-API格式.md) | 远程 HTTP API 插件的接口契约和发布包 |
 | [Skill 与 SwarmSkill 规范](./Skill与SwarmSkill规范.md) | 两类资产的元数据和约束 |
 | [Skill 审核机制](./Skill审核机制.md) | 系统审查、人工审核和状态流转 |
-| [Agent 资产](./Agent资产.md) | Agent 插件 / 模板 / MCP 包格式、校验与发布 |
+| [Agent 资产](./Agent资产.md) | Agent 插件 / 模板 / 连接器 包格式、校验与发布 |
 | [在线体验运行时](./在线体验运行时.md) | 在线体验会话编排和运行时架构 |
 | [检索系统](./检索系统/README.md) | Skill 检索、索引和 SDK 文档 |
 | [推荐系统](./推荐系统/README.md) | 个性化推荐链路、离线任务与模块边界（测试验收见运维指南同名文档） |

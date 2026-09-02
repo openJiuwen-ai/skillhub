@@ -45,5 +45,10 @@ def localized_manifest_examples(value: Any) -> list[str]:
         if result:
             return result
     if isinstance(value, list):
-        return [text for item in value if (text := localized_manifest_text(item))]
+        result: list[str] = []
+        for item in value:
+            text = localized_manifest_text(item)
+            if text:
+                result.append(text)
+        return result
     return []
