@@ -218,7 +218,7 @@ export default function MyPluginDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['group-grants'] }),
       queryClient.invalidateQueries({ queryKey: ['group-grantable-skills'] }),
       queryClient.invalidateQueries({ queryKey: ['group-grant-states'] }),
-      queryClient.invalidateQueries({ queryKey: ['skill-detail-raw', assetId] }),
+      queryClient.invalidateQueries({ queryKey: ['asset-detail-raw', assetId] }),
     ])
   }
 

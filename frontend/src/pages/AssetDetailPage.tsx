@@ -12,7 +12,8 @@ import { pluginCardTooltipProps } from '@/components/Common/pluginCardTooltip'
 import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
 import { Breadcrumbs } from '@/components/Common/Breadcrumbs'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
-import { isTextFile } from '@/utils/fileTypeUtils'
+import { VersionFileTree } from '@/components/Common/VersionFileTree'
+import { defaultVersionPreviewDoc, isTextFile } from '@/utils/fileTypeUtils'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
 import {
   getPluginArtifactDownload,
@@ -30,6 +31,7 @@ import {
   type MarketplacePluginItem,
   type VersionFileEntry,
   type PluginVersionDetailData,
+  type AgentPackageProfileData,
   getPluginTagOptions,
 } from '@/api/plugin'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
@@ -42,7 +44,14 @@ import {
   formatMarketSkillVersionLabel,
   marketSkillVersionFilenameSegment,
 } from '@/utils/formatSkillVersionLabel'
-import { parseSkillLikePluginType, SKILL_LIKE_QUERY_VALUE, isSkillLikePluginType } from '@/utils/pluginType'
+import {
+  AGENT_ASSET_QUERY_VALUE,
+  SKILL_LIKE_QUERY_VALUE,
+  assetDetailPath,
+  isAgentAssetPluginType,
+  parseAgentAssetPluginType,
+  parseSkillLikePluginType,
+} from '@/utils/pluginType'
 
 function isCanceledRequest(err: unknown): boolean {
   if (axios.isCancel(err)) return true
@@ -92,11 +101,11 @@ function normalizePublishResult(
   return 'publish_success'
 }
 
-type SkillDetailQueryItem = MarketplacePluginItem & {
+type AssetDetailQueryItem = MarketplacePluginItem & {
   __versionDetail?: PluginVersionDetailData
 }
 
-function versionDetailToListItem(raw: PluginVersionDetailData): SkillDetailQueryItem {
+function versionDetailToListItem(raw: PluginVersionDetailData): AssetDetailQueryItem {
   return {
     asset_id: raw.asset_id,
     asset_type: raw.asset_type,
@@ -419,6 +428,133 @@ function SecurityReviewPanel({
   )
 }
 
+function agentCapabilityKindLabel(kind: string, t: (key: string) => string): string {
+  const normalized = kind.trim().toLowerCase()
+  if (normalized === 'skill') return t('plugins.skillPage.agentCapabilityKindSkill')
+  if (normalized === 'tool') return t('plugins.skillPage.agentCapabilityKindTool')
+  if (normalized === 'rail') return t('plugins.skillPage.agentCapabilityKindRail')
+  if (normalized === 'mcp') return t('plugins.skillPage.agentCapabilityKindMcp')
+  if (normalized === 'integration') return t('plugins.skillPage.agentCapabilityKindIntegration')
+  return kind
+}
+
+function AgentPackageProfilePanel({
+  profile,
+  t,
+}: {
+  profile: AgentPackageProfileData
+  t: (key: string) => string
+}) {
+  const capabilities = profile.capabilities ?? []
+  const quickInputs = profile.quick_inputs ?? []
+  const isMcp = profile.package_type === 'mcp'
+  const hasMeta = Boolean(
+    profile.category?.trim()
+    || profile.source?.trim()
+    || profile.integration_type?.trim()
+    || profile.credentials_type?.trim(),
+  )
+  const hasCapabilities = capabilities.length > 0
+  const hasPersona = Boolean(profile.persona_markdown?.trim())
+  const hasQuickInputs = quickInputs.length > 0
+  if (!hasMeta && !hasCapabilities && !hasPersona && !hasQuickInputs) return null
+
+  return (
+    <div className="mt-8 space-y-8 border-t border-[#F0F0F0] pt-8">
+      {hasMeta ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentManifestMetaHeading')}
+          </h2>
+          <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+            {profile.category?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentCategory')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.category}</div>
+              </div>
+            ) : null}
+            {profile.source?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentSource')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.source}</div>
+              </div>
+            ) : null}
+            {profile.integration_type?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentIntegrationType')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.integration_type}</div>
+              </div>
+            ) : null}
+            {profile.credentials_type?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentCredentialsType')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.credentials_type}</div>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {hasCapabilities ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentCapabilitiesHeading')}
+          </h2>
+          <ul className="space-y-3">
+            {capabilities.map(item => (
+              <li
+                key={`${item.kind}:${item.id}`}
+                className="rounded-lg border border-slate-100 bg-slate-50/80 px-4 py-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-indigo-700">
+                    {agentCapabilityKindLabel(item.kind, t)}
+                  </span>
+                  <span className="text-[13px] font-medium text-[#404040]">{item.name}</span>
+                </div>
+                {item.description?.trim() ? (
+                  <p className="mt-1.5 text-[12px] leading-5 text-[#666666]">{item.description}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {hasPersona ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentPersonaHeading')}
+          </h2>
+          <div className="prose prose-slate max-w-none text-sm prose-headings:font-semibold prose-a:text-indigo-600 prose-pre:bg-slate-100 prose-pre:text-slate-800">
+            <PluginMarkdown source={profile.persona_markdown || ''} variant="detail" className="leading-relaxed text-slate-700" />
+          </div>
+        </section>
+      ) : null}
+
+      {hasQuickInputs ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {isMcp
+              ? t('plugins.skillPage.agentExamplesHeading')
+              : t('plugins.skillPage.agentQuickInputsHeading')}
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {quickInputs.map((text, index) => (
+              <span
+                key={`${index}-${text}`}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[12px] text-[#404040]"
+              >
+                {text}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
 function SecurityMetric({ label, value, tone = 'slate' }: { label: string; value: number; tone?: 'slate' | 'orange' }) {
   const valueClass = tone === 'orange' ? 'text-orange-600' : 'text-slate-950'
   return (
@@ -451,7 +587,7 @@ function SkillHeaderIcon({ displayName, iconUri }: { displayName: string; iconUr
   )
 }
 
-export default function SkillDetailPage() {
+export default function AssetDetailPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const location = useLocation()
@@ -497,6 +633,7 @@ export default function SkillDetailPage() {
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [fileContentLoading, setFileContentLoading] = useState(false)
   const [fileContentError, setFileContentError] = useState<string | null>(null)
+  const [agentPackageProfile, setAgentPackageProfile] = useState<AgentPackageProfileData | null>(null)
   const downloadRef = useRef(false)
   const fileContentAbortRef = useRef<AbortController | null>(null)
   const locationState = location.state as { fromProfile?: boolean; moderationContext?: 'pending' } | null
@@ -510,19 +647,27 @@ export default function SkillDetailPage() {
   const fromPendingModerationEntry =
     locationState?.moderationContext === 'pending' ||
     routeSearchParams.get('moderation_status')?.trim().toUpperCase() === 'PENDING'
+  const isAssetRoute = location.pathname.startsWith('/assets/')
+  const detailTypeQuery = isAssetRoute ? AGENT_ASSET_QUERY_VALUE : SKILL_LIKE_QUERY_VALUE
+  const alternateTypeQuery = isAssetRoute ? SKILL_LIKE_QUERY_VALUE : AGENT_ASSET_QUERY_VALUE
 
-  const detailQuery = useQuery<SkillDetailQueryItem | null>(
-    ['skill-detail-raw', assetId, requestedVersion, fromPendingModerationEntry],
+  const detailQuery = useQuery<AssetDetailQueryItem | null>(
+    ['asset-detail-raw', assetId, requestedVersion, fromPendingModerationEntry, detailTypeQuery],
     async () => {
-      const response = await getPlugins({
-        page: 1,
-        page_size: 1,
-        asset_id: assetId,
-        plugin_type: SKILL_LIKE_QUERY_VALUE,
-        moderation_status: fromPendingModerationEntry ? 'PENDING' : undefined,
-      })
-      const listItem = response.data.items.find(item => item.asset_id === assetId) ?? null
-      if (listItem) return listItem
+      const loadByType = async (pluginType: string) => {
+        const response = await getPlugins({
+          page: 1,
+          page_size: 1,
+          asset_id: assetId,
+          plugin_type: pluginType,
+          moderation_status: fromPendingModerationEntry ? 'PENDING' : undefined,
+        })
+        return response.data.items.find(item => item.asset_id === assetId) ?? null
+      }
+      const primary = await loadByType(detailTypeQuery)
+      if (primary) return primary
+      const alternate = await loadByType(alternateTypeQuery)
+      if (alternate) return alternate
       if (!requestedVersion) return null
       const versionDetail = await getPluginVersionDetail(assetId, requestedVersion)
       return versionDetailToListItem(versionDetail)
@@ -531,14 +676,29 @@ export default function SkillDetailPage() {
   )
 
   const skillRaw = detailQuery.data ?? null
+  const isAgentDetail = isAgentAssetPluginType(skillRaw?.plugin_type)
   const skill = useMemo(() => (skillRaw ? mapSkill(skillRaw) : null), [skillRaw])
   const versionList = skill?.allVersions?.length ? [...skill.allVersions].reverse() : []
 
   useEffect(() => {
+    if (!assetId || !skillRaw?.plugin_type) return
+    const targetPath = assetDetailPath(assetId, skillRaw.plugin_type)
+    const currentPath = isAssetRoute
+      ? `/assets/${encodeURIComponent(assetId)}`
+      : `/skills/${encodeURIComponent(assetId)}`
+    if (targetPath === currentPath) return
+    navigate(`${targetPath}${location.search}`, { replace: true, state: location.state })
+  }, [assetId, isAssetRoute, location.search, location.state, navigate, skillRaw?.plugin_type])
+
+  useEffect(() => {
+    if (isAgentDetail) {
+      setPlaygroundEnabled(false)
+      return
+    }
     getSiteConfig()
       .then(cfg => setPlaygroundEnabled(cfg.playground_enabled))
       .catch(() => {})
-  }, [])
+  }, [isAgentDetail])
 
   useEffect(() => {
     if (!skill) return
@@ -557,6 +717,7 @@ export default function SkillDetailPage() {
     setFileList(null)
     setSelectedFile(null)
     setFileContent(null)
+    setAgentPackageProfile(null)
     setSelectedVersion(prev => {
       if (requestedVersion && skill.allVersions.includes(requestedVersion)) return requestedVersion
       if (prev && skill.allVersions.includes(prev)) return prev
@@ -587,6 +748,7 @@ export default function SkillDetailPage() {
     const effectiveModeration = getSkillLikeEffectiveModeration(res)
     setModerationStatus(normalizeSkillLikeModerationStatus(effectiveModeration.moderationStatus))
     setModerationRejectReason(effectiveModeration.moderationRejectReason)
+    setAgentPackageProfile(res.agent_package_profile ?? null)
     setChangelogLoading(false)
     void queryClient.invalidateQueries({ queryKey: ['plugins'] })
   }, [queryClient])
@@ -605,6 +767,7 @@ export default function SkillDetailPage() {
     setChangelogError(null)
     setChangelog(null)
     setDetailDescFromApi(null)
+    setAgentPackageProfile(null)
     fileContentAbortRef.current?.abort()
     fileContentAbortRef.current = null
     setFileList(null)
@@ -658,7 +821,7 @@ export default function SkillDetailPage() {
           setFileContentLoading(false)
         })
     },
-    [skill, selectedVersion],
+    [skill, selectedVersion, t],
   )
 
   useEffect(() => {
@@ -670,7 +833,8 @@ export default function SkillDetailPage() {
     setFileListError(null)
     setFileContent(null)
     setFileContentError(null)
-    void getVersionFileList(skill.assetId, selectedVersion, { withContent: 'workflow.md', signal: ac.signal })
+    const previewDoc = defaultVersionPreviewDoc(isAgentDetail)
+    void getVersionFileList(skill.assetId, selectedVersion, { withContent: previewDoc, signal: ac.signal })
       .then(data => {
         if (ac.signal.aborted) return
         setFileList(data.files)
@@ -679,8 +843,10 @@ export default function SkillDetailPage() {
           setSelectedFile(data.content_path)
           setFileContent(data.content)
         } else {
-          // SKILL.md 不存在时优先选第一个 .md，否则第一个可预览文件
+          // 默认文档不存在时：Agent 优先 README.md，Skill 优先 SKILL.md，否则第一个可预览文本
+          const preferredMd = isAgentDetail ? 'readme.md' : 'skill.md'
           const first =
+            data.files.find(f => f.path.split('/').pop()?.toLowerCase() === preferredMd) ??
             data.files.find(f => f.path.toLowerCase().endsWith('.md')) ??
             data.files.find(f => isTextFile(f.path))
           if (first) handleFileClick(first.path)
@@ -692,7 +858,7 @@ export default function SkillDetailPage() {
         setFileListLoading(false)
       })
     return () => ac.abort()
-  }, [activeTab, skill?.assetId, selectedVersion, handleFileClick])
+  }, [activeTab, handleFileClick, isAgentDetail, selectedVersion, skill])
 
   const displayInstallCount = installCountFromVersionApi ?? skill?.installCount ?? 0
   const isOwnSkill = useMemo(
@@ -727,7 +893,10 @@ export default function SkillDetailPage() {
   const displayViewCount = viewCountFromVersionApi ?? skill?.viewCount ?? 0
   const displayTags = tagsFromVersionApi !== null ? tagsFromVersionApi : skill?.tags ?? []
   const displayUpdateTime = updateTimeFromVersionApi ?? skill?.updateTime ?? null
-  const publishType = parseSkillLikePluginType(skillRaw?.plugin_type) ?? null
+  const publishType =
+    parseSkillLikePluginType(skillRaw?.plugin_type) ??
+    parseAgentAssetPluginType(skillRaw?.plugin_type) ??
+    null
   const publishReady = publishType !== null
 
   const handlePublish = useCallback(() => {
@@ -754,6 +923,7 @@ export default function SkillDetailPage() {
     versionDetailViewerModerator,
   ])
   const canShowReviewDetailLink = useMemo(() => {
+    if (isAgentDetail) return false
     if (!skill || !selectedVersion.trim()) return false
     const hasReviewDetail = Boolean(
       securityReview && (
@@ -769,6 +939,7 @@ export default function SkillDetailPage() {
     return versionDetailViewerModerator === true
   }, [
     detailQuery.data?.viewer_is_market_moderation_admin,
+    isAgentDetail,
     isMarketModerationAdmin,
     isOwnSkill,
     publishResult,
@@ -811,7 +982,7 @@ export default function SkillDetailPage() {
       setPublishFailedReason('')
       setModerationStatus('APPROVED')
       setModerationRejectReason('')
-      void queryClient.invalidateQueries(['skill-detail-raw', assetId])
+      void queryClient.invalidateQueries(['asset-detail-raw', assetId])
       void queryClient.invalidateQueries({ queryKey: ['admin-pending-skills'] })
       void queryClient.invalidateQueries({ queryKey: ['skill-moderation-audit-history'] })
       window.alert(t('plugins.skillPage.moderationSuccess'))
@@ -843,7 +1014,7 @@ export default function SkillDetailPage() {
       setModerationRejectReason(reason)
       setRejectDialogOpen(false)
       setRejectDraft('')
-      void queryClient.invalidateQueries(['skill-detail-raw', assetId])
+      void queryClient.invalidateQueries(['asset-detail-raw', assetId])
       void queryClient.invalidateQueries({ queryKey: ['admin-pending-skills'] })
       void queryClient.invalidateQueries({ queryKey: ['skill-moderation-audit-history'] })
       window.alert(t('plugins.skillPage.moderationSuccess'))
@@ -887,7 +1058,7 @@ export default function SkillDetailPage() {
       if (!skill || interactBusy) return
       if (!canToggleInteract) return
       if (!isAuthenticated) {
-        setPostLoginRedirect(`/skills/${encodeURIComponent(skill.assetId)}`)
+        setPostLoginRedirect(assetDetailPath(skill.assetId, skillRaw?.plugin_type))
         navigate('/login')
         return
       }
@@ -911,7 +1082,7 @@ export default function SkillDetailPage() {
         setInteractBusy(null)
       }
     },
-    [canToggleInteract, interactBusy, isAuthenticated, navigate, queryClient, skill, t],
+    [canToggleInteract, interactBusy, isAuthenticated, navigate, queryClient, skill, skillRaw?.plugin_type, t],
   )
 
   /** 与 `AppHeader` 内层一致：左与 logo 对齐，右与登录/账号区对齐 */
@@ -947,10 +1118,10 @@ export default function SkillDetailPage() {
             const status = axios.isAxiosError(err) ? err.response?.status : undefined
             const isNotFound = status === 404
             const headline = isNotFound
-              ? '该 Skill 不存在或已被删除'
+              ? (isAssetRoute ? t('plugins.assetPage.notFoundTitle') : t('plugins.skillPage.notFoundTitle'))
               : t('profile.noDetail')
             const sub = isNotFound
-              ? 'asset_id 无效，可能是 Skill 已被删除、版本号错误或来自旧的历史链接。'
+              ? (isAssetRoute ? t('plugins.assetPage.notFoundHint') : t('plugins.skillPage.notFoundHint'))
               : (axios.isAxiosError(err)
                 ? `加载详情失败（HTTP ${status ?? '?'}）：${err.message}`
                 : null)
@@ -1093,7 +1264,7 @@ export default function SkillDetailPage() {
                         {publishResultLabel}
                       </span>
                     ) : null}
-                    {canShowDownloadActions && playgroundEnabled && moderationStatus === 'APPROVED' ? (
+                    {canShowDownloadActions && !isAgentDetail && playgroundEnabled && moderationStatus === 'APPROVED' ? (
                       <button
                         type="button"
                         onClick={() => setPlaygroundOpen(true)}
@@ -1203,7 +1374,7 @@ export default function SkillDetailPage() {
                   </section>
                 ) : null}
 
-                <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_296px] xl:items-start">
+                <div className={`grid gap-8 xl:items-start ${isAgentDetail ? '' : 'xl:grid-cols-[minmax(0,1fr)_296px]'}`}>
                   <div className="min-w-0">
                     {/* Basic info */}
                     <section>
@@ -1233,6 +1404,10 @@ export default function SkillDetailPage() {
                         <p className="text-[13px] leading-[22px] text-[#666666]">{skill.shortDesc || '—'}</p>
                       </div>
                     </section>
+
+                    {isAgentDetail && agentPackageProfile ? (
+                      <AgentPackageProfilePanel profile={agentPackageProfile} t={t} />
+                    ) : null}
 
                     {/* Version selector */}
                     <div className="mt-6 flex items-center gap-3">
@@ -1322,7 +1497,7 @@ export default function SkillDetailPage() {
                       {activeTab === 'files' && (
                         <div className="flex h-[480px] overflow-hidden rounded-lg border border-slate-200">
                       {/* File list */}
-                      <div className="w-64 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50">
+                      <div className="w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50">
                         {fileListLoading ? (
                           <div className="flex h-full items-center justify-center">
                             <CircularProgress size={20} />
@@ -1334,24 +1509,12 @@ export default function SkillDetailPage() {
                         ) : fileList.length === 0 ? (
                           <p className="p-3 text-xs text-slate-400">{t('plugins.detail.filesEmpty')}</p>
                         ) : (
-                          <ul className="py-1">
-                            {fileList.map(f => (
-                              <li key={f.path}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleFileClick(f.path)}
-                                  className={`w-full truncate px-3 py-1.5 text-left text-xs transition ${
-                                    selectedFile === f.path
-                                      ? 'bg-indigo-50 font-medium text-indigo-700'
-                                      : 'text-slate-700 hover:bg-slate-100'
-                                  }`}
-                                  title={f.path}
-                                >
-                                  {f.path}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
+                          <VersionFileTree
+                            files={fileList}
+                            selectedPath={selectedFile}
+                            onSelectFile={handleFileClick}
+                            ariaLabel={t('plugins.detail.filesTreeAriaLabel')}
+                          />
                         )}
                       </div>
 
@@ -1390,13 +1553,15 @@ export default function SkillDetailPage() {
                       )}
                     </div>
                   </div>
-                  <aside className="xl:sticky xl:top-6">
-                    <SecurityReviewPanel
-                      review={securityReview}
-                      detailPath={canShowReviewDetailLink ? reviewDetailPath : ''}
-                      t={t}
-                    />
-                  </aside>
+                  {!isAgentDetail ? (
+                    <aside className="xl:sticky xl:top-6">
+                      <SecurityReviewPanel
+                        review={securityReview}
+                        detailPath={canShowReviewDetailLink ? reviewDetailPath : ''}
+                        t={t}
+                      />
+                    </aside>
+                  ) : null}
                 </div>
               </div>
             </article>
@@ -1443,7 +1608,7 @@ export default function SkillDetailPage() {
         </div>
       ) : null}
 
-      {playgroundEnabled && skill ? (
+      {!isAgentDetail && playgroundEnabled && skill ? (
         <PlaygroundDrawer
           open={playgroundOpen}
           skillId={skill.assetId}

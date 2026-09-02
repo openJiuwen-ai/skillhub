@@ -666,7 +666,14 @@ def another_tool() -> dict:
 
             captured: dict[str, object] = {}
 
-            def _fake_upload(_market_url: str, _token: str | None, _system_token: str | None, req: PublishRequest):
+            def _fake_upload(
+                _market_url: str,
+                _token: str | None,
+                _system_token: str | None,
+                req: PublishRequest,
+                *,
+                swarmskill: bool = False,
+            ):
                 with zipfile.ZipFile(req.zip_path, "r") as zf:
                     names = [n.replace("\\", "/") for n in zf.namelist()]
                     prefix = names[0].split("/", 1)[0]
@@ -707,7 +714,14 @@ def another_tool() -> dict:
 
             captured: dict[str, object] = {}
 
-            def _fake_upload(_market_url: str, _token: str | None, _system_token: str | None, req: PublishRequest):
+            def _fake_upload(
+                _market_url: str,
+                _token: str | None,
+                _system_token: str | None,
+                req: PublishRequest,
+                *,
+                swarmskill: bool = False,
+            ):
                 with zipfile.ZipFile(req.zip_path, "r") as zf:
                     names = [n.replace("\\", "/") for n in zf.namelist()]
                     prefix = names[0].split("/", 1)[0]
@@ -743,7 +757,14 @@ def another_tool() -> dict:
             skill_root = plugin_init("publish-swarm-demo", Path(tmp), plugin_type="swarmskill")
             captured: dict[str, object] = {}
 
-            def _fake_upload(_market_url: str, _token: str | None, _system_token: str | None, req: PublishRequest):
+            def _fake_upload(
+                _market_url: str,
+                _token: str | None,
+                _system_token: str | None,
+                req: PublishRequest,
+                *,
+                swarmskill: bool = False,
+            ):
                 with zipfile.ZipFile(req.zip_path, "r") as zf:
                     names = [n.replace("\\", "/") for n in zf.namelist()]
                     prefix = names[0].split("/", 1)[0]
@@ -783,7 +804,14 @@ def another_tool() -> dict:
 
             captured: dict[str, object] = {}
 
-            def _fake_upload(_market_url: str, _token: str | None, _system_token: str | None, req: PublishRequest):
+            def _fake_upload(
+                _market_url: str,
+                _token: str | None,
+                _system_token: str | None,
+                req: PublishRequest,
+                *,
+                swarmskill: bool = False,
+            ):
                 with zipfile.ZipFile(req.zip_path, "r") as zf:
                     names = [n.replace("\\", "/") for n in zf.namelist()]
                     prefix = names[0].split("/", 1)[0]

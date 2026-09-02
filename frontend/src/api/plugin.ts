@@ -223,12 +223,14 @@ export async function getPluginArtifactDownload(assetId: string, version?: strin
 export class MarketplaceApiError extends Error {
   readonly code?: number
   readonly errorType?: string
+  readonly details?: unknown
 
-  constructor(message: string, code?: number, errorType?: string) {
+  constructor(message: string, code?: number, errorType?: string, details?: unknown) {
     super(message)
     this.name = 'MarketplaceApiError'
     this.code = code
     this.errorType = errorType
+    this.details = details
   }
 }
 
@@ -465,6 +467,26 @@ export async function togglePluginInteract(
 }
 
 /** GET /api/v1/plugins/{asset_id}/versions/{version} 响应 data */
+export interface AgentPackageCapabilityItem {
+  kind: string
+  id: string
+  name: string
+  description?: string | null
+}
+
+export interface AgentPackageProfileData {
+  package_type?: string | null
+  category?: string | null
+  source?: string | null
+  integration_type?: string | null
+  credentials_type?: string | null
+  default_init_input?: string | null
+  quick_inputs?: string[]
+  persona_markdown?: string | null
+  capabilities?: AgentPackageCapabilityItem[]
+  manifest_tags?: string[]
+}
+
 export interface PluginVersionDetailData {
   asset_id: string
   version: string
@@ -509,6 +531,7 @@ export interface PluginVersionDetailData {
   resolved_commit_sha?: string | null
   declared_skill_version?: string | null
   storage_mode?: string | null
+  agent_package_profile?: AgentPackageProfileData | null
 }
 
 export interface SkillModerationResultData {
@@ -677,6 +700,32 @@ function publishErrorMessage(err: unknown, fallback: string): string {
  * POST /api/v1/plugins，multipart/form-data。
  * 使用独立 axios 请求，避免带默认 `Content-Type: application/json` 的实例破坏 multipart。
  */
+function formatPublishErrorDetails(details: unknown): string {
+  if (details == null) return ''
+  if (typeof details === 'string') return details.trim()
+  if (Array.isArray(details)) {
+    return details
+      .map(item => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object') {
+          const rec = item as Record<string, unknown>
+          return String(rec.message || rec.msg || rec.error || JSON.stringify(item))
+        }
+        return String(item)
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+  if (typeof details === 'object') {
+    try {
+      return JSON.stringify(details, null, 2)
+    } catch {
+      return String(details)
+    }
+  }
+  return String(details)
+}
+
 export async function publishPlugin(params: {
   file: File
   checksumSha256Hex: string
@@ -685,6 +734,10 @@ export async function publishPlugin(params: {
   versionDesc?: string
   force?: boolean
   visibility?: 'public' | 'private'
+  assetName?: string
+  displayName?: string
+  description?: string
+  tags?: string
 }): Promise<PluginPublishResultData> {
   const token = getStoredGitCodeToken()
   const provider = getStoredOAuthProvider()
@@ -697,6 +750,10 @@ export async function publishPlugin(params: {
   if (params.pluginId?.trim()) form.append('plugin_id', params.pluginId.trim())
   if (params.pluginVersion?.trim()) form.append('plugin_version', params.pluginVersion.trim())
   if (params.versionDesc?.trim()) form.append('version_desc', params.versionDesc.trim())
+  if (params.assetName?.trim()) form.append('asset_name', params.assetName.trim())
+  if (params.displayName?.trim()) form.append('display_name', params.displayName.trim())
+  if (params.description?.trim()) form.append('description', params.description.trim())
+  if (params.tags?.trim()) form.append('tags', params.tags.trim())
   if (params.force) form.append('force', 'true')
   if (params.visibility) form.append('visibility', params.visibility)
 
@@ -716,10 +773,18 @@ export async function publishPlugin(params: {
   } catch (e) {
     if (e instanceof MarketplaceApiError) throw e
     if (axios.isAxiosError(e)) {
-      const detail = (e.response?.data as { detail?: { message?: string; error?: string } })?.detail
+      const detail = (e.response?.data as {
+        detail?: { message?: string; error?: string; details?: unknown }
+      })?.detail
       const msg = detail?.message || e.message || '发布失败'
       const errorType = detail?.error
-      throw new MarketplaceApiError(msg, e.response?.status, errorType)
+      const detailsText = formatPublishErrorDetails(detail?.details)
+      throw new MarketplaceApiError(
+        detailsText ? `${msg}\n${detailsText}` : msg,
+        e.response?.status,
+        errorType,
+        detail?.details,
+      )
     }
     throw new Error(publishErrorMessage(e, '发布失败'))
   }

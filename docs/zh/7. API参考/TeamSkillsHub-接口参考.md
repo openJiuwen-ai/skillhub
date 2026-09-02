@@ -26,7 +26,7 @@
 | GET | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version` | 可选 Bearer 或 System Token | — |
 | GET | `/plugins/{asset_id}/versions/{version}/files` | 路径：`asset_id`、`version`；Query：`with_content` | 可选 Bearer 或 System Token | — |
 | GET | `/artifacts/{id}` | 路径：`id`；Query：`version`、`is_cli_download` | 可选 Bearer 或 System Token | — |
-| POST | `/plugins` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`plugin_id`、`plugin_version`、`version_desc`、`force`、`visibility`（agent-* 三类资产仅 System Token） | Bearer **或** System Token（二选一） | 登录用户 / 系统 |
+| POST | `/plugins` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`plugin_id`、`plugin_version`、`version_desc`、`force`、`visibility`、`asset_name`、`display_name`、`description`、`tags` | Bearer **或** System Token（二选一） | 登录用户 / 系统 |
 | GET | `/plugins/publish-template` | Query：`kind`（`plugin` \| `skill` \| `swarmskill`） | Bearer **或** System Token | 登录用户 / 系统 |
 | DELETE | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version`（`all`=删全部） | Bearer **或** System Token | 发布者 / 系统 |
 | POST | `/plugins/skill-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（仅保持原 Skill 集合包语义） | 仅 System Token | 系统 |
@@ -264,7 +264,7 @@ X-OAuth-Provider: gitcode
 | `plugin_type` | string | — | `skill`、`swarmskill`、`agent-plugin`、`agent-template`、`agent-mcp`；可逗号多值。不传且不带 `plugin_type_exclude`/`asset_type` 时默认 `skill,swarmskill` |
 | `plugin_type_exclude` | string | — | 排除某类型 |
 | `asset_type` | string | — | 资产大类过滤；取值为 `plugin` / `agent-plugin` / `agent-template` / `agent-mcp`（三类 agent 资产与 `plugin_type` 同值） |
-| `search_keyword` | string | — | 语义搜索关键词（仅 skill/swarmskill 走语义检索；三类 agent 资产固定走数据库关键词匹配，详见「多类型资产」一节） |
+| `search_keyword` | string | — | 语义搜索关键词（仅 skill/swarmskill 走语义检索；Agent 资产固定走数据库关键词匹配，详见「Agent 资产」一节） |
 | `moderation_status` | string | — | `PENDING` \| `APPROVED` \| `REJECTED` |
 | `tags` | string | - | 按标签过滤，逗号分隔（如 `python,cli`）；标签内不能含逗号（发布校验同口径）。长度上限 512 字符（超出 422），超过 20 个标签静默截断 |
 | `tags_match` | string | `all` | 标签匹配模式：`all`=同时包含全部标签（子集）；`any`=包含任一标签（交集） |
@@ -397,7 +397,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.
 | `version` | 最新对外版本 | 如 `1.0.0` |
 | `is_cli_download` | `false` | `true` 时返回 CLI 原始 zip |
 
-`is_cli_download=false` 时返回 `*.raw.zip`：Skill 为首个 `SKILL.md` 所在目录的内容；三类 agent 资产为剥离市场外层包装后的原生内层包（详见「多类型资产」一节）。
+`is_cli_download=false` 时返回 `*.raw.zip`：Skill 为首个 `SKILL.md` 所在目录的内容；Agent 资产为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。
 
 响应 `data` 关键字段：`download_url`、`version`、`checksum_sha256`、`file_size`、`name`、`asset_type`、`plugin_type`。
 
@@ -413,9 +413,9 @@ curl "https://swarmskills.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0
 
 ### `POST /plugins`
 
-发布市场资产（multipart zip）。Skill / Swarm Skill 保持原有 Bearer 或 X-System-Token 鉴权；`agent-plugin`、`agent-template`、`agent-mcp` 仅接受 X-System-Token。须携带 `X-Checksum-SHA256`。
+发布市场资产（multipart zip）。Skill / Swarm Skill / 三类 Agent 均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过人工审核。须携带 `X-Checksum-SHA256`。
 
-> 发布 agent-plugin / agent-template / agent-mcp 三类资产时**仅接受 X-System-Token**，包结构与错误码见「多类型资产」一节。
+> Agent 资产支持**裸原生包**（含 `manifest.json`）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「Agent 资产」一节。
 
 **请求头**
 
@@ -429,12 +429,16 @@ Content-Type: multipart/form-data
 
 | 字段 | 必填 | 说明 |
 |------|:----:|------|
-| `file` | ✓ | `.zip` 市场资产包 |
+| `file` | ✓ | `.zip` 市场资产包（Skill 须含外层 `plugin.yaml`；Agent 可为裸包或包装包） |
 | `plugin_id` | | 已有资产发新版时填 `asset_id`；首次发布不传 |
-| `plugin_version` | | 如 `1.0.0`（不含 `v` 前缀）或 7 位小写 git commit；缺省从包内 `plugin.yaml` 读取 |
+| `plugin_version` | | 如 `1.0.0`（不含 `v` 前缀）或 7 位小写 git commit；缺省从包内 `plugin.yaml` / manifest 读取 |
 | `version_desc` | | 版本更新说明 |
 | `force` | | `true` 强制覆盖同版本 |
-| `visibility` | | `public`（默认）或 `private`；`private` 对 Skill 和三类 agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
+| `visibility` | | `public`（默认）或 `private`；对 Skill 和三类 agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
+| `asset_name` | | 市场外层 `plugin.yaml.name`；Agent 裸包/包装包均可覆盖，并同步 patch 内层 `manifest.id`（须与包内路径一致） |
+| `display_name` | | 展示名；表单优先于包内 |
+| `description` | | 简短描述；表单优先于包内 |
+| `tags` | | 逗号分隔标签；表单优先于包内 `metadata.tags` |
 
 **示例**
 
@@ -538,11 +542,10 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 | 条目形态 | 识别为 |
 |----------|--------|
 | 含 `plugin.yaml` 且 `runtime.type` ∈ `skill` / `agent-plugin` / `agent-template` / `agent-mcp` | 对应类型（标准包装条目） |
-| 裸目录含 `manifest.json` 且 `packageType` = `plugin` / `agent_template` | `agent-plugin` / `agent-template`（服务端自动生成外层 `plugin.yaml` 包装，名称取自 `manifest.id` / `agentCard.id`） |
-| 裸目录含 `mcp.json` / `cli.json`，或 `skills/` 下含 `SKILL.md` | `agent-mcp`（同样自动包装；名称默认取目录名，版本取 entries 覆盖值或回退值，支持 semver 或 git commit hex） |
+| 裸目录含 `manifest.json` 且 `package_type` = `plugin` / `agent_template` / `mcp` | `agent-plugin` / `agent-template` / `agent-mcp`（服务端自动生成外层 `plugin.yaml`；名称取自 `manifest.id` / `manifest.name`） |
 | 裸 Skill 目录（仅根目录含 `SKILL.md`，且未命中上述 agent 标识） | `skill` |
 
-各类型的包内容校验规则与 `POST /plugins` 单资产发布一致（见「多类型资产」一节）。
+各类型的包内容校验规则与 `POST /plugins` 单资产发布一致（见「Agent 资产」一节）。
 
 **响应 `data`**：`summary`（`total` / `ok` / `failed` / `skipped`；`fail_fast` 时已处理条数可能小于 `total`）+ 逐条目 `results[]`，每条含 `entry`、`status`（`ok` / `error` / `skipped`；内容未变化或非 `force` 时版本已存在均可能为 `skipped`）、兼容字段 `plugin_id`、通用字段 `asset_id`、`asset_type`、`plugin_type`、`name`、`version`、`error`、`message`。
 
@@ -556,68 +559,33 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 ---
 
-## 多类型资产（Agent 插件 / Agent 模板 / Agent MCP）
+## Agent 资产
 
-除 Skill / Swarm Skill 外，市场还支持三类 JiuwenSwarm 包装资产（wrapped asset）。三类资产复用同一组接口（`POST /plugins`、`GET /plugins`、`GET /artifacts/{id}`），仅在类型取值、包结构与权限上有差异。
+除 Skill / SwarmSkill 外，市场支持三类 JiuwenSwarm Agent 资产，复用 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}` 等接口，通过 `plugin_type` / `asset_type` 区分。
 
-### 类型与派生字段
+| 资产 | `plugin_type` | 内层入口 |
+|------|---------------|----------|
+| Agent 插件 | `agent-plugin` | `manifest.json`（`package_type: plugin`） |
+| Agent 模板 | `agent-template` | `manifest.json`（`package_type: agent_template`） |
+| Agent 连接器 | `agent-mcp` | `manifest.json`（`package_type: mcp`） |
 
-| 资产 | 包内 `plugin.yaml` 的 `runtime.type` | `asset_type` | `plugin_type` | 对象存储前缀 |
-|------|--------------------------------------|--------------|---------------|--------------|
-| Agent 插件 | `agent-plugin` | `agent-plugin` | `agent-plugin` | `agent-plugins/` |
-| Agent 模板 | `agent-template` | `agent-template` | `agent-template` | `agent-templates/` |
-| Agent MCP | `agent-mcp` | `agent-mcp` | `agent-mcp` | `agent-mcps/` |
+**包结构：** 外层 `plugin.yaml` + 内层 `<name>/manifest.json`；可上传裸原生包由服务端自动包装。连接器包 **必须**含 manifest，**拒绝**无 manifest 旧包。
 
-三类资产的 `asset_type` 与 `plugin_type` 同值；发布、检索、下载的响应中均会返回这两个字段。
+**检索：** 须显式传 `plugin_type`；默认列表不含 Agent 资产。`search_keyword` 走 DB 关键词匹配。
 
-### 包结构要求（发布校验）
+**下载：** `is_cli_download=false` 返回 `raw.zip`（仅内层原生包，根目录为 `manifest.json`）；`true` 返回完整市场包装。
 
-统一为「外层市场包装 + 内层原生包」两层结构：
-
-```text
-<outer>/plugin.yaml            # 市场外层包装，全包唯一；name/version 与内层保持一致
-<outer>/<name>/                # 内层目录名必须等于 plugin.yaml.name
-    ... 原生包内容（见下）
-```
-
-| 类型 | 内层必需 | 关键校验 |
-|------|----------|----------|
-| `agent-plugin` | `manifest.json`（`packageType: "plugin"`）、`README.md` | `manifest.id == plugin.yaml.name`；`manifest.version == plugin.yaml.version`；至少声明一项 `skills/tools/mcps/rails` 能力且引用文件必须存在 |
-| `agent-template` | `manifest.json`（`packageType: "agent_template"`）、`README.md` | `agentCard.id == plugin.yaml.name`；`agentCard.name/description` 必填；`persona.dir` 必填且目录内至少一个 `.md` |
-| `agent-mcp` | 至少一个入口：`mcp.json` / `cli.json` / `skills/**/SKILL.md` | `mcp.json.mcpServers` 非空；`cli.json` 各平台命令齐全；`token-schema.json` 的 `fields[].key` 必填且禁止保存凭据值；`mcp.json` 与 `cli.json` 中的 `${VAR}` 占位符必须在 token schema 中有录入项 |
-
-通用规则：一个包只允许一个外层 `plugin.yaml`（多个人则 400）；图标固定为 `<outer>/icon.png`（PNG，可选）；README 内容作为详情页描述。
+详细规则见 [Agent 资产](../5.%20开发指南/Agent资产.md)、[Agent 资产列表与下载接口](./Agent资产列表与下载接口.md)。
 
 ### 发布（`POST /plugins`）
 
-三类资产**仅系统管理员可发布**：必须使用 `X-System-Token`（Bearer 用户令牌发布会被 403 拒绝）；跳过人工审核，但包校验不跳过。`plugin_version` 若显式传入，必须与服务端从包内解析出的市场版本一致（agent-plugin / agent-template 对应内层 manifest 版本，agent-mcp 对应外层 `plugin.yaml.version`）。
+三类 Agent 与 Skill / SwarmSkill 相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入人工审核；系统管理员可跳过。可上传裸原生包或通过表单覆盖元数据。
 
-响应 `data` 在原有字段基础上新增/保证返回：`asset_id`（与 `plugin_id` 同值）、`asset_type`、`plugin_type`。
+Agent 包装包：`plugin_version` 须与内层 `manifest.version` 一致，否则 `400 invalid_version`。
 
-新增错误：
+响应 `data` 含：`asset_id`（同 `plugin_id`）、`asset_type`、`plugin_type`。
 
-| 状态码 | error | 说明 |
-|--------|-------|------|
-| `403` | `permission_denied` | 非系统 Token 发布 agent-plugin / agent-template / agent-mcp |
-| `400` | `invalid_version` | 请求版本与服务端从包内解析出的市场版本不一致 |
-| `400` | `invalid_plugin_structure` | 包内存在多个外层 `plugin.yaml` |
-| `400` | `invalid_agent_mcp` / `invalid_agent_plugin_manifest` / `invalid_manifest_json` 等 | 内层包校验失败（message 含具体字段路径） |
-| `422` | `plugin_type_immutable` | 已发布资产的 `asset_type`/`plugin_type` 不可变更 |
-
-### 检索（`GET /plugins`）
-
-- 显式传入 `plugin_type=agent-plugin`（或 `agent-template` / `agent-mcp`，可逗号多值）即可列出/搜索对应资产；也可用 `asset_type` 过滤。
-- 三类资产的 `search_keyword` 走**数据库关键词匹配**（名称/描述/标签），不进入语义检索。
-- 不传任何类型条件时，默认仍只返回 `skill,swarmskill`——三类资产不会混入未指定类型的搜索结果。
-
-### 下载（`GET /artifacts/{id}`）
-
-| `is_cli_download` | 返回内容 |
-|-------------------|----------|
-| `true` | 完整市场包装 zip（含外层 `plugin.yaml`），供 CLI 识别资产类型后安装 |
-| `false`（默认） | `*.raw.zip`：**仅内层原生包**，精确剥离 `<outer>/<name>/` 前缀——zip 根目录直接是 `manifest.json`（插件/模板）或 `mcp.json`/`cli.json`（MCP）等原生内容，解压即为 JiuwenSwarm 标准包 |
-
-响应 `data` 新增字段：`asset_type`、`plugin_type`（用于下载审计按真实类型记录）。
+常见错误：`invalid_version`、`invalid_plugin_structure`、`invalid_agent_mcp`、`invalid_agent_plugin_manifest`、`invalid_manifest_json`、`plugin_type_immutable`（详见格式文档）。
 
 ---
 

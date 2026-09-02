@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from plugins_market.core.moderation import is_skill_like_plugin_type
+from plugins_market.core.moderation import is_moderated_market_asset_type, is_skill_like_plugin_type
 from plugins_market.core.publish_result import (
     is_skill_asset_publicly_visible,
     is_skill_version_publicly_visible,
@@ -45,7 +45,8 @@ class ViewerContext:
             return "admin"
         if asset.publisher_id and self.user_id and asset.publisher_id == self.user_id:
             return "owner"
-        if db is not None and self.user_id:
+        # 组群授权仅 Skill / SwarmSkill；Agent 三类不走 group ACL。
+        if db is not None and self.user_id and is_skill_like_plugin_type(asset.plugin_type):
             grant_repo = MarketGroupSkillGrantRepository(db)
             if grant_repo.user_has_asset_grant(user_id=self.user_id, asset_id=asset.asset_id):
                 return "group"
@@ -53,7 +54,7 @@ class ViewerContext:
 
     def can_view_skill_asset(self, asset: MarketAssetDB, db=None) -> bool:
         acl_source = self.skill_asset_access_source(asset, db)
-        if not is_skill_like_plugin_type(asset.plugin_type):
+        if not is_moderated_market_asset_type(asset.plugin_type):
             return not self._is_private_skill_asset(asset) or acl_source in ("admin", "owner")
         if acl_source in ("admin", "owner"):
             return True
@@ -74,9 +75,9 @@ class ViewerContext:
         return self.can_view_skill_asset(asset, db)
 
     def can_see_skill_version_row(self, asset: MarketAssetDB, version_row: MarketAssetVersionDB, db=None) -> bool:
-        """非本人、非审核管理员时，Skill 仅可查看公开版本或组群授权的已通过版本；发布者可查看全部自有版本。"""
+        """非本人、非审核管理员时，仅可查看公开或组群授权的已通过版本；发布者可查看全部自有版本。"""
         acl_source = self.skill_asset_access_source(asset, db)
-        if not is_skill_like_plugin_type(asset.plugin_type):
+        if not is_moderated_market_asset_type(asset.plugin_type):
             return not self._is_private_skill_asset(asset) or acl_source in ("admin", "owner")
         if acl_source in ("admin", "owner"):
             return True
@@ -94,7 +95,7 @@ class ViewerContext:
     def can_download_skill_version_row(self, asset: MarketAssetDB, version_row: MarketAssetVersionDB, db=None) -> bool:
         """下载沿用审核规则：审核管理员/发布者可下载全部，其余仅可下载公开或组授权的已通过版本。"""
         acl_source = self.skill_asset_access_source(asset, db)
-        if not is_skill_like_plugin_type(asset.plugin_type):
+        if not is_moderated_market_asset_type(asset.plugin_type):
             return not self._is_private_skill_asset(asset) or acl_source in ("admin", "owner")
         if acl_source in ("admin", "owner"):
             return True

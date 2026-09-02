@@ -18,6 +18,10 @@ class PluginPublishForm:
     version_desc: Optional[str]
     force: bool
     visibility: Literal["public", "private"] = "public"
+    asset_name: Optional[str] = None
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class AssetCreate(BaseModel):
@@ -177,6 +181,30 @@ class PluginTemplatePresignData(BaseModel):
     filename: str
 
 
+class AgentPackageCapabilityItem(BaseModel):
+    kind: str
+    id: str
+    name: str
+    description: Optional[str] = None
+
+
+class AgentPackageProfile(BaseModel):
+    package_type: Optional[str] = None
+    category: Optional[str] = None
+    source: Optional[str] = None
+    integration_type: Optional[str] = Field(
+        None, description="agent-mcp manifest.integration.type"
+    )
+    credentials_type: Optional[str] = Field(
+        None, description="agent-mcp manifest.credentials.type"
+    )
+    default_init_input: Optional[str] = None
+    quick_inputs: List[str] = Field(default_factory=list)
+    persona_markdown: Optional[str] = None
+    capabilities: List[AgentPackageCapabilityItem] = Field(default_factory=list)
+    manifest_tags: List[str] = Field(default_factory=list)
+
+
 class PluginVersionDetail(BaseModel):
     asset_id: str
     version: str
@@ -237,6 +265,10 @@ class PluginVersionDetail(BaseModel):
     git_version_display_as_commit: bool = Field(
         False,
         description="为 true 时本行 version 显示为 commit 短码（仅当 version 等于资产 latest_version）",
+    )
+    agent_package_profile: Optional[AgentPackageProfile] = Field(
+        None,
+        description="agent-plugin / agent-template / agent-mcp 内层 manifest 只读摘要",
     )
 
 

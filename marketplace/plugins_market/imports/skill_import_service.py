@@ -93,11 +93,6 @@ def _resolve_import_fail_identity(entry: Path) -> tuple[str, str]:
             manifest = load_json_object_file(manifest_path, label="manifest.json")
             if not fail_name:
                 fail_name = str(manifest.get("id") or manifest.get("name") or "").strip()
-                agent_card = manifest.get("agentCard")
-                if not fail_name and isinstance(agent_card, dict):
-                    fail_name = str(
-                        agent_card.get("id") or agent_card.get("name") or ""
-                    ).strip()
             if not fail_version:
                 fail_version = str(manifest.get("version") or "").strip()
         except Exception:  # noqa: BLE001 - 尽力而为，不影响原始错误

@@ -6,7 +6,7 @@ import LoginPage from '@/pages/LoginPage'
 import MyPluginDetailPage from '@/pages/MyPluginDetailPage'
 import MyProfilePage from '@/pages/MyProfilePage'
 import PluginMarketPage from '@/pages/PluginMarketPage'
-import SkillDetailPage from '@/pages/SkillDetailPage'
+import AssetDetailPage from '@/pages/AssetDetailPage'
 import PublishPluginPage from '@/pages/PublishPluginPage'
 import SkillReviewDetailPage from '@/pages/SkillReviewDetailPage'
 import { PublishDrawerProvider, usePublishDrawer } from '@/contexts/PublishDrawer'
@@ -48,7 +48,8 @@ function App() {
               <Route path="/profile" element={<MyProfilePage />} />
               <Route path="/groups" element={<GroupsPage />} />
               <Route path="/groups/:groupId" element={<GroupDetailPage />} />
-              <Route path="/skills/:assetId" element={<SkillDetailPage />} />
+              <Route path="/skills/:assetId" element={<AssetDetailPage />} />
+              <Route path="/assets/:assetId" element={<AssetDetailPage />} />
               <Route path="/" element={<PluginMarketPage />} />
             </Route>
           </Routes>

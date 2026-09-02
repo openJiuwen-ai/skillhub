@@ -2,7 +2,7 @@
 
 import { type FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckCircle2, CircleHelp, Cpu, FolderUp, ImagePlus, Loader2, UploadCloud } from 'lucide-react'
+import { CheckCircle2, CircleHelp, FolderUp, ImagePlus, Loader2, UploadCloud } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useQuery } from 'react-query'
 import type { PublishDrawerType } from '@/contexts/PublishDrawer'
@@ -16,8 +16,10 @@ import {
   parseSkillMdFrontmatter,
   type DetectedPublishPluginType,
 } from '@/utils/buildSkillPublishZip'
+import { inspectAgentPublishZip } from '@/utils/detectAgentPublishZip'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
-import { SKILL_LIKE_QUERY_VALUE } from '@/utils/pluginType'
+import { isAgentAssetPluginType } from '@/utils/pluginType'
+import { resolvePublishFormFieldLabels } from '@/utils/publishFieldLabels'
 
 const SKILL_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const SKILL_NAME_MAX_LEN = 64
@@ -43,6 +45,13 @@ const SKILL_ZIP_ERROR_KEYS: Record<string, string> = {
   TEAM_SKILL_ROLES_REQUIRED: 'publish.skillErrorTeamSkillRolesRequired',
   TEAM_SKILL_ROLES_MIN_2: 'publish.skillErrorTeamSkillRolesMin2',
   TEAM_SKILL_ROLE_NO_ID: 'publish.skillErrorTeamSkillRoleNoId',
+  AGENT_ZIP_MISSING_PLUGIN_YAML: 'publish.agentErrorMissingPluginYaml',
+  AGENT_ZIP_INVALID_PLUGIN_YAML: 'publish.agentErrorInvalidPluginYaml',
+  AGENT_ZIP_UNSUPPORTED_TYPE: 'publish.agentErrorUnsupportedType',
+  AGENT_ZIP_MISSING_NAME: 'publish.agentErrorMissingName',
+  AGENT_ZIP_MISSING_VERSION: 'publish.agentErrorMissingVersion',
+  AGENT_ZIP_INVALID_MANIFEST: 'publish.agentErrorInvalidManifest',
+  AGENT_ZIP_UNRECOGNIZED_LAYOUT: 'publish.agentErrorUnrecognizedLayout',
 }
 
 const ZIP_ERROR_TO_FIELD: Record<string, PublishFieldKey> = {
@@ -217,16 +226,6 @@ const PUBLISH_FIELD_ORDER: PublishFieldKey[] = [
   'skillIcon',
 ]
 
-const FIELD_LABEL_KEYS: Record<PublishFieldKey, string> = {
-  skillPkgName: 'publish.fieldSkillName',
-  pluginVersion: 'publish.fieldVersionSkill',
-  skillDisplayName: 'publish.fieldSkillDisplayName',
-  skillDescription: 'publish.fieldSkillDescription',
-  skillTags: 'publish.fieldSkillTags',
-  skillFolder: 'publish.fieldSkillFolder',
-  skillIcon: 'publish.fieldSkillIcon',
-}
-
 const inputBase =
   'block h-10 w-full rounded-xl border border-[#E5E7EB] bg-white px-3 text-[13px] text-[#111827] placeholder:text-[#9CA3AF] transition-colors hover:border-[#D1D5DB] focus:border-[#1E54F9] focus:outline-none focus:ring-2 focus:ring-[#DBE6FF] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#94A3B8]'
 const inputError =
@@ -238,30 +237,6 @@ const textareaError =
 
 const inputCls = (hasError?: boolean) => (hasError ? inputError : inputBase)
 const textareaCls = (hasError?: boolean) => (hasError ? textareaError : textareaBase)
-
-function SkillHubGlyph({ className = '' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <rect x="4.5" y="6" width="15" height="12" rx="4" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M9 9.5h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M9 12h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M9.8 14.5h4.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function SwarmHubGlyph({ className = '' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="16" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="12" cy="15.5" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M9.9 9.2 10.8 10.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <path d="M14.1 9.2 13.2 10.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <path d="M10 13.8h4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  )
-}
 
 export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   const { t } = useTranslation()
@@ -275,6 +250,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   const skillTagsId = useId()
   const versionDescId = useId()
   const pluginLinkId = useId()
+  const publishTypeId = useId()
 
   const [selectedType, setSelectedType] = useState<PublishDrawerType>(type)
   const [detectedType, setDetectedType] = useState<DetectedPublishPluginType>('unknown')
@@ -302,12 +278,33 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   const [skillFolderFiles, setSkillFolderFiles] = useState<File[] | null>(null)
   const [skillFolderInputKey, setSkillFolderInputKey] = useState(0)
   const [skillIconInputKey, setSkillIconInputKey] = useState(0)
+  const [agentZipInputKey, setAgentZipInputKey] = useState(0)
   const [packing, setPacking] = useState(false)
   const prevSkillPluginIdRef = useRef('')
+  const isAgentMode = isAgentAssetPluginType(selectedType)
+  const agentZipInputId = useId()
 
   useEffect(() => {
     setSelectedType(type)
   }, [type])
+
+  useEffect(() => {
+    setSkillFolderFiles(null)
+    setFile(null)
+    setChecksum('')
+    setDetectedType('unknown')
+    setTypeMismatchError('')
+    setSkillFolderInputKey(k => k + 1)
+    setAgentZipInputKey(k => k + 1)
+    if (isAgentAssetPluginType(selectedType)) {
+      setSkillPkgName('')
+      setPluginVersion('')
+      setSkillDisplayName('')
+      setSkillDescription('')
+      setSkillTagsInput('')
+      setSkillIconFile(null)
+    }
+  }, [selectedType])
 
   const clearFieldError = (key: PublishFieldKey) => {
     setFieldErrors(prev => fieldErrorMerge(prev, key, null))
@@ -429,9 +426,11 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   }, [selectedType])
 
   useEffect(() => {
-    if (!skillFolderFiles?.length) {
-      setDetectedType('unknown')
-      setTypeMismatchError('')
+    if (!skillFolderFiles?.length || isAgentMode) {
+      if (!isAgentMode) {
+        setDetectedType('unknown')
+        setTypeMismatchError('')
+      }
       return
     }
     let cancelled = false
@@ -451,7 +450,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     return () => {
       cancelled = true
     }
-  }, [skillFolderFiles, selectedType, t])
+  }, [skillFolderFiles, selectedType, t, isAgentMode])
 
   // Sync tags input from SKILL.md frontmatter for new skill publish (no existing plugin_id).
   // When publishing a new version of an existing skill, tags come from DB (the pluginId effect).
@@ -494,6 +493,9 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
 
   const skillFormReady = useMemo(() => {
     const login = user?.login?.trim()
+    if (isAgentMode) {
+      return Boolean(login && file && skillPkgName.trim() && pluginVersion.trim() && !typeMismatchError)
+    }
     return Boolean(
       login &&
         skillFolderFiles &&
@@ -502,9 +504,22 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
         pluginVersion.trim() &&
         skillDisplayName.trim(),
     )
-  }, [user?.login, skillFolderFiles, skillPkgName, pluginVersion, skillDisplayName])
+  }, [
+    user?.login,
+    isAgentMode,
+    file,
+    skillFolderFiles,
+    skillPkgName,
+    pluginVersion,
+    skillDisplayName,
+    typeMismatchError,
+  ])
 
   useEffect(() => {
+    if (isAgentMode) {
+      setPacking(false)
+      return
+    }
     if (!skillFormReady || typeMismatchError) {
       setPacking(false)
       setFile(null)
@@ -556,6 +571,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       window.clearTimeout(timer)
     }
   }, [
+    isAgentMode,
     skillFormReady,
     typeMismatchError,
     user?.login,
@@ -603,6 +619,20 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     return next
   }, [fieldErrors, skillIconFile])
 
+  const formFieldLabels = useMemo(() => resolvePublishFormFieldLabels(selectedType, t), [selectedType, t])
+  const fieldLabelByKey = useMemo(
+    (): Record<PublishFieldKey, string> => ({
+      skillPkgName: formFieldLabels.pkgName,
+      pluginVersion: t('publish.fieldVersionSkill'),
+      skillDisplayName: formFieldLabels.displayName,
+      skillDescription: formFieldLabels.description,
+      skillTags: formFieldLabels.tags,
+      skillFolder: formFieldLabels.folder,
+      skillIcon: formFieldLabels.icon,
+    }),
+    [formFieldLabels, t],
+  )
+
   const canSubmit = Boolean(
     skillFormReady &&
       !uploading &&
@@ -615,48 +645,60 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     (n, k) => (blockingFieldErrors[k] ? n + 1 : n),
     0,
   )
-  const fieldErrorLabels = PUBLISH_FIELD_ORDER.filter(k => blockingFieldErrors[k]).map(k =>
-    t(FIELD_LABEL_KEYS[k]),
-  )
+  const fieldErrorLabels = PUBLISH_FIELD_ORDER.filter(k => blockingFieldErrors[k]).map(k => fieldLabelByKey[k])
 
   const typeOptions = [
-    {
-      value: 'swarmskill',
-      label: t('publish.typeSwarmSkill'),
-      icon: SwarmHubGlyph,
-      activeClasses: 'bg-white text-[#191919] shadow-[0_4px_16px_rgba(15,23,42,0.08)]',
-      inactiveClasses: 'bg-transparent text-[#191919] hover:bg-transparent',
-    },
-    {
-      value: 'skill',
-      label: t('publish.typeSkill'),
-      icon: SkillHubGlyph,
-      activeClasses: 'bg-white text-[#191919] shadow-[0_4px_16px_rgba(15,23,42,0.08)]',
-      inactiveClasses: 'bg-transparent text-[#191919] hover:bg-transparent',
-    },
-  ] as const
+    { value: 'swarmskill' as const, label: t('publish.typeSwarmSkill') },
+    { value: 'skill' as const, label: t('publish.typeSkill') },
+    { value: 'agent-plugin' as const, label: t('publish.typeAgentPlugin') },
+    { value: 'agent-template' as const, label: t('publish.typeAgentTemplate') },
+    { value: 'agent-mcp' as const, label: t('publish.typeAgentMcp') },
+  ]
   const detectedTypeLabel =
     detectedType === 'swarmskill'
       ? t('publish.typeSwarmSkill')
       : detectedType === 'skill'
         ? t('publish.typeSkill')
-        : t('publish.typeUnknown')
-  const pluginLinkLabel =
-    selectedType === 'swarmskill' ? t('publish.fieldPluginIdSwarmSkill') : t('publish.fieldPluginIdSkill')
-  const pluginLinkHint =
-    myPluginsLoading
-      ? t('publish.pluginListLoading')
-      : selectedType === 'swarmskill'
-        ? t('publish.fieldPluginIdHelpSwarmSkill')
-        : t('publish.fieldPluginIdHelpSkill')
-  const pluginNewOptionLabel =
-    selectedType === 'swarmskill'
-      ? t('publish.pluginIdNewOptionSwarmSkill')
-      : t('publish.pluginIdNewOptionSkill')
+        : detectedType === 'agent-plugin'
+          ? t('publish.typeAgentPlugin')
+          : detectedType === 'agent-template'
+            ? t('publish.typeAgentTemplate')
+            : detectedType === 'agent-mcp'
+              ? t('publish.typeAgentMcp')
+              : t('publish.typeUnknown')
+  const pluginLinkLabel = formFieldLabels.pluginLinkLabel
+  const pluginLinkHint = myPluginsLoading ? t('publish.pluginListLoading') : formFieldLabels.pluginLinkHint
+  const pluginNewOptionLabel = formFieldLabels.pluginNewOptionLabel
   const versionDescLabel =
     selectedType === 'swarmskill' ? t('publish.fieldVersionDescSwarmSkill') : t('publish.fieldVersionDesc')
-  const publishButtonLabel =
-    selectedType === 'swarmskill' ? t('publish.publishSwarmSkill') : t('appHeader.publish')
+  const publishButtonLabel = isAgentMode
+    ? t('publish.publishAgent')
+    : selectedType === 'swarmskill'
+      ? t('publish.publishSwarmSkill')
+      : t('appHeader.publish')
+
+  const handleAgentZipSelected = async (nextFile: File | null) => {
+    setGeneralError('')
+    setFieldErrors({})
+    setFile(null)
+    setChecksum('')
+    setDetectedType('unknown')
+    setTypeMismatchError('')
+    if (!nextFile) return
+    try {
+      const info = await inspectAgentPublishZip(nextFile)
+      setDetectedType(info.pluginType)
+      setTypeMismatchError(info.pluginType !== selectedType ? t('publish.typeMismatchError') : '')
+      setSkillPkgName(info.name)
+      setPluginVersion(info.version)
+      setSkillDisplayName(info.displayName || info.name)
+      setSkillDescription(info.description)
+      setSkillTagsInput(info.tags.join(', '))
+      setFile(nextFile)
+    } catch (e) {
+      applyErrorFromCode(e instanceof Error ? e.message : '', t('publish.agentZipInspectFailed'))
+    }
+  }
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -682,22 +724,36 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
     setSuccessMsg('')
     try {
       const login = user?.login?.trim()
-      if (!login || !skillFolderFiles?.length) {
+      if (!login) {
         setGeneralError(t('publish.uploadFailed'))
         return
       }
-      const tags = skillTagsInput.split(/[,，]/).map(s => s.trim()).filter(Boolean)
-      const zipFile = await buildSkillPublishZip({
-        name: skillPkgName.trim(),
-        version: pluginVersion.trim(),
-        displayName: skillDisplayName.trim(),
-        description: skillDescription.trim() || undefined,
-        tags,
-        authorLogin: login,
-        iconFile: skillIconFile ?? undefined,
-        skillDirectoryFiles: skillFolderFiles,
-      })
+      let zipFile: File
+      if (isAgentMode) {
+        if (!file) {
+          setGeneralError(t('publish.agentZipRequired'))
+          return
+        }
+        zipFile = file
+      } else {
+        if (!skillFolderFiles?.length) {
+          setGeneralError(t('publish.uploadFailed'))
+          return
+        }
+        const tags = skillTagsInput.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+        zipFile = await buildSkillPublishZip({
+          name: skillPkgName.trim(),
+          version: pluginVersion.trim(),
+          displayName: skillDisplayName.trim(),
+          description: skillDescription.trim() || undefined,
+          tags,
+          authorLogin: login,
+          iconFile: skillIconFile ?? undefined,
+          skillDirectoryFiles: skillFolderFiles,
+        })
+      }
       const checksumFresh = await sha256HexOfFile(zipFile)
+      const tags = skillTagsInput.split(/[,，]/).map(s => s.trim()).filter(Boolean)
       const data = await publishPlugin({
         file: zipFile,
         checksumSha256Hex: checksumFresh,
@@ -706,6 +762,14 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
         versionDesc: versionDesc.trim() || undefined,
         force,
         visibility,
+        ...(isAgentMode
+          ? {
+              assetName: skillPkgName.trim(),
+              displayName: skillDisplayName.trim() || undefined,
+              description: skillDescription.trim() || undefined,
+              tags: tags.length ? tags.join(',') : undefined,
+            }
+          : {}),
       })
       setFile(null)
       setChecksum('')
@@ -718,7 +782,6 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       setSkillDisplayName('')
       setSkillDescription('')
       setSkillTagsInput('')
-      setVisibility('public')
       setSkillIconFile(null)
       setFieldErrors({})
       setSkillFolderFiles(null)
@@ -726,6 +789,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       setTypeMismatchError('')
       setSkillFolderInputKey(k => k + 1)
       setSkillIconInputKey(k => k + 1)
+      setAgentZipInputKey(k => k + 1)
       setSuccessMsg(
         t('publish.successDetail', {
           name: data.name,
@@ -745,6 +809,8 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
             version: pluginVersionNormalized,
           }),
         )
+      } else if (err instanceof MarketplaceApiError) {
+        setGeneralError(err.message || t('publish.uploadFailed'))
       } else {
         applyErrorFromCode(err instanceof Error ? err.message : '', t('publish.uploadFailed'))
       }
@@ -773,6 +839,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   }, [successMsg])
 
   const onDownloadTemplate = async () => {
+    if (isAgentMode) return
     setTemplateError('')
     setTemplateBusy(true)
     try {
@@ -790,7 +857,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col" aria-busy={uploading || packing || hashing}>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-4 sm:px-6" data-publish-form-scroll>
           {generalError ? (
-            <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-3.5 py-2.5 text-[12.5px] leading-5 text-rose-800">
+            <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-3.5 py-2.5 text-[12.5px] leading-5 text-rose-800 whitespace-pre-wrap">
               {generalError}
             </div>
           ) : null}
@@ -800,35 +867,20 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
             </div>
           ) : null}
 
-          <Field label={t('publish.typeSelectorLabel')} hint={t('publish.typeSelectionHint')}>
+          <Field htmlFor={publishTypeId} label={t('publish.typeSelectorLabel')} hint={t('publish.typeSelectionHint')}>
             <div className="space-y-2">
-              <div
-                className="grid w-full max-w-[408px] grid-cols-2 gap-0 overflow-hidden rounded-[12px] bg-[linear-gradient(99.61deg,rgba(30,84,249,0.06)_0%,rgba(131,45,251,0.06)_100%)] p-0.5 shadow-none"
-                role="tablist"
-                aria-label="publish type"
+              <select
+                id={publishTypeId}
+                value={selectedType}
+                onChange={e => setSelectedType(e.target.value as PublishDrawerType)}
+                className={`${inputBase} max-w-[408px]`}
               >
-                {typeOptions.map((option, index) => {
-                  const active = selectedType === option.value
-                  const Icon = option.icon
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      onClick={() => setSelectedType(option.value)}
-                      className={`flex h-[52px] items-center justify-center gap-2 rounded-[10px] px-4 text-center transition-colors duration-200 ${
-                        active ? option.activeClasses : option.inactiveClasses
-                      }`}
-                    >
-                      <Icon className="h-5 w-5 shrink-0 text-[#191919]" />
-                      <span className="text-[14px] font-semibold leading-none text-[#191919]">
-                        {option.label}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
+                {typeOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <div className={`text-[12px] ${detectedType === 'unknown' ? 'text-[#94A3B8]' : 'text-[#0F172A]'}`}>
                 {t('publish.typeDetectedHint', { type: detectedTypeLabel })}
               </div>
@@ -889,11 +941,55 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
 
           {skillMetadataLocked ? (
             <div className="-mt-2 rounded-xl border border-sky-200/70 bg-sky-50/70 px-3 py-2 text-[11.5px] leading-5 text-[#0C4A8A]">
-              {t('publish.fieldSkillMetadataLockedHint')}
+              {formFieldLabels.metadataLockedHint}
             </div>
           ) : null}
 
-          <Field htmlFor={skillNameId} label={t('publish.fieldSkillName')} required hint={t('publish.fieldSkillNameHelp')} error={fieldErrors.skillPkgName} fieldKey="skillPkgName">
+          {isAgentMode ? (
+            <Field label={t('publish.fieldAgentZip')} required hint={t('publish.fieldAgentZipHelp')} error={fieldErrors.skillFolder} fieldKey="skillFolder">
+              <input
+                key={agentZipInputKey}
+                id={agentZipInputId}
+                type="file"
+                accept=".zip,application/zip"
+                className="sr-only"
+                onClick={e => {
+                  e.currentTarget.value = ''
+                }}
+                onChange={e => {
+                  const f = e.target.files?.[0] ?? null
+                  void handleAgentZipSelected(f)
+                }}
+              />
+              <label
+                htmlFor={agentZipInputId}
+                className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center transition-colors ${
+                  fieldErrors.skillFolder
+                    ? 'border-rose-300 bg-rose-50/40 hover:border-rose-400'
+                    : file
+                      ? 'border-[#CBD5E1] bg-[#F8FAFC]'
+                      : 'border-[#CBD5E1] hover:border-[#1E54F9] hover:bg-[#F5F8FF]'
+                }`}
+              >
+                <span className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${file ? 'bg-emerald-50 text-emerald-600' : 'bg-[#EEF4FF] text-[#1E54F9]'}`}>
+                  {file ? <CheckCircle2 className="h-4 w-4" aria-hidden /> : <UploadCloud className="h-4 w-4" aria-hidden />}
+                </span>
+                {file ? (
+                  <div className="space-y-0.5">
+                    <div className="text-[13px] font-medium text-[#0F172A]">{file.name}</div>
+                    <div className="text-[11.5px] text-[#64748B]">{t('publish.agentZipSelected')}</div>
+                  </div>
+                ) : (
+                  <div className="space-y-0.5">
+                    <div className="text-[13px] font-medium text-[#334155]">{t('publish.agentZipChoose')}</div>
+                    <div className="text-[11.5px] text-[#94A3B8]">{t('publish.agentZipNone')}</div>
+                  </div>
+                )}
+              </label>
+            </Field>
+          ) : null}
+
+          <Field htmlFor={skillNameId} label={formFieldLabels.pkgName} required hint={formFieldLabels.pkgNameHelp} error={fieldErrors.skillPkgName} fieldKey="skillPkgName">
             <input
               id={skillNameId}
               type="text"
@@ -906,13 +1002,13 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
                 setFieldErrors(prev => fieldErrorMerge(prev, 'skillPkgName', skKey ? t(skKey) : null))
               }}
               disabled={skillMetadataLocked}
-              placeholder="my-demo-skill"
+              placeholder={formFieldLabels.pkgNamePlaceholder}
               required
               aria-invalid={Boolean(fieldErrors.skillPkgName)}
             />
           </Field>
 
-          <Field htmlFor={skillVersionId} label={t('publish.fieldVersionSkill')} required hint={t('publish.fieldVersionSkillHelp')} error={fieldErrors.pluginVersion} fieldKey="pluginVersion">
+          <Field htmlFor={skillVersionId} label={t('publish.fieldVersionSkill')} required hint={formFieldLabels.versionHelp} error={fieldErrors.pluginVersion} fieldKey="pluginVersion">
             <input
               id={skillVersionId}
               type="text"
@@ -930,7 +1026,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
             />
           </Field>
 
-          <Field htmlFor={skillDisplayNameId} label={t('publish.fieldSkillDisplayName')} required hint={t('publish.fieldSkillDisplayNameHelp')} error={fieldErrors.skillDisplayName} fieldKey="skillDisplayName">
+          <Field htmlFor={skillDisplayNameId} label={formFieldLabels.displayName} required={!isAgentMode} hint={formFieldLabels.displayNameHelp} error={fieldErrors.skillDisplayName} fieldKey="skillDisplayName">
             <input
               id={skillDisplayNameId}
               type="text"
@@ -941,13 +1037,13 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
                 clearFieldError('skillDisplayName')
               }}
               disabled={skillMetadataLocked}
-              placeholder={t('publish.fieldSkillDisplayName')}
-              required
+              placeholder={formFieldLabels.displayName}
+              required={!isAgentMode}
               aria-invalid={Boolean(fieldErrors.skillDisplayName)}
             />
           </Field>
 
-          <Field htmlFor={skillDescriptionId} label={t('publish.fieldSkillDescription')} hint={t('publish.fieldSkillDescriptionHelp')} error={fieldErrors.skillDescription} fieldKey="skillDescription">
+          <Field htmlFor={skillDescriptionId} label={formFieldLabels.description} hint={formFieldLabels.descriptionHelp} error={fieldErrors.skillDescription} fieldKey="skillDescription">
             <textarea
               id={skillDescriptionId}
               className={textareaCls(Boolean(fieldErrors.skillDescription))}
@@ -957,12 +1053,12 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
                 setSkillDescription(e.target.value)
                 clearFieldError('skillDescription')
               }}
-              placeholder={t('publish.fieldSkillDescriptionPlaceholder')}
+              placeholder={formFieldLabels.descriptionPlaceholder}
               aria-invalid={Boolean(fieldErrors.skillDescription)}
             />
           </Field>
 
-          <Field htmlFor={skillTagsId} label={t('publish.fieldSkillTags')} hint={t('publish.fieldSkillTagsHelp')} error={fieldErrors.skillTags} fieldKey="skillTags">
+          <Field htmlFor={skillTagsId} label={formFieldLabels.tags} hint={formFieldLabels.tagsHelp} error={fieldErrors.skillTags} fieldKey="skillTags">
             <input
               id={skillTagsId}
               type="text"
@@ -977,7 +1073,9 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
             />
           </Field>
 
-          <Field label={t('publish.fieldSkillFolder')} required hint={t('publish.fieldSkillFolderHelp')} error={fieldErrors.skillFolder} fieldKey="skillFolder">
+          {!isAgentMode ? (
+            <>
+          <Field label={formFieldLabels.folder} required hint={formFieldLabels.folderHelp} error={fieldErrors.skillFolder} fieldKey="skillFolder">
             <input
               key={skillFolderInputKey}
               id={skillFolderInputId}
@@ -1022,7 +1120,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
             </label>
           </Field>
 
-          <Field label={t('publish.fieldSkillIcon')} hint={t('publish.fieldSkillIconHelp')} error={fieldErrors.skillIcon} fieldKey="skillIcon">
+          <Field label={formFieldLabels.icon} hint={formFieldLabels.iconHelp} error={fieldErrors.skillIcon} fieldKey="skillIcon">
             <input
               key={skillIconInputKey}
               id={skillIconInputId}
@@ -1069,11 +1167,13 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
                 )}
               </label>
               <div className="min-w-0 text-[12px] text-[#64748B]">
-                <div className="truncate text-[13px] font-medium text-[#0F172A]">{skillIconFile?.name ?? t('publish.fieldSkillIcon')}</div>
+                <div className="truncate text-[13px] font-medium text-[#0F172A]">{skillIconFile?.name ?? formFieldLabels.icon}</div>
                 <div className="mt-0.5">PNG · ≤ 5MB</div>
               </div>
             </div>
           </Field>
+            </>
+          ) : null}
 
           <Field label={t('publish.checksumLabel')} hint={t('publish.checksumHintSkill')}>
             <div className="mb-1.5 flex items-center justify-end gap-2">
