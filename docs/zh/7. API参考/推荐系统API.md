@@ -9,7 +9,7 @@
   - 或有效 `X-System-Token: <SYSTEM_ADMIN_TOKEN>`（受信任服务代调）
   - 缺头、Bearer 无效/过期、System Token 无效、两种凭证同时传：视为匿名，走 Redis 下载量 TopK 兜底（`source=topk_install`），**不 401**
 
-市场 Web 列表侧的「推荐精选」（`GET /api/v1/plugins?order_by=recommend`，不带 `category_id`）见 [TeamSkillsHub 接口参考](./TeamSkillsHub-接口参考.md)。列表与 POST 共用同一套召回引擎；POST 现为可选鉴权。
+市场 Web 列表侧的「推荐精选」（`GET /api/v1/plugins?order_by=recommend`，不带 `category_id`）见 [TeamSkillsHub 接口参考](./TeamSkillsHub-接口参考.md)。列表与 POST 共用同一套召回引擎；POST 在召回后走与列表相同的市场过滤与卡片补全。POST 为可选鉴权。
 
 ---
 
@@ -50,7 +50,7 @@
 | `user_id` | string | 否 | `""` | 见上表「用户身份如何生效」；`timestamp` 可不传 |
 | `request_id` | string | 否 | `""` | 调用方请求 ID，响应原样回显（链路追踪用这个） |
 | `timestamp` | number \| null | 否 | `null` | 仅写日志，不参与召回 |
-| `top_k` | int | 否 | `10` | 返回条数，范围 1–500 |
+| `top_k` | int | 否 | `10` | 过滤后最多返回条数，范围 1–500。服务端会适量超召再滤，可见条数可能少于 `top_k` |
 | `category_id` | string | 否 | `""` | 根类目 ID；空=不限 |
 
 ### 响应 `data`
@@ -61,7 +61,7 @@
 | `user_id` | string | **实际用于召回**的用户 ID |
 | `source` | string | `user_history` / `topk_install` |
 | `category_id` | string | 请求类目回显 |
-| `items` | array | `[{ "asset_id", "score" }, ...]` |
+| `items` | array | 过滤后的可见卡片。每条含召回 `score`，以及与 `GET /plugins` 列表项相同的字段（`name` / `display_name` / `short_desc` / `plugin_type` / `latest_version` / `tags` / `update_time` 等）。下架、未过审、不可见的 id 不会出现。顺序为召回序（置顶 `pin_order` 仍优先） |
 
 ### 错误
 

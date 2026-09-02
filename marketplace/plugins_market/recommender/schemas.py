@@ -6,6 +6,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, StringConstraints
 
+from plugins_market.schemas.plugin import PluginListItem
+
 
 # Cap embedding cost / payload size for POST /recommend/by_queries
 _QUERY_TEXT = Annotated[str, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)]
@@ -33,9 +35,10 @@ class RecommendRequest(BaseModel):
     )
 
 
-class RecommendItemOut(BaseModel):
-    asset_id: str
-    score: float
+class RecommendItemOut(PluginListItem):
+    """Visible marketplace card plus recall score. Invisible assets are omitted."""
+
+    score: float = 0.0
 
 
 class RecommendData(BaseModel):
