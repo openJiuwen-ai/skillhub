@@ -2905,6 +2905,11 @@ def get_download_info(
                         asset_id=asset.asset_id,
                         version_repo=version_repo,
                     )
+            if version_row and not viewer.can_download_skill_version_row(asset, version_row, db):
+                version_row = _compute_latest_approved_skill_version_row(
+                    asset_id=asset.asset_id,
+                    version_repo=version_repo,
+                )
             if not version_row or not viewer.can_download_skill_version_row(asset, version_row, db):
                 raise PublishError(
                     code=404,
@@ -2917,11 +2922,24 @@ def get_download_info(
                 latest_version=asset.latest_version,
                 version_repo=version_repo,
             )
+            if version_row and not viewer.can_download_skill_version_row(asset, version_row, db):
+                version_row = _compute_latest_approved_skill_version_row(
+                    asset_id=asset.asset_id,
+                    version_repo=version_repo,
+                )
     if not version_row:
         raise PublishError(
             code=404,
             error="plugin_not_found",
             message=f"插件 '{asset.asset_id}' 暂无可下载版本",
+            error_code="SKILLHUB_PLUGIN_NOT_FOUND",
+            error_class="not_found",
+        )
+    if not viewer.can_download_skill_version_row(asset, version_row, db):
+        raise PublishError(
+            code=404,
+            error="plugin_not_found",
+            message=f"插件 '{asset.asset_id}' 不存在或暂不可下载",
             error_code="SKILLHUB_PLUGIN_NOT_FOUND",
             error_class="not_found",
         )

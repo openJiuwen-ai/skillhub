@@ -264,6 +264,32 @@ def test_private_skill_publisher_can_download_own_version():
     assert viewer.can_download_skill_version_row(asset, version, db) is True
 
 
+def test_rejected_skill_version_is_not_downloadable():
+    db = _db()
+    asset = _private_skill()
+    asset.visibility = "public"
+    asset.moderation_status = "REJECTED"
+    asset.publish_result = "publish_failed"
+    version = MarketAssetVersionDB(
+        version_id="v1",
+        asset_id="skill-1",
+        version="1.0.0",
+        create_time=1,
+        moderation_status="REJECTED",
+        publish_result="publish_failed",
+    )
+    db.add(asset)
+    db.add(version)
+    db.commit()
+
+    owner = ViewerContext(user_id="owner", user_login="Owner", is_system_admin=False)
+    admin = ViewerContext(user_id="admin", user_login="admin", is_system_admin=True)
+    assert owner.can_see_skill_version_row(asset, version, db) is True
+    assert owner.can_download_skill_version_row(asset, version, db) is False
+    assert admin.can_download_skill_version_row(asset, version, db) is False
+    assert ANONYMOUS_VIEWER.can_download_skill_version_row(asset, version, db) is False
+
+
 def test_group_member_can_use_private_approved_skill_version():
     db = _db()
     asset = _private_skill()

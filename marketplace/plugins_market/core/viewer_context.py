@@ -7,7 +7,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from plugins_market.core.moderation import is_moderated_market_asset_type, is_skill_like_plugin_type
+from plugins_market.core.moderation import (
+    MODERATION_REJECTED,
+    is_moderated_market_asset_type,
+    is_skill_like_plugin_type,
+)
 from plugins_market.core.publish_result import (
     is_skill_asset_publicly_visible,
     is_skill_version_publicly_visible,
@@ -93,10 +97,13 @@ class ViewerContext:
         )
 
     def can_download_skill_version_row(self, asset: MarketAssetDB, version_row: MarketAssetVersionDB, db=None) -> bool:
-        """下载沿用审核规则：审核管理员/发布者可下载全部，其余仅可下载公开或组授权的已通过版本。"""
+        """下载闸门：驳回版本对任何人都不可下载；其余沿用审核可见性。"""
         acl_source = self.skill_asset_access_source(asset, db)
         if not is_moderated_market_asset_type(asset.plugin_type):
             return not self._is_private_skill_asset(asset) or acl_source in ("admin", "owner")
+        version_ms = (getattr(version_row, "moderation_status", None) or "").strip().upper()
+        if version_ms == MODERATION_REJECTED:
+            return False
         if acl_source in ("admin", "owner"):
             return True
         # group 来源（组群授权）仍须满足版本审核通过：不可经组群授权绕过审核下载未通过版本
