@@ -2543,6 +2543,38 @@ def _resolve_latest_version_for_download(
     return version_repo.get_latest_version(asset_id=asset_id)
 
 
+def _resolve_unspecified_moderated_download_version_row(
+    *,
+    asset: MarketAssetDB,
+    version_repo: MarketAssetVersionRepository,
+    viewer: ViewerContext,
+    db: Session,
+) -> MarketAssetVersionDB | None:
+    """Omit ``version``: public approved artifact, not the unpublished latest."""
+    version_row: MarketAssetVersionDB | None = None
+    plv = (getattr(asset, "public_latest_version", None) or "").strip() or None
+    if plv:
+        cand = version_repo.get_version(asset_id=asset.asset_id, version=plv)
+        if cand is not None and viewer.can_download_skill_version_row(asset, cand, db):
+            version_row = cand
+    if version_row is None:
+        version_row = _compute_latest_approved_skill_version_row(
+            asset_id=asset.asset_id,
+            version_repo=version_repo,
+        )
+    if version_row and not viewer.can_download_skill_version_row(asset, version_row, db):
+        version_row = None
+    if version_row is None:
+        acl_source = viewer.skill_asset_access_source(asset, db)
+        if acl_source in ("admin", "owner"):
+            version_row = _resolve_latest_version_for_download(
+                asset_id=asset.asset_id,
+                latest_version=asset.latest_version,
+                version_repo=version_repo,
+            )
+    return version_row
+
+
 def moderate_skill_asset_service(
     *,
     asset_id: str,
@@ -2885,37 +2917,13 @@ def get_download_info(
             )
     else:
         pt = (asset.plugin_type or "").strip().lower()
-        if is_moderated_market_asset_type(pt) and not viewer.is_market_moderation_admin:
-            acl_source = viewer.skill_asset_access_source(asset, db)
-            version_row = None
-            if acl_source == "owner":
-                version_row = _resolve_latest_version_for_download(
-                    asset_id=asset.asset_id,
-                    latest_version=asset.latest_version,
-                    version_repo=version_repo,
-                )
-            else:
-                plv = (getattr(asset, "public_latest_version", None) or "").strip() or None
-                if plv:
-                    cand = version_repo.get_version(asset_id=asset.asset_id, version=plv)
-                    if cand is not None and viewer.can_download_skill_version_row(asset, cand, db):
-                        version_row = cand
-                if version_row is None:
-                    version_row = _compute_latest_approved_skill_version_row(
-                        asset_id=asset.asset_id,
-                        version_repo=version_repo,
-                    )
-            if version_row and not viewer.can_download_skill_version_row(asset, version_row, db):
-                version_row = _compute_latest_approved_skill_version_row(
-                    asset_id=asset.asset_id,
-                    version_repo=version_repo,
-                )
-            if not version_row or not viewer.can_download_skill_version_row(asset, version_row, db):
-                raise PublishError(
-                    code=404,
-                    error="plugin_not_found",
-                    message=f"插件 '{asset.asset_id}' 不存在或暂不可下载",
-                )
+        if is_moderated_market_asset_type(pt):
+            version_row = _resolve_unspecified_moderated_download_version_row(
+                asset=asset,
+                version_repo=version_repo,
+                viewer=viewer,
+                db=db,
+            )
         else:
             version_row = _resolve_latest_version_for_download(
                 asset_id=asset.asset_id,

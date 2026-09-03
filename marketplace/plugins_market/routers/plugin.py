@@ -1328,7 +1328,10 @@ async def list_my_skill_moderation_audits(
 async def get_artifact_download(
     request: Request,
     artifact_id: str = Path(..., alias="id"),
-    version: Optional[str] = Query(None, description="版本号（如 1.0.0），不指定则返回最新版本"),
+    version: Optional[str] = Query(
+        None,
+        description="版本号（如 1.0.0）；不指定则返回最新已通过审核的对外版本",
+    ),
     is_cli_download: bool = Query(False, description="是否 CLI 下载；CLI=true 下载原始 zip，其他下载 raw.zip"),
     db: Session = Depends(get_db),
     storage=Depends(get_storage_client),
