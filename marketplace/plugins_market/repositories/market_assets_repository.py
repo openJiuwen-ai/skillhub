@@ -873,7 +873,7 @@ class MarketAssetVersionRepository(MarketBaseRepository[MarketAssetVersionDB]):
         asset_id: str,
         version: str,
     ) -> Optional[MarketAssetVersionDB]:
-        """锁定版本行，供人工审核等 read-check-write 路径串行化。"""
+        """锁定版本行，供审核等 read-check-write 路径串行化。"""
         return (
             self.query()
             .filter(

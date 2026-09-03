@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""人工驳回的 Skill 不得签发下载链接。"""
+"""审核驳回的 Skill 不得签发下载链接。"""
 
 from __future__ import annotations
 

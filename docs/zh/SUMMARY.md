@@ -24,6 +24,7 @@
     - [RESTful API 格式](5.%20开发指南/插件类型格式/RESTful-API格式.md)
   - [Skill 与 SwarmSkill 规范](5.%20开发指南/Skill与SwarmSkill规范.md)
   - [Skill 审核机制](5.%20开发指南/Skill审核机制.md)
+  - [多资产设计方案](5.%20开发指南/多资产设计方案.md)
   - [Agent 资产](5.%20开发指南/Agent资产.md)
   - [在线体验运行时](5.%20开发指南/在线体验运行时.md)
   - [检索系统](5.%20开发指南/检索系统/README.md)

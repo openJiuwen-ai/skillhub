@@ -243,7 +243,7 @@ paths:
       description: |
         上传并发布单个市场资产。鉴权需二选一：Authorization Bearer 或 X-System-Token（必须且只能提供一个）。
         Skill / SwarmSkill / 三类 Agent 均支持 Bearer 或 X-System-Token（必须且仅能一种）。
-        普通用户发布 Agent 资产进入人工审核；系统管理员可跳过。服务端根据包内 plugin.yaml.runtime.type
+        普通用户发布 Agent 资产进入审核；系统管理员可跳过。服务端根据包内 plugin.yaml.runtime.type
         与内层原生包派生 asset_type / plugin_type，客户端不单独传类型字段。
         visibility=private 对 Skill 与三类 agent 资产均生效，仅发布者和系统管理员可查看详情或下载，且不会进入公开列表。
       operationId: publishSkill
@@ -598,7 +598,7 @@ paths:
         - name: moderation_status
           in: query
           required: false
-          description: 按 Skill 人工审核状态筛选：PENDING | APPROVED | REJECTED（新链路中 PENDING 对应待人工审核）
+          description: 按 Skill 审核状态筛选：PENDING | APPROVED | REJECTED（新链路中 PENDING 对应待审核）
           schema:
             type: string
             enum: [PENDING, APPROVED, REJECTED]
@@ -1503,7 +1503,7 @@ paths:
         对指定 Skill 执行审核通过或驳回操作。仅审核管理员可调用。
         - `action=approve`：通过审核，Skill 将对外可见
         - `action=reject`：驳回审核，需填写 `reason`
-        - 仅已进入人工审核阶段的版本可执行该操作；系统审查中的版本不可直接人工审核
+        - 仅已进入审核阶段的版本可执行该操作；审查中的版本不可直接审核
         - `version` 不填时默认审核资产当前 `latest_version`
       operationId: moderateSkill
       tags:
@@ -2592,7 +2592,7 @@ components:
             publish_result:
               type: string
               nullable: true
-              description: "Skill 发布/审核阶段（与 status 不同轴）：reviewing 系统审查中 | pending_moderation 待人工审核 | publish_success 已上架 | publish_failed 失败"
+              description: "Skill 发布/审核阶段（与 status 不同轴）：reviewing 审查中 | pending_moderation 待审核 | publish_success 已上架 | publish_failed 失败"
             visibility:
               type: string
               nullable: true
@@ -2684,7 +2684,7 @@ components:
         moderation_status:
           type: string
           nullable: true
-          description: "Skill 人工审核聚合状态：PENDING | APPROVED | REJECTED"
+          description: "Skill 审核聚合状态：PENDING | APPROVED | REJECTED"
         moderation_reject_reason:
           type: string
           nullable: true
@@ -2803,7 +2803,7 @@ components:
         moderation_status:
           type: string
           nullable: true
-          description: "Skill 人工审核聚合状态：PENDING | APPROVED | REJECTED；非 skill 多为 APPROVED"
+          description: "Skill 审核聚合状态：PENDING | APPROVED | REJECTED；非 skill 多为 APPROVED"
         moderation_reject_reason:
           type: string
           nullable: true
@@ -2815,11 +2815,11 @@ components:
         publish_failed_reason:
           type: string
           nullable: true
-          description: 发布失败原因；系统审查失败时为系统审查原因，人工审核驳回时仍以 moderation_reject_reason / version_moderation_reject_reason 为准
+          description: 发布失败原因；审查失败时为审查原因，审核驳回时仍以 moderation_reject_reason / version_moderation_reject_reason 为准
         version_moderation_status:
           type: string
           nullable: true
-          description: "当前版本的人工审核状态；Skill：PENDING | APPROVED | REJECTED"
+          description: "当前版本的审核状态；Skill：PENDING | APPROVED | REJECTED"
         version_moderation_reject_reason:
           type: string
           nullable: true
@@ -2864,11 +2864,11 @@ components:
         review_summary:
           type: object
           nullable: true
-          description: 系统审查摘要，包括审查状态、分数、风险等级、失败项数量与 AI 语义补充摘要
+          description: 审查摘要，包括审查状态、分数、风险等级、失败项数量与 AI 语义补充摘要
         review_sections:
           type: array
           nullable: true
-          description: 系统审查结构化明细，按审查维度返回检查项、命中证据与结论
+          description: 审查结构化明细，按审查维度返回检查项、命中证据与结论
           items:
             type: object
         install_count:
@@ -3188,7 +3188,7 @@ components:
           description: 资产 ID
         moderation_status:
           type: string
-          description: 人工审核后状态（PENDING / APPROVED / REJECTED）
+          description: 审核后状态（PENDING / APPROVED / REJECTED）
         moderation_reject_reason:
           type: string
           nullable: true

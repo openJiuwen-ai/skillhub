@@ -40,9 +40,9 @@ export const ACTION_OPTIONS = [
   { value: 'GIT_SYNC', label: 'Git 同步' },
   { value: 'GIT_SOURCE_DELETE', label: '删除 Git 源' },
   { value: 'IMPORT', label: '批量导入' },
-  { value: 'AUTO_REVIEW_PASS', label: '系统审查通过' },
-  { value: 'AUTO_REVIEW_FAIL', label: '系统审查未通过' },
-  { value: 'AUTO_REVIEW_SYS_FAIL', label: '系统审查异常' },
+  { value: 'AUTO_REVIEW_PASS', label: '审查通过' },
+  { value: 'AUTO_REVIEW_FAIL', label: '审查未通过' },
+  { value: 'AUTO_REVIEW_SYS_FAIL', label: '审查异常' },
   { value: 'PENDING_MOD_SET', label: '转入待审' },
   { value: 'EXPORT', label: '导出' },
 ] as const

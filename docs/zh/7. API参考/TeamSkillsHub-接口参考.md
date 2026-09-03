@@ -140,14 +140,14 @@
 
 ## Skill 可见性速查
 
-| 调用者 | 公开市场列表 | 下载已通过版本 | 查看待审/驳回版本 | 人工审核 |
+| 调用者 | 公开市场列表 | 下载已通过版本 | 查看待审/驳回版本 | 审核 |
 |--------|:------------:|:--------------:|:-----------------:|:--------:|
 | 匿名 / 普通用户 | 仅已通过且存在对外版本 | ✓ | ✗（404） | ✗ |
 | 发布者本人 | 个人中心可见全部自己的 Skill | 含待审版本 | ✓ | ✗ |
 | 审核管理员 | 待办可见 PENDING/REJECTED | ✓ | ✓ | ✓ |
 | System Token | 按 API 权限 | ✓ | ✓ | ✓ |
 
-版本级审核状态：`PENDING`（人工审核中）、`APPROVED`（已通过）、`REJECTED`（已驳回）。
+版本级审核状态：`PENDING`（审核中）、`APPROVED`（已通过）、`REJECTED`（已驳回）。
 待审新版本在通过前，公开市场仍展示上一已通过版本（`public_latest_version`）。
 
 ---
@@ -353,7 +353,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&l
 
 ### `GET /plugins/{asset_id}/versions/{version}`
 
-返回指定市场资产版本的元数据、changelog、系统审查摘要（若启用）等。响应 `data` 始终包含 `asset_type`，并通过 `plugin_type` 给出具体运行类型；三类 agent 资产的这两个字段同值。
+返回指定市场资产版本的元数据、changelog、审查摘要（若启用）等。响应 `data` 始终包含 `asset_type`，并通过 `plugin_type` 给出具体运行类型；三类 agent 资产的这两个字段同值。
 
 | 项 | 说明 |
 |----|------|
@@ -413,7 +413,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0
 
 ### `POST /plugins`
 
-发布市场资产（multipart zip）。Skill / Swarm Skill / 三类 Agent 均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过人工审核。须携带 `X-Checksum-SHA256`。
+发布市场资产（multipart zip）。Skill / Swarm Skill / 三类 Agent 均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过审核。须携带 `X-Checksum-SHA256`。
 
 > Agent 资产支持**裸原生包**（含 `manifest.json`）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「Agent 资产」一节。
 
@@ -469,7 +469,7 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins" \
 }
 ```
 
-`publish_result` 典型流转：`reviewing`（系统审查）→ `pending_moderation`（人工审核）→ `publish_success` / `publish_failed`。三类 agent 资产发布成功时，`asset_type` 与 `plugin_type` 返回对应的 `agent-*` 值。
+`publish_result` 典型流转：`reviewing`（审查中）→ `pending_moderation`（审核中）→ `publish_success` / `publish_failed`。三类 agent 资产发布成功时，`asset_type` 与 `plugin_type` 返回对应的 `agent-*` 值。
 
 **常见错误**
 
@@ -579,7 +579,7 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 ### 发布（`POST /plugins`）
 
-三类 Agent 与 Skill / SwarmSkill 相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入人工审核；系统管理员可跳过。可上传裸原生包或通过表单覆盖元数据。
+三类 Agent 与 Skill / SwarmSkill 相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入审核；系统管理员可跳过。可上传裸原生包或通过表单覆盖元数据。
 
 Agent 包装包：`plugin_version` 须与内层 `manifest.version` 一致，否则 `400 invalid_version`。
 
@@ -1099,7 +1099,7 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/moder
 | 条件 | 状态码 | error | 说明 |
 |------|--------|-------|------|
 | 非 Skill 类型 | `400` | `not_skill` | — |
-| 仍在系统审查中 | `400` | — | 暂不可人工审核 |
+| 仍在审查中 | `400` | — | 暂不可审核 |
 | 版本已通过且 action=reject | `409` | `moderation_version_locked` | 不可驳回 |
 | 版本已驳回且再次 reject | `409` | `already_rejected` | 不可重复驳回 |
 | reject 未填 reason | `422` | `reason_required` | — |

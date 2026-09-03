@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""M3：Agent 待审队列、人工审核与关键词检索回归。"""
+"""M3：Agent 待审队列、审核与关键词检索回归。"""
 
 from __future__ import annotations
 

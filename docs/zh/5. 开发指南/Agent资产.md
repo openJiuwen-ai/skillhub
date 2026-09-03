@@ -45,7 +45,7 @@ Hub 只做**包结构与安全**校验，**不比 JiuwenSwarm 运行时更严**�
 ## 发布与审核
 
 - 接口：`POST /api/v1/plugins`（Bearer 或 System Token）。
-- 普通用户：`publish_result: pending_moderation`；系统管理员可跳过人工审核。
+- 普通用户：`publish_result: pending_moderation`；系统管理员可跳过审核。
 - 响应含 `asset_id`（同 `plugin_id`）、`asset_type`、`plugin_type`。
 - 批量导入：`POST /api/v1/plugins/import`，裸目录须含 `manifest.json`，`package_type` 识别类型。
 
@@ -146,5 +146,6 @@ Hub 只做**包结构与安全**校验，**不比 JiuwenSwarm 运行时更严**�
 
 ## 相关文档
 
+- [多资产设计方案](./多资产设计方案.md)（SE / 测试串讲）
 - [Agent 资产列表与下载接口](../7.%20API参考/Agent资产列表与下载接口.md)
 - [TeamSkillsHub 接口参考](../7.%20API参考/TeamSkillsHub-接口参考.md)

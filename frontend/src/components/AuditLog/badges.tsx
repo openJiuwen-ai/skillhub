@@ -22,7 +22,7 @@ const EVENT_TYPE_META: Record<string, { label: string; className: string }> = {
   SKILL_MODERATION: { label: 'Skill 审核', className: 'bg-blue-50 text-blue-700' },
   SKILL_MANAGE: { label: 'Skill 管理', className: 'bg-purple-50 text-purple-700' },
   PLUGIN_MANAGE: { label: '插件管理', className: 'bg-orange-50 text-orange-700' },
-  SKILL_REVIEW: { label: '系统审查', className: 'bg-indigo-50 text-indigo-700' },
+  SKILL_REVIEW: { label: '审查', className: 'bg-indigo-50 text-indigo-700' },
   SKILL_USE: { label: 'Skill 使用', className: 'bg-teal-50 text-teal-700' },
   AUDIT: { label: '审计自身', className: 'bg-amber-50 text-amber-800' },
   UNKNOWN: { label: '未识别', className: 'bg-slate-100 text-slate-500' },
@@ -36,7 +36,7 @@ const ACTION_META: Record<string, { label: string; className: string }> = {
   GIT_SYNC: { label: 'Git 同步', className: 'bg-cyan-50 text-cyan-800' },
   GIT_SOURCE_DELETE: { label: '删除 Git 源', className: 'bg-orange-50 text-orange-800' },
   IMPORT: { label: '批量导入', className: 'bg-purple-50 text-purple-700' },
-  // 系统审查相关
+  // 审查相关
   AUTO_REVIEW_PASS: { label: '审查通过', className: 'bg-emerald-50 text-emerald-800' },
   AUTO_REVIEW_FAIL: { label: '审查未通过', className: 'bg-rose-50 text-rose-800' },
   AUTO_REVIEW_SYS_FAIL: { label: '审查异常', className: 'bg-amber-50 text-amber-800' },

@@ -455,7 +455,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # Skill 能力默认模型配置：预留给非审查类 Skill 能力使用，系统审查不会隐式回退到这里
+    # Skill 能力默认模型配置：预留给非审查类 Skill 能力使用，审查不会隐式回退到这里
     skill_model_default_base_url: str = Field(
         default="",
         validation_alias=AliasChoices("MARKET_SKILL_MODEL_DEFAULT_BASE_URL", "SKILL_MODEL_DEFAULT_BASE_URL"),
@@ -477,7 +477,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # Skill 审查专用模型配置；开启系统审查时必须显式配置完整，缺省按 fail-close 处理
+    # Skill 审查专用模型配置；开启审查时必须显式配置完整，缺省按 fail-close 处理
     skill_review_model_base_url: str = Field(
         default="",
         validation_alias=AliasChoices("MARKET_SKILL_REVIEW_MODEL_BASE_URL", "SKILL_REVIEW_MODEL_BASE_URL"),

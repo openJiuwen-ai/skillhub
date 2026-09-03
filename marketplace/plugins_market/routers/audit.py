@@ -387,7 +387,7 @@ async def export_audit_logs(
         EventType.SKILL_MANAGE: "Skill 管理",
         EventType.SKILL_MODERATION: "Skill 审核",
         EventType.PLUGIN_MANAGE: "插件管理",
-        EventType.SKILL_REVIEW: "系统审查",
+        EventType.SKILL_REVIEW: "审查",
         EventType.AUDIT: "审计自身",
     }
     action_cn = {
