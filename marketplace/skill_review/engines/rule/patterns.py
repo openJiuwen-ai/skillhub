@@ -361,9 +361,11 @@ DEFAULT_RULE_PATTERNS = [
     ),
     compile_rule(
         {
+            # yes 命令没有选项，参数就是要重复输出的字符串，因此参数中不应出现 "-",
+            # 排除 "-" 可避免把 Mermaid 流程图箭头 "Yes -->" 误判为 yes 重定向写入。
             "pattern_id": "disk_fill_or_unbounded_write",
             "regex": (
-                r"\b(?:dd\s+if=/dev/(?:zero|urandom)|yes\s+[^\n`|>]{0,40}>|truncate\s+-s\s+\d{4,}|"
+                r"\b(?:dd\s+if=/dev/(?:zero|urandom)|yes\s+[^\n`|>\-]{0,40}>|truncate\s+-s\s+\d{4,}|"
                 r"fallocate\s+-l\s+\d{4,}|while\s+true[^\n`]{0,120}(?:>>|tee\s+-a))"
             ),
             "section_key": "execution",
