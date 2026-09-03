@@ -87,4 +87,5 @@ curl "http://127.0.0.1:8100/api/v1/artifacts/{asset_id}?version=1.0.0&is_cli_dow
 
 ## 相关文档
 
+- [多资产设计方案](../5.%20开发指南/多资产设计方案.md)
 - [Agent 资产](../5.%20开发指南/Agent资产.md)

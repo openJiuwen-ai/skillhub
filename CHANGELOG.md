@@ -33,12 +33,12 @@
   - 发布抽屉：Skill 目录打包上传、模板下载、版本与 changelog
   - 个人中心：我的 Skills、收藏、点赞、Git 源同步
   - 审核管理员：待审核、审核历史、审计日志查询与 CSV 导出
-  - 系统审查详情页（规则 + 可选 AI 语义复核）
+  - 审查详情页（规则 + 可选 AI 语义复核）
   - 通知中心、多语言（中/英）、OAuth 登录（GitCode / GitHub）
 
 - **marketplace 后端**
   - Skill 发布与版本治理、预签名下载、互动（浏览/点赞/收藏）
-  - Skill 上架审核（系统审查可选 + 人工审核）
+  - Skill 上架审核（可选审查 + 审核）
   - Git 公开仓库批量同步 Skill
   - ClawHub 兼容层 API
   - 审计日志与 Skill 审核操作追溯
@@ -63,7 +63,7 @@
 ### 从 0.0.1 升级
 
 1. 备份 MySQL 与对象存储桶
-2. 对照 `.env.example` 检查新增环境变量（如 OAuth、系统审查、Git 同步相关项）
+2. 对照 `.env.example` 检查新增环境变量（如 OAuth、审查、Git 同步相关项）
 3. 重启 marketplace 与 frontend 容器/进程
 4. 验证 `/api/health` 与 OAuth 登录回调
 

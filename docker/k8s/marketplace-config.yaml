@@ -65,7 +65,7 @@ data:
   MARKET_RETRIEVAL_SKILL_TAG_CRON: "0 * * * *"
   MARKET_RETRIEVAL_SKILL_TAG_ON_STARTUP: "false"
 
-  # Skill 系统审查（默认关闭；开启前必须配齐模型参数并在 Secret 中配置
+  # Skill 审查（默认关闭；开启前必须配齐模型参数并在 Secret 中配置
   # MARKET_SKILL_REVIEW_MODEL_API_KEY，否则发布会被拒绝）
   MARKET_SKILL_REVIEW_ENABLED: "false"
   MARKET_SKILL_REVIEW_MODEL_BASE_URL: ""

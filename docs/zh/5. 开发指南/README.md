@@ -11,7 +11,8 @@
 | [MCP Stdio 格式](./插件类型格式/MCP-Stdio格式.md) | MCP stdio 插件的启动配置和发布包 |
 | [RESTful API 格式](./插件类型格式/RESTful-API格式.md) | 远程 HTTP API 插件的接口契约和发布包 |
 | [Skill 与 SwarmSkill 规范](./Skill与SwarmSkill规范.md) | 两类资产的元数据和约束 |
-| [Skill 审核机制](./Skill审核机制.md) | 系统审查、人工审核和状态流转 |
+| [Skill 审核机制](./Skill审核机制.md) | 审查与审核、状态流转 |
+| [多资产设计方案](./多资产设计方案.md) | 五类市场资产串讲：范围、架构、接口契约与测试矩阵 |
 | [Agent 资产](./Agent资产.md) | Agent 插件 / 模板 / 连接器 包格式、校验与发布 |
 | [在线体验运行时](./在线体验运行时.md) | 在线体验会话编排和运行时架构 |
 | [检索系统](./检索系统/README.md) | Skill 检索、索引和 SDK 文档 |

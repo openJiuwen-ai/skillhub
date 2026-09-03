@@ -5,14 +5,14 @@ SkillHub 通过审核流程控制 Skill 的市场可见性和在线体验准入�
 ## 审核阶段
 
 ```text
-发布校验 -> 系统审查（可选）-> 人工审核 -> 市场展示
+发布校验 -> 审查（可选）-> 审核 -> 市场展示
 ```
 
 | 阶段 | 说明 |
 |---|---|
 | 发布校验 | 校验包结构、版本、图标、元数据等基础约束。失败则发布直接拒绝。 |
-| 系统审查 | 可选阶段。使用规则或 AI 模型辅助检查 Skill 风险。需 `MARKET_SKILL_REVIEW_ENABLED=true` |
-| 人工审核 | 审核员决定通过或驳回。驳回必填原因。 |
+| 审查 | 可选阶段。使用规则或 AI 模型辅助检查 Skill 风险。需 `MARKET_SKILL_REVIEW_ENABLED=true` |
+| 审核 | 审核员决定通过或驳回。驳回必填原因。 |
 | 市场展示 | 仅审核通过的版本对外展示。 |
 
 ## 审核状态
@@ -21,7 +21,7 @@ SkillHub 通过审核流程控制 Skill 的市场可见性和在线体验准入�
 
 | 状态 | 代码 | 公开市场可见 | 说明 |
 |------|------|:------------:|------|
-| 待审核 | `PENDING` | 否 | 等待人工审核 |
+| 待审核 | `PENDING` | 否 | 等待审核 |
 | 已通过 | `APPROVED` | 是 | 对外展示，可下载 |
 | 已驳回 | `REJECTED` | 否 | 发布者需修改后发新版本 |
 
@@ -30,23 +30,23 @@ SkillHub 通过审核流程控制 Skill 的市场可见性和在线体验准入�
 当 `MARKET_SKILL_REVIEW_ENABLED=true` 时：
 
 ```text
-发布 -> 系统审查中（reviewing）
-     -> 系统审查通过 -> 人工审核中（pending_moderation）
-     -> 人工审核通过 -> 发布成功（publish_success）
-     -> 人工审核驳回 -> 发布失败（可发新版本重试）
+发布 -> 审查中（reviewing）
+     -> 审查通过 -> 审核中（pending_moderation）
+     -> 审核通过 -> 发布成功（publish_success）
+     -> 审核驳回 -> 发布失败（可发新版本重试）
 ```
 
 当 `MARKET_SKILL_REVIEW_ENABLED=false`（默认）时：
 
 ```text
-发布 -> 人工审核中（pending_moderation）
+发布 -> 审核中（pending_moderation）
      -> 审核通过 -> 发布成功（publish_success）
      -> 审核驳回 -> 发布失败
 ```
 
 ### 例外：系统 Token 发布
 
-携带有效 `X-System-Token` 的发布请求直接 `APPROVED`，跳过系统审查与人工审核。
+携带有效 `X-System-Token` 的发布请求直接 `APPROVED`，跳过审查与审核。
 
 ## 可见性原则
 

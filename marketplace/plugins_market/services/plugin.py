@@ -479,7 +479,7 @@ def _ensure_skill_review_model_configured(needs_skill_review: bool) -> None:
         code=503,
         error="skill_review_model_not_configured",
         message=(
-            "Skill 系统审查已开启，但审查模型未完整配置；"
+            "Skill 审查已开启，但审查模型未完整配置；"
             "请联系管理员配置 MARKET_SKILL_REVIEW_MODEL_BASE_URL、"
             "MARKET_SKILL_REVIEW_MODEL_API_KEY、MARKET_SKILL_REVIEW_MODEL_NAME 后重试"
         ),
@@ -754,7 +754,7 @@ def publish(
             error_class="validation",
         )
     # 开关：开启后拒绝 tools / mcp-stdio / restful-api 等非 moderated 类型；
-    # 放行 Skill / SwarmSkill / 三类 Agent（人工审核或系统身份免审由 _moderation_for_publish 处理）。
+    # 放行 Skill / SwarmSkill / 三类 Agent（审核或系统身份免审由 _moderation_for_publish 处理）。
     if settings.block_nonskill_plugin_publish and not is_moderated_market_asset_type(rt):
         raise PublishError(
             code=403,
@@ -888,7 +888,7 @@ def publish(
     existing_version = version_repo.get_version(asset_id=asset_id, version=version)
     is_skill_like_publish = is_skill_like_plugin_type(plugin_type)
     is_moderated_publish = is_moderated_market_asset_type(plugin_type)
-    # 系统 LLM 审查仅 Skill / SwarmSkill；三类 Agent 直接进人审（或系统身份免审）。
+    # LLM 审查仅 Skill / SwarmSkill；三类 Agent 直接进审核（或系统身份免审）。
     supports_system_skill_review = is_skill_like_publish
     needs_skill_review = bool(
         supports_system_skill_review and settings.skill_review_enabled and not is_system_admin_publisher
@@ -1260,7 +1260,7 @@ def _asset_matches_list_moderation_filter_retrieval(
     *,
     pending_version_asset_ids: set[str],
 ) -> bool:
-    """检索路径的 PENDING 筛选：moderated 类型仅含“待人工审核”的版本。"""
+    """检索路径的 PENDING 筛选：moderated 类型仅含“待审核”的版本。"""
     if ms != MODERATION_PENDING:
         return _asset_matches_list_moderation_filter(asset, ms)
     if not is_moderated_market_asset_type(asset.plugin_type):
@@ -2606,7 +2606,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message=f"{asset_label} 仍处于系统审查中，暂不可执行人工审核",
+                message=f"{asset_label} 仍处于审查中，暂不可执行审核",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2616,7 +2616,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message=f"当前{asset_label}未进入人工审核阶段",
+                message=f"当前{asset_label}未进入审核阶段",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2639,7 +2639,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message=f"{asset_label} 仍处于系统审查中，暂不可执行人工审核",
+                message=f"{asset_label} 仍处于审查中，暂不可执行审核",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
@@ -2647,7 +2647,7 @@ def moderate_skill_asset_service(
             raise PublishError(
                 code=400,
                 error="invalid_moderation_state",
-                message=f"当前{asset_label}未进入人工审核阶段",
+                message=f"当前{asset_label}未进入审核阶段",
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )

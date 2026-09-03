@@ -766,7 +766,7 @@ def _require_grantable_asset(asset: MarketAssetDB | None, auth: AuthContext) -> 
     ):
         raise _http_exception(
             status.HTTP_409_CONFLICT,
-            "该 Skill 未通过人工审核，无法授权给组群",
+            "该 Skill 未通过审核，无法授权给组群",
             error="skill_not_approved",
         )
     return asset

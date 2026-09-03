@@ -62,10 +62,10 @@ REVIEW_WRITEBACK_RETRY_BACKOFF_SECONDS = (0.1, 0.3, 0.7)
 REVIEW_WRITEBACK_RETRY_JITTER_SECONDS = 0.05
 RETRYABLE_REVIEW_WRITEBACK_MYSQL_ERROR_CODES = {1020, 1205, 1213}
 
-USER_FACING_REVIEW_FAILED_TIMEOUT = "系统审查超时，请稍后重试发布。"
-USER_FACING_REVIEW_FAILED_SERVICE_UNAVAILABLE = "系统审查服务暂时不可用，请稍后重试发布。"
-USER_FACING_REVIEW_FAILED_INVALID_RESPONSE = "系统审查结果异常，请稍后重试发布。"
-USER_FACING_REVIEW_FAILED_UNKNOWN = "系统审查执行异常，请稍后重试发布。"
+USER_FACING_REVIEW_FAILED_TIMEOUT = "审查超时，请稍后重试发布。"
+USER_FACING_REVIEW_FAILED_SERVICE_UNAVAILABLE = "审查服务暂时不可用，请稍后重试发布。"
+USER_FACING_REVIEW_FAILED_INVALID_RESPONSE = "审查结果异常，请稍后重试发布。"
+USER_FACING_REVIEW_FAILED_UNKNOWN = "审查执行异常，请稍后重试发布。"
 USER_FACING_SEMANTIC_FALLBACK = "AI 语义复核暂时不可用，本次已按规则审查完成。"
 USER_FACING_SEMANTIC_DISABLED = "AI 语义复核未启用，本次已按规则审查完成。"
 USER_FACING_SEMANTIC_NO_RISK = "AI 语义复核已完成，当前未发现额外风险。"
@@ -481,7 +481,7 @@ def _set_review_completed(
             version=version_row.version,
             action=Action.PENDING_MOD_SET,
             result=Result.SUCCESS,
-            detail=f"自动审查通过后转入待人工审核 v{version_row.version}",
+            detail=f"审查通过后转入待审核 v{version_row.version}",
             extra={
                 "publish_result": PUBLISH_RESULT_PENDING_MODERATION,
                 **review_extra,
@@ -549,14 +549,14 @@ def _set_review_system_failed(
         publisher_id = ""
     db.commit()
 
-    # 审计：系统审查异常（区别于审查未通过，是审查流程本身挂了）
+    # 审计：审查异常（区别于审查未通过，是审查流程本身挂了）
     _audit_review_event(
         db=db,
         asset=asset,
         version=getattr(version_row, "version", None),
         action=Action.AUTO_REVIEW_SYS_FAIL,
         result=Result.FAILED,
-        detail=f"系统审查执行异常：{(reason or '未知错误')[:200]}",
+        detail=f"审查执行异常：{(reason or '未知错误')[:200]}",
         extra={
             "user_facing_reason": reason,
             "internal_reason": stored_internal_reason,

@@ -80,7 +80,7 @@ MARKET_GITCODE_OAUTH_REDIRECT_URI=http://localhost:9002/api/v1/auth/oauth/gitcod
 MARKET_GITCODE_OAUTH_SCOPE=user_info
 MARKET_OAUTH_FRONTEND_ORIGIN=http://localhost:9002
 
-# ── 人工审核管理员 ──
+# ── 审核管理员 ──
 MARKET_REVIEW_ADMIN_USERNAMES=reviewer_login
 ```
 
@@ -155,7 +155,7 @@ curl.exe http://localhost:9002/api/health
 
 使用准备的发布账号和审核账号，继续验证完整发布流程：
 
-1. 使用发布账号登录并提交 Skill，确认状态为"人工审核中"。
+1. 使用发布账号登录并提交 Skill，确认状态为"审核中"。
 2. 使用独立审核账号登录，在"待审核"中通过该 Skill。
 3. 返回市场页面，确认该 Skill 已可见。
 
@@ -167,12 +167,12 @@ curl.exe http://localhost:9002/api/health
 
 | 能力　　　　 | 说明　　　　　　　　　　　　　　　　　　　　　| 不启用时的表现　　　　　　　　|
 | --------------| -----------------------------------------------| -------------------------------|
-| **系统审查** | 发布前自动检测安全风险　　　　　　　　　　　　| 直接进入人工审核　　　　　　　|
+| **审查** | 发布前自动检测安全风险　　　　　　　　　　　　| 直接进入审核　　　　　　　|
 | **检索系统** | 语义搜索，比关键词匹配更准　　　　　　　　　　| 搜索退化为关键词匹配　　　　　|
 | **分类标签** | 新发布 Skill 自动打分类标签，用于首页类别展示 | 首页无类别，Skill 无分类标签　|
 | **推荐系统** | 首页「推荐精选」个性化排序（上限 `MARKET_REC_LIST_TOP_K`）　　　　　　　　| 「全部」/分类按 `install_count` 等字段排序 |
 
-### 7.1 系统审查
+### 7.1 审查
 
 在 `.env` 中配置，模型接口需兼容 OpenAI Chat Completions：
 
@@ -184,14 +184,14 @@ MARKET_SKILL_REVIEW_MODEL_NAME=test-review-model
 MARKET_SKILL_REVIEW_MODEL_TIMEOUT_SECONDS=300
 ```
 
-- 关闭（默认）：发布后直接进入人工审核
-- 开启：先系统审查；通过后转为「待人工审核」，不通过则发布失败
+- 关闭（默认）：发布后直接进入审核
+- 开启：先审查；通过后转为「待审核」，不通过则发布失败
 - 开启时若未配齐模型参数，发布会被拒绝
 - 覆盖普通 Skill 与 SwarmSkill
 
-验证：重建 Backend 后提交 Skill，状态先显示「系统审查中」即生效。审查完成后可在「系统审查详情」页查看各维度检查结果与 AI 语义复核结论：
+验证：重建 Backend 后提交 Skill，状态先显示「审查中」即生效。审查完成后可在「审查详情」页查看各维度检查结果与 AI 语义复核结论：
 
-![系统审查详情](../../assets/img/一键部署-系统审查详情.png)
+![审查详情](../../assets/img/一键部署-系统审查详情.png)
 
 ### 7.2 检索系统
 

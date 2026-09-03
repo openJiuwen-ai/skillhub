@@ -103,7 +103,7 @@ MARKET_OAUTH_FRONTEND_ORIGIN=http://skillhub.local:9002
 
 ## 配置审核管理员
 
-要完成“发布 → 人工审核 → 市场可见”的闭环，至少准备两个不同账号。将审核账号的 GitCode 或 GitHub 登录名写入：
+要完成“发布 → 审核 → 市场可见”的闭环，至少准备两个不同账号。将审核账号的 GitCode 或 GitHub 登录名写入：
 
 ```ini
 MARKET_REVIEW_ADMIN_USERNAMES=reviewer_login

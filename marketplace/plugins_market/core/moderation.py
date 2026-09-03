@@ -27,7 +27,7 @@ AGENT_ASSET_PLUGIN_TYPES = frozenset(
     }
 )
 
-# 走人工审核 / 公开可见性聚合的市场资产类型 = skill-like ∪ agent 三类。
+# 走审核 / 公开可见性聚合的市场资产类型 = skill-like ∪ agent 三类。
 # 不含 tools / mcp-stdio / restful-api（历史插件，仍按「非 moderated」直通）。
 MODERATED_MARKET_ASSET_TYPES = SKILL_LIKE_PLUGIN_TYPES | AGENT_ASSET_PLUGIN_TYPES
 
@@ -51,7 +51,7 @@ def is_wrapped_agent_asset_type(plugin_type: str | None) -> bool:
 
 
 def is_moderated_market_asset_type(plugin_type: str | None) -> bool:
-    """是否参与上架人工审核与公开可见性闸门（Skill/SwarmSkill + 三类 Agent）。"""
+    """是否参与上架审核与公开可见性闸门（Skill/SwarmSkill + 三类 Agent）。"""
     return normalize_market_plugin_type(plugin_type) in MODERATED_MARKET_ASSET_TYPES
 
 
