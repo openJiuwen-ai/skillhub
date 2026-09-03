@@ -8,16 +8,20 @@ import unittest
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import requests
 import yaml
 from cli_core.market import (
     PublishError,
+    _market_format_http_error,
+    _market_translate_message_for_cli,
     plugin_info,
     plugin_install_download,
     plugin_search,
     resolve_market_asset,
     resolve_skill_like_asset_for_cli,
+    skill_import,
 )
 from cli_core.plugin import (
     plugin_describe_local,
@@ -1509,6 +1513,45 @@ def another_tool() -> dict:
                 )
                 m.assert_not_called()
         self.assertEqual(code, 1)
+
+    def test_generic_http_not_found_is_not_asset_not_found(self) -> None:
+        self.assertEqual(_market_translate_message_for_cli("Not Found"), "Not Found")
+        self.assertEqual(
+            _market_translate_message_for_cli("Asset not found"),
+            "Asset not found.",
+        )
+        self.assertEqual(
+            _market_translate_message_for_cli("插件 'demo' 不存在"),
+            "Asset 'demo' not found.",
+        )
+
+    def test_market_json_404_not_found_mentions_unreachable_url(self) -> None:
+        resp = Mock()
+        resp.status_code = 404
+        resp.headers = {"content-type": "application/json"}
+        resp.json.return_value = {"detail": "Not Found"}
+        resp.text = '{"detail":"Not Found"}'
+        msg = _market_format_http_error(resp)
+        self.assertIn("HTTP 404 from market URL", msg)
+        self.assertNotIn("Asset not found", msg)
+
+    def test_skill_import_connection_error_says_cannot_reach(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "bundle.zip"
+            zip_path.write_bytes(b"PK\x03\x04")
+            with patch(
+                "cli_core.market.requests.post",
+                side_effect=requests.ConnectionError("refused"),
+            ):
+                with self.assertRaises(PublishError) as ctx:
+                    skill_import(
+                        "http://localhost:19999",
+                        "token",
+                        zip_path=zip_path,
+                        checksum_sha256="a" * 64,
+                    )
+        self.assertIn("Cannot reach marketplace", ctx.exception.detail)
+        self.assertNotIn("Asset not found", ctx.exception.detail)
 
 
 if __name__ == "__main__":

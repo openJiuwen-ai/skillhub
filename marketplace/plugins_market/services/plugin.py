@@ -1117,6 +1117,7 @@ def publish(
             if existing_version and force:
                 existing_version.changelog = version_desc
                 existing_version.status = "ACTIVE"
+                existing_version.create_time = now_ms
                 existing_version.file_path = file_path
                 existing_version.artifact_sha256 = computed
                 existing_version.has_icon = bool(icon_bytes)
@@ -1835,6 +1836,18 @@ def _skill_visible_for_version_detail(
     return viewer.can_view_skill_asset(asset, db)
 
 
+def _version_detail_update_time_ms(
+    asset: MarketAssetDB,
+    version_row: MarketAssetVersionDB,
+) -> int | None:
+    """详情页更新时间：审核通过刷新资产 update_time，覆盖上传刷新版本 create_time。"""
+    candidates: list[int] = []
+    for raw in (getattr(asset, "update_time", None), getattr(version_row, "create_time", None)):
+        if raw is not None:
+            candidates.append(int(raw))
+    return max(candidates) if candidates else None
+
+
 def get_plugin_version_detail_service(
     asset_id: str,
     version: str,
@@ -1973,7 +1986,7 @@ def get_plugin_version_detail_service(
         trace_id=review_row.trace_id if skill_review_visible and review_row else None,
         install_count=int(asset.install_count or 0),
         view_count=view_count_value,
-        update_time=int(version_row.create_time) if version_row.create_time is not None else None,
+        update_time=_version_detail_update_time_ms(asset, version_row),
         storage_mode=getattr(asset, "storage_mode", None),
         resolved_commit_sha=getattr(asset, "resolved_commit_sha", None),
         declared_skill_version=getattr(asset, "declared_skill_version", None),
@@ -2685,6 +2698,9 @@ def moderate_skill_asset_service(
     db.add(vrow)
     _apply_skill_asset_aggregate_from_versions(db, asset_id)
     if act == "approve":
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        asset.update_time = now_ms
+        db.add(asset)
         _refresh_skill_asset_listing_fields_from_public_artifact(
             db=db,
             asset_id=asset_id,
@@ -2889,6 +2905,11 @@ def get_download_info(
                         asset_id=asset.asset_id,
                         version_repo=version_repo,
                     )
+            if version_row and not viewer.can_download_skill_version_row(asset, version_row, db):
+                version_row = _compute_latest_approved_skill_version_row(
+                    asset_id=asset.asset_id,
+                    version_repo=version_repo,
+                )
             if not version_row or not viewer.can_download_skill_version_row(asset, version_row, db):
                 raise PublishError(
                     code=404,
@@ -2901,11 +2922,24 @@ def get_download_info(
                 latest_version=asset.latest_version,
                 version_repo=version_repo,
             )
+            if version_row and not viewer.can_download_skill_version_row(asset, version_row, db):
+                version_row = _compute_latest_approved_skill_version_row(
+                    asset_id=asset.asset_id,
+                    version_repo=version_repo,
+                )
     if not version_row:
         raise PublishError(
             code=404,
             error="plugin_not_found",
             message=f"插件 '{asset.asset_id}' 暂无可下载版本",
+            error_code="SKILLHUB_PLUGIN_NOT_FOUND",
+            error_class="not_found",
+        )
+    if not viewer.can_download_skill_version_row(asset, version_row, db):
+        raise PublishError(
+            code=404,
+            error="plugin_not_found",
+            message=f"插件 '{asset.asset_id}' 不存在或暂不可下载",
             error_code="SKILLHUB_PLUGIN_NOT_FOUND",
             error_class="not_found",
         )
