@@ -186,6 +186,47 @@ def test_prepare_publish_applies_version_override_on_wrapped_skill(tmp_path: Pat
     assert metadata["plugin_type"] == "skill"
 
 
+def test_prepare_publish_wraps_skill_zip_with_dir_placeholder_file(tmp_path: Path) -> None:
+    """Zip directory stored as a file member must not 500 when nested files follow.
+
+    Reproduces: FileExistsError .../entry/scripts during plugin_version re-wrap.
+    """
+    name = "safe-review"
+    buf = io.BytesIO()
+    plugin_yaml = yaml.safe_dump(
+        {
+            "name": name,
+            "version": "1.0.0",
+            "display_name": "Safe Review",
+            "description": "demo",
+            "runtime": {"type": "skill"},
+            "metadata": {"author": "tester", "tags": ["demo"]},
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    skill_md = f"---\nname: {name}\ndescription: Demo skill\n---\n# Demo\n"
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{name}-1.0.0/plugin.yaml", plugin_yaml)
+        zf.writestr(f"{name}-1.0.0/{name}/SKILL.md", skill_md)
+        zf.writestr(f"{name}-1.0.0/{name}/scripts", b"")
+        zf.writestr(f"{name}-1.0.0/{name}/scripts/run.sh", "#!/bin/sh\necho ok\n")
+
+    wrapped = prepare_publish_zip_content(
+        buf.getvalue(),
+        filename="safe-review-skill.zip",
+        overrides=PublishMetadataOverrides(version="1.29807120.55"),
+        default_author="tester",
+    )
+    metadata = extract_plugin_metadata(wrapped)
+    assert metadata["name"] == name
+    assert metadata["version"] == "1.29807120.55"
+    assert any(
+        member.replace("\\", "/").endswith("/scripts/run.sh")
+        for member in zipfile.ZipFile(io.BytesIO(wrapped)).namelist()
+    )
+
+
 def test_prepare_publish_leaves_wrapped_package_when_overrides_match(tmp_path: Path) -> None:
     entry = tmp_path / "wellness-life-steward"
     _write_raw_agent_plugin(entry, name="wellness-life-steward")

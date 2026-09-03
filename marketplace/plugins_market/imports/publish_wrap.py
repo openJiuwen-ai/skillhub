@@ -129,6 +129,29 @@ def _wrapped_overrides_differ(
     return False
 
 
+def _mkdir_parents_replace_file_placeholders(path: Path, *, root: Path) -> None:
+    """Create ``path`` as a directory, replacing leftover zip dir-placeholder files.
+
+    Some zip tools store a directory as a regular member (no trailing slash). Extracting
+    that member as a file, then a nested ``scripts/run.sh``, makes ``mkdir(scripts)``
+    raise FileExistsError on POSIX.
+    """
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise PublishError(
+            code=400,
+            error="invalid_plugin_structure",
+            message="资产包路径非法",
+        ) from exc
+    current = root
+    for part in path.relative_to(root).parts:
+        current = current / part
+        if current.exists() and not current.is_dir():
+            current.unlink()
+        current.mkdir(exist_ok=True)
+
+
 def _extract_wrapped_native_entry(content: bytes, dest: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
         yaml_path = _find_plugin_yaml_path(zf)
@@ -151,11 +174,16 @@ def _extract_wrapped_native_entry(content: bytes, dest: Path) -> None:
             if not member.startswith(payload_prefix):
                 continue
             relative = member[len(payload_prefix):]
-            if not relative or relative.endswith("/"):
+            if not relative:
+                continue
+            target = dest / relative
+            if info.is_dir() or relative.endswith("/"):
+                _mkdir_parents_replace_file_placeholders(target, root=dest)
                 continue
             found_payload = True
-            target = dest / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
+            _mkdir_parents_replace_file_placeholders(target.parent, root=dest)
+            if target.exists() and target.is_dir():
+                continue
             target.write_bytes(zf.read(info))
         if not found_payload:
             raise PublishError(
