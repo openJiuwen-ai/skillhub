@@ -119,6 +119,7 @@ def _build_list_item(asset) -> PluginListItem:
         star_count=asset.star_count,
         review_count=asset.review_count,
         average_rating=float(asset.average_rating),
+        hot_score=float(getattr(asset, "hot_score", 0) or 0),
         create_time=asset.create_time,
         update_time=asset.update_time,
         pin_order=asset.pin_order,
