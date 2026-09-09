@@ -4,12 +4,13 @@ export const PRIMARY_SKILL_PLUGIN_TYPE = 'swarmskill'
 export const SKILL_LIKE_PLUGIN_TYPES = ['skill', 'swarmskill'] as const
 export const SKILL_LIKE_QUERY_VALUE = SKILL_LIKE_PLUGIN_TYPES.join(',')
 
-export const AGENT_ASSET_PLUGIN_TYPES = ['agent-plugin', 'agent-template', 'agent-mcp'] as const
+export const AGENT_ASSET_PLUGIN_TYPES = ['agent-plugin', 'agent-mcp', 'agent-template'] as const
 export const AGENT_ASSET_QUERY_VALUE = AGENT_ASSET_PLUGIN_TYPES.join(',')
 
-/** 市场五个平级 Tab（与后端 MODERATED_MARKET_ASSET_TYPES 对齐，顺序即 Tab 顺序）。 */
+/** 市场五个平级 Tab（与后端 MODERATED_MARKET_ASSET_TYPES 对齐，顺序即 Tab / 发布类型下拉顺序）。 */
 export const MARKET_TAB_PLUGIN_TYPES = [
-  ...SKILL_LIKE_PLUGIN_TYPES,
+  'swarmskill',
+  'skill',
   ...AGENT_ASSET_PLUGIN_TYPES,
 ] as const
 

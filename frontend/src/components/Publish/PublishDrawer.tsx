@@ -1,11 +1,13 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from 'react-query'
 import { X } from 'lucide-react'
 import { PublishForm } from './PublishForm'
 import type { PublishDrawerType } from '@/contexts/PublishDrawer'
+import { isAgentAssetPluginType } from '@/utils/pluginType'
+import { resolvePublishTypeLabel } from '@/utils/publishFieldLabels'
 
 type PublishDrawerProps = {
   open: boolean
@@ -13,10 +15,15 @@ type PublishDrawerProps = {
   onClose: () => void
 }
 
-/** 右侧发布抽屉：仅用于发布 Skill；点击遮罩或 ESC 关闭。 */
+/** 右侧发布抽屉：点击遮罩或 ESC 关闭。 */
 export function PublishDrawer({ open, type, onClose }: PublishDrawerProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [activeType, setActiveType] = useState<PublishDrawerType>(type)
+
+  useEffect(() => {
+    if (open) setActiveType(type)
+  }, [open, type])
 
   useEffect(() => {
     if (!open) return
@@ -39,13 +46,16 @@ export function PublishDrawer({ open, type, onClose }: PublishDrawerProps) {
     void queryClient.invalidateQueries({ queryKey: ['market-configs'] })
   }
 
+  const typeLabel = resolvePublishTypeLabel(activeType, t)
+  const intro = isAgentAssetPluginType(activeType) ? t('publish.introAgent') : t('publish.introSkill')
+
   return (
     <div
       className={`fixed inset-0 z-50 ${open ? 'pointer-events-auto' : 'pointer-events-none'}`}
       role="dialog"
       aria-modal="true"
       aria-hidden={!open}
-      aria-label={t('publish.titleSkill')}
+      aria-label={t('publish.titleWithType', { typeLabel })}
     >
       <button
         type="button"
@@ -66,10 +76,10 @@ export function PublishDrawer({ open, type, onClose }: PublishDrawerProps) {
         <header className="flex items-start justify-between gap-3 px-5 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
           <div className="min-w-0 flex-1">
             <h2 className="text-[17px] font-semibold tracking-tight text-[#0F172A]">
-              {t('publish.titleSkill')}
+              {t('publish.titleWithType', { typeLabel })}
             </h2>
             <p className="mt-1 max-w-[26rem] text-[12px] leading-5 text-[#64748B]">
-              {t('publish.introSkill')}
+              {intro}
             </p>
           </div>
           <button
@@ -84,7 +94,9 @@ export function PublishDrawer({ open, type, onClose }: PublishDrawerProps) {
 
         <div className="mx-5 h-px bg-slate-200 sm:mx-6" />
 
-        {open ? <PublishForm type={type} onCancel={onClose} onSuccess={handleSuccess} /> : null}
+        {open ? (
+          <PublishForm type={type} onCancel={onClose} onSuccess={handleSuccess} onTypeChange={setActiveType} />
+        ) : null}
       </aside>
     </div>
   )

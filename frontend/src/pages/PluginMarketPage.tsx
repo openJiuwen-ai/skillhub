@@ -1586,14 +1586,14 @@ export default function PluginMarketPage() {
                     icon: AgentPluginGlyph,
                   },
                   {
-                    value: 'agent-template' as const,
-                    label: t('plugins.marketTypeLabel.agent-template'),
-                    icon: AgentTemplateGlyph,
-                  },
-                  {
                     value: 'agent-mcp' as const,
                     label: t('plugins.marketTypeLabel.agent-mcp'),
                     icon: AgentMcpGlyph,
+                  },
+                  {
+                    value: 'agent-template' as const,
+                    label: t('plugins.marketTypeLabel.agent-template'),
+                    icon: AgentTemplateGlyph,
                   },
                 ]).map(option => {
                   const active = activeType === option.value

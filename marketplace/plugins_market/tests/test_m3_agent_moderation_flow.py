@@ -260,7 +260,7 @@ def test_moderate_agent_self_publish_forbidden_message():
 
     assert isinstance(exc.value, BusinessError)
     assert exc.value.error == "self_moderation_forbidden"
-    assert "Agent 插件" in exc.value.message
+    assert "插件" in exc.value.message
 
 
 def test_version_detail_update_time_uses_newer_asset_or_version_timestamp():

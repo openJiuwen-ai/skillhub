@@ -55,6 +55,13 @@ class TestModeratedTypeHelpers(unittest.TestCase):
         )
         self.assertEqual(MODERATED_MARKET_ASSET_TYPES, SKILL_LIKE_PLUGIN_TYPES | AGENT_ASSET_PLUGIN_TYPES)
 
+    def test_moderated_asset_type_label(self):
+        from plugins_market.core.moderation import moderated_asset_type_label
+
+        self.assertEqual(moderated_asset_type_label("agent-plugin"), "插件")
+        self.assertEqual(moderated_asset_type_label("agent-mcp"), "连接器")
+        self.assertEqual(moderated_asset_type_label("agent-template"), "专家/专家团")
+
     def test_predicates(self):
         self.assertTrue(is_skill_like_plugin_type("swarmskill"))
         self.assertTrue(is_skill_like_plugin_type("teamskills"))

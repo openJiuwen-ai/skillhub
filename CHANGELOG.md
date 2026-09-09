@@ -14,7 +14,7 @@
 ### Changed
 
 - 官方托管域名由 `teamskills.openjiuwen.com` 更名为 `swarmskills.openjiuwen.com`（文档与默认市场地址已同步）
-- README 文档索引补充用户指南入口
+- 市场与发布展示名：`agent-plugin` 为**插件**、`agent-mcp` 为**连接器**、`agent-template` 为**专家/专家团**（Tab / 发布类型顺序：插件、连接器、专家/专家团）；发布成功提示按所选类型显示
 - **Git 源接入**
   - 同一仓库不同 `skills_subpath` 可由不同用户分别注册（路径归一化）
   - 同步跳过改为以 Skill 目录内容摘要为主，避免无关 commit 导致重复更新

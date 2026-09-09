@@ -18,8 +18,8 @@ import {
 } from '@/utils/buildSkillPublishZip'
 import { inspectAgentPublishZip } from '@/utils/detectAgentPublishZip'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
-import { isAgentAssetPluginType } from '@/utils/pluginType'
-import { resolvePublishFormFieldLabels } from '@/utils/publishFieldLabels'
+import { isAgentAssetPluginType, MARKET_TAB_PLUGIN_TYPES } from '@/utils/pluginType'
+import { resolvePublishFormFieldLabels, resolvePublishTypeLabel } from '@/utils/publishFieldLabels'
 
 const SKILL_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const SKILL_NAME_MAX_LEN = 64
@@ -93,6 +93,7 @@ type PublishFormProps = {
   type: PublishDrawerType
   onCancel: () => void
   onSuccess?: () => void
+  onTypeChange?: (type: PublishDrawerType) => void
 }
 
 function validateSkillName(value: string): string | null {
@@ -238,7 +239,7 @@ const textareaError =
 const inputCls = (hasError?: boolean) => (hasError ? inputError : inputBase)
 const textareaCls = (hasError?: boolean) => (hasError ? textareaError : textareaBase)
 
-export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
+export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: PublishFormProps) {
   const { t } = useTranslation()
   const { user, isAuthenticated } = useGitCodeAuth()
   const skillFolderInputId = useId()
@@ -267,6 +268,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   const [generalError, setGeneralError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<PublishFieldErrors>({})
   const [successMsg, setSuccessMsg] = useState('')
+  const [successTypeLabel, setSuccessTypeLabel] = useState('')
   const [templateBusy, setTemplateBusy] = useState(false)
   const [templateError, setTemplateError] = useState('')
   const [skillPkgName, setSkillPkgName] = useState('')
@@ -287,6 +289,10 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   useEffect(() => {
     setSelectedType(type)
   }, [type])
+
+  useEffect(() => {
+    onTypeChange?.(selectedType)
+  }, [selectedType, onTypeChange])
 
   useEffect(() => {
     setSkillFolderFiles(null)
@@ -647,35 +653,18 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
   )
   const fieldErrorLabels = PUBLISH_FIELD_ORDER.filter(k => blockingFieldErrors[k]).map(k => fieldLabelByKey[k])
 
-  const typeOptions = [
-    { value: 'swarmskill' as const, label: t('publish.typeSwarmSkill') },
-    { value: 'skill' as const, label: t('publish.typeSkill') },
-    { value: 'agent-plugin' as const, label: t('publish.typeAgentPlugin') },
-    { value: 'agent-template' as const, label: t('publish.typeAgentTemplate') },
-    { value: 'agent-mcp' as const, label: t('publish.typeAgentMcp') },
-  ]
-  const detectedTypeLabel =
-    detectedType === 'swarmskill'
-      ? t('publish.typeSwarmSkill')
-      : detectedType === 'skill'
-        ? t('publish.typeSkill')
-        : detectedType === 'agent-plugin'
-          ? t('publish.typeAgentPlugin')
-          : detectedType === 'agent-template'
-            ? t('publish.typeAgentTemplate')
-            : detectedType === 'agent-mcp'
-              ? t('publish.typeAgentMcp')
-              : t('publish.typeUnknown')
+  const selectedTypeLabel = resolvePublishTypeLabel(selectedType, t)
+  const typeOptions = MARKET_TAB_PLUGIN_TYPES.map(value => ({
+    value,
+    label: resolvePublishTypeLabel(value, t),
+  }))
+  const detectedTypeLabel = resolvePublishTypeLabel(detectedType, t)
   const pluginLinkLabel = formFieldLabels.pluginLinkLabel
   const pluginLinkHint = myPluginsLoading ? t('publish.pluginListLoading') : formFieldLabels.pluginLinkHint
   const pluginNewOptionLabel = formFieldLabels.pluginNewOptionLabel
   const versionDescLabel =
     selectedType === 'swarmskill' ? t('publish.fieldVersionDescSwarmSkill') : t('publish.fieldVersionDesc')
-  const publishButtonLabel = isAgentMode
-    ? t('publish.publishAgent')
-    : selectedType === 'swarmskill'
-      ? t('publish.publishSwarmSkill')
-      : t('appHeader.publish')
+  const publishButtonLabel = t('publish.publishWithType', { typeLabel: selectedTypeLabel })
 
   const handleAgentZipSelected = async (nextFile: File | null) => {
     setGeneralError('')
@@ -696,7 +685,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       setSkillTagsInput(info.tags.join(', '))
       setFile(nextFile)
     } catch (e) {
-      applyErrorFromCode(e instanceof Error ? e.message : '', t('publish.agentZipInspectFailed'))
+      applyErrorFromCode(e instanceof Error ? e.message : '', t('publish.agentZipInspectFailed', { typeLabel: selectedTypeLabel }))
     }
   }
 
@@ -731,7 +720,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       let zipFile: File
       if (isAgentMode) {
         if (!file) {
-          setGeneralError(t('publish.agentZipRequired'))
+          setGeneralError(t('publish.agentZipRequired', { typeLabel: selectedTypeLabel }))
           return
         }
         zipFile = file
@@ -790,11 +779,13 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
       setSkillFolderInputKey(k => k + 1)
       setSkillIconInputKey(k => k + 1)
       setAgentZipInputKey(k => k + 1)
+      setSuccessTypeLabel(selectedTypeLabel)
       setSuccessMsg(
         t('publish.successDetail', {
           name: data.name,
           version: formatSkillVersionLabel(data.version),
           pluginId: data.plugin_id,
+          typeLabel: selectedTypeLabel,
         }),
       )
       onSuccess?.()
@@ -807,6 +798,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
           t('publish.versionConflict', {
             name: skillPkgName.trim(),
             version: pluginVersionNormalized,
+            typeLabel: selectedTypeLabel,
           }),
         )
       } else if (err instanceof MarketplaceApiError) {
@@ -822,6 +814,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
 
   const handleSuccessConfirm = () => {
     setSuccessMsg('')
+    setSuccessTypeLabel('')
     onCancel()
   }
 
@@ -893,7 +886,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
           </Field>
 
 
-          <Field label={t('publish.visibilityLabel')} hint={t('publish.visibilityHint')}>
+          <Field label={t('publish.visibilityLabel')} hint={t('publish.visibilityHint', { typeLabel: selectedTypeLabel })}>
             <div className="grid max-w-[408px] grid-cols-2 gap-2">
               {(['public', 'private'] as SkillVisibility[]).map(value => {
                 const active = visibility === value
@@ -919,7 +912,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
               })}
             </div>
             {selectedExistingPlugin ? (
-              <div className="mt-2 text-[12px] text-[#64748B]">{t('publish.visibilityLockedHint')}</div>
+              <div className="mt-2 text-[12px] text-[#64748B]">{t('publish.visibilityLockedHint', { typeLabel: selectedTypeLabel })}</div>
             ) : null}
           </Field>
 
@@ -946,7 +939,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
           ) : null}
 
           {isAgentMode ? (
-            <Field label={t('publish.fieldAgentZip')} required hint={t('publish.fieldAgentZipHelp')} error={fieldErrors.skillFolder} fieldKey="skillFolder">
+            <Field label={formFieldLabels.folder} required hint={formFieldLabels.folderHelp} error={fieldErrors.skillFolder} fieldKey="skillFolder">
               <input
                 key={agentZipInputKey}
                 id={agentZipInputId}
@@ -1285,7 +1278,7 @@ export function PublishForm({ type, onCancel, onSuccess }: PublishFormProps) {
               </span>
               <h3 id="publish-success-dialog-title" className="text-[15px] font-semibold text-[#111827]">{t('publish.successDialogTitle')}</h3>
               <p className="text-[12.5px] leading-[1.65] text-[#4B5563]">{successMsg}</p>
-              <p className="text-[11.5px] leading-[1.5] text-[#9CA3AF]">{t('publish.successDialogHint')}</p>
+              <p className="text-[11.5px] leading-[1.5] text-[#9CA3AF]">{t('publish.successDialogHint', { typeLabel: successTypeLabel || selectedTypeLabel })}</p>
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-5 py-3">
               <button

@@ -4,6 +4,19 @@ import type { TFunction } from 'i18next'
 import type { PublishDrawerType } from '@/contexts/PublishDrawer'
 import { isAgentAssetPluginType } from '@/utils/pluginType'
 
+const PUBLISH_TYPE_LABEL_KEYS: Record<string, string> = {
+  skill: 'publish.typeSkill',
+  swarmskill: 'publish.typeSwarmSkill',
+  'agent-plugin': 'publish.typeAgentPlugin',
+  'agent-template': 'publish.typeAgentTemplate',
+  'agent-mcp': 'publish.typeAgentMcp',
+}
+
+export function resolvePublishTypeLabel(type: string, t: TFunction): string {
+  const key = PUBLISH_TYPE_LABEL_KEYS[type]
+  return key ? t(key) : t('publish.typeUnknown')
+}
+
 export type PublishFormFieldLabels = {
   pkgName: string
   pkgNameHelp: string
@@ -59,6 +72,7 @@ function agentPluginLinkKeys(type: PublishDrawerType): {
 export function resolvePublishFormFieldLabels(type: PublishDrawerType, t: TFunction): PublishFormFieldLabels {
   if (isAgentAssetPluginType(type)) {
     const linkKeys = agentPluginLinkKeys(type)
+    const typeLabel = resolvePublishTypeLabel(type, t)
     const pkgNameKey =
       type === 'agent-template'
         ? 'publish.fieldPkgNameAgentTemplate'
@@ -83,7 +97,7 @@ export function resolvePublishFormFieldLabels(type: PublishDrawerType, t: TFunct
       descriptionPlaceholder: t('publish.fieldDescriptionAgentPlaceholder'),
       tags: t('publish.fieldTags'),
       tagsHelp: t('publish.fieldTagsAgentHelp'),
-      folder: t('publish.fieldAgentZip'),
+      folder: t('publish.fieldAgentZip', { typeLabel }),
       folderHelp: t('publish.fieldAgentZipHelp'),
       icon: t('publish.fieldSkillIcon'),
       iconHelp: t('publish.fieldSkillIconHelp'),
