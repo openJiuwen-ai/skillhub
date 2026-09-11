@@ -27,6 +27,7 @@ import {
   X,
   BookOpen,
   AlignLeft,
+  BadgeCheck,
   Pin,
   User,
 } from 'lucide-react'
@@ -69,7 +70,7 @@ import { getPlugins, usePluginListQuery } from '@/api'
 import { getSiteConfig } from '@/api/playground'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
-import { usePluginMarketConfigs, type MarketPlugin } from '@/hooks/usePluginMarketConfigs'
+import { usePluginMarketConfigs, displayPublisherName, type MarketPlugin } from '@/hooks/usePluginMarketConfigs'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import {
   formatMarketSkillVersionLabel,
@@ -512,13 +513,13 @@ function DetailPluginTags({ tags, tagColorMap }: { tags: string[]; tagColorMap: 
   const visible = list.slice(0, TAG_MAX_VISIBLE)
   const hidden = list.slice(TAG_MAX_VISIBLE)
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       {visible.map((tag) => {
         const c = tagColorMap.get(tag) ?? TAG_NEUTRAL
         return (
           <span
             key={tag}
-            className="shrink-0 rounded-md border border-black/5 px-2 py-0.5 text-xs font-medium"
+            className="shrink-0 rounded-[3px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
             style={{ backgroundColor: c.bg, color: c.fg }}
           >
             {tag}
@@ -527,7 +528,7 @@ function DetailPluginTags({ tags, tagColorMap }: { tags: string[]; tagColorMap: 
       })}
       {hidden.length > 0 && (
         <Tooltip {...pluginCardTooltipProps} title={hidden.join(' · ')}>
-          <span className="shrink-0 cursor-default rounded-md border border-gray-300/80 bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">
+          <span className="shrink-0 cursor-default rounded-[3px] border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-gray-700">
             +{hidden.length}
           </span>
         </Tooltip>
@@ -547,12 +548,16 @@ const CARD_META_TAGS_AREA_MAX = 190 // 标签区（含 "+N"）总宽上限（px�
 
 function CardMetaLine({
   publisherName,
+  publisherOfficial,
   tags,
   tagColorMap,
+  t,
 }: {
   publisherName?: string
+  publisherOfficial?: boolean
   tags: string[]
   tagColorMap: Map<string, TagColor>
+  t: (key: string) => string
 }) {
   const list = tags ?? []
   const hasPub = !!publisherName
@@ -584,7 +589,10 @@ function CardMetaLine({
     const chipW = layer.querySelector<HTMLElement>('[data-m="chip"]')?.offsetWidth ?? 0
     let fitK = 0
     let fitChip = false
-    const pubNeed = hasPub ? Math.min(pubW, CARD_META_PUBLISHER_FLOOR) : 0
+    // 作者右额外间距 mr-1.5（6px）：行 gap 只覆盖 flex 子项之间，作者自身 margin 不在其中，
+    // 不计入预算会让边界宽度下末位标签/"+N"溢出被裁切（行容器 overflow-hidden）。
+    const pubMargin = hasPub ? CARD_META_GAP_PX : 0
+    const pubNeed = hasPub ? Math.min(pubW, CARD_META_PUBLISHER_FLOOR) + pubMargin : 0
     for (let k = list.length; k >= 0; k--) {
       const tagsW = tagWs.slice(0, k).reduce((acc, w) => acc + w, 0)
       const chipNeeded = list.length > 0 && k < list.length
@@ -609,16 +617,23 @@ function CardMetaLine({
   }, [rowWidth, publisherName, list])
 
   // 真实行：发布者是唯一弹性项（min-w-0），空间不足时被压缩出省略号；
-  // 量测层：shrink-0 保证量到自然宽度
+  // 量测层：shrink-0 保证量到自然宽度。作者为纯文本署名（无底色圆角），与彩色标签 chip
+  // 用样式区分分组；作者→首个标签 12px（mr-1.5 + 行 gap 6px），标签间 6px。
   const publisherNode = (measure: boolean) =>
     hasPub ? (
       <span
         data-m="pub"
         title={measure ? undefined : publisherName}
-        className={`inline-flex ${measure ? 'shrink-0' : 'min-w-0'} items-center gap-0.5 truncate rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-[#191919]`}
+        className={`inline-flex ${measure ? 'shrink-0' : 'min-w-0'} mr-1.5 items-center gap-0.5 truncate text-[12px] font-normal leading-[18px] text-[#595959]`}
       >
         <User className="h-3 w-3 shrink-0 text-[#7B7B7B]" />
-        {publisherName}
+        <span className="truncate">{publisherName}</span>
+        {publisherOfficial && (
+          <BadgeCheck
+            className="h-3 w-3 shrink-0 text-[#344DFA]"
+            aria-label={t('plugins.publisher.officialBadgeAria')}
+          />
+        )}
       </span>
     ) : null
   const tagNode = (tag: string) => {
@@ -627,7 +642,7 @@ function CardMetaLine({
       <span
         key={tag}
         data-m="tag"
-        className="max-w-[120px] shrink-0 truncate rounded-[2px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
+        className="max-w-[120px] shrink-0 truncate rounded-[3px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
         style={{ backgroundColor: c.bg, color: c.fg }}
       >
         {tag}
@@ -636,7 +651,7 @@ function CardMetaLine({
   }
   const chipNode = (hiddenCount: number, hiddenTags: string[]) => (
     <Tooltip {...pluginCardTooltipProps} title={hiddenTags.join(' · ')}>
-      <span data-m="chip" className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-xs font-medium leading-none text-gray-700">
+      <span data-m="chip" className="shrink-0 rounded-[3px] border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-gray-700">
         +{hiddenCount}
       </span>
     </Tooltip>
@@ -645,7 +660,7 @@ function CardMetaLine({
   const hiddenTags = list.slice(fit.count)
 
   return (
-    <div ref={rowRef} className="relative mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
+    <div ref={rowRef} className="relative mt-2 flex min-w-0 items-center gap-1.5 overflow-hidden">
       {publisherNode(false)}
       {visibleTags.map(tag => tagNode(tag))}
       {fit.chip && hiddenTags.length > 0 && chipNode(hiddenTags.length, hiddenTags)}
@@ -1228,6 +1243,10 @@ export default function PluginMarketPage() {
           compact ? 'gap-4' : 'gap-6'
         }`}
       >
+        <span className={itemClass} title={t('plugins.detail.hotScore')}>
+          <Flame className="h-4 w-4 shrink-0 text-orange-500" />
+          {Math.round(plugin.hotScore)}
+        </span>
         <Tooltip {...pluginCardTooltipProps} title={tip} disableHoverListener={!tip}>
           <span className="inline-flex">
             <button
@@ -1288,10 +1307,6 @@ export default function PluginMarketPage() {
           <Eye className="h-4 w-4 shrink-0 text-[#777777]" />
           {plugin.viewCount}
         </span>
-        <span className={itemClass} title={t('plugins.detail.hotScore')}>
-          <Flame className="h-4 w-4 shrink-0 text-orange-500" />
-          {Math.round(plugin.hotScore)}
-        </span>
       </div>
     )
   }
@@ -1345,13 +1360,15 @@ export default function PluginMarketPage() {
                     )}
                   </div>
                   <CardMetaLine
-                    publisherName={plugin.publisherName}
+                    publisherName={displayPublisherName(plugin.publisherName, plugin.publisherOfficial, t)}
+                    publisherOfficial={plugin.publisherOfficial}
                     tags={plugin.tags ?? []}
                     tagColorMap={tagColorMap}
+                    t={t}
                   />
                 </div>
               </div>
-              <div className="flex min-h-0 flex-1 flex-col justify-between gap-4 pt-4">
+              <div className="flex min-h-0 flex-1 flex-col justify-between gap-4 pt-3">
                 <div className="flex min-h-0 flex-1 items-center">
                   <div className="relative w-full overflow-hidden px-0 py-0">
                     <p
@@ -1429,16 +1446,19 @@ export default function PluginMarketPage() {
                           {t('plugins.pinnedBadge')}
                         </span>
                       )}
-                      <span className="inline-flex shrink-0 items-center gap-0.5 truncate rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-xs font-normal leading-[18px] text-[#191919]">
+                      <span className="inline-flex shrink-0 items-center gap-0.5 truncate text-xs font-normal leading-[18px] text-[#595959]">
                         <User className="h-3 w-3 shrink-0 text-[#7B7B7B]" />
-                        {plugin.publisherName}
+                        {displayPublisherName(plugin.publisherName, plugin.publisherOfficial, t)}
+                        {plugin.publisherOfficial && (
+                          <BadgeCheck className="h-3 w-3 shrink-0 text-[#344DFA]" aria-label={t('plugins.publisher.officialBadgeAria')} />
+                        )}
                       </span>
                       {plugin.tags && plugin.tags.length > 0 && plugin.tags.slice(0, TAG_MAX_VISIBLE).map((tag) => {
                         const c = tagColorMap.get(tag) ?? TAG_NEUTRAL
                         return (
                           <span
                             key={tag}
-                            className="max-w-[120px] shrink-0 truncate rounded-[2px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
+                            className="max-w-[120px] shrink-0 truncate rounded-[3px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
                             style={{ backgroundColor: c.bg, color: c.fg }}
                           >
                             {tag}
@@ -1447,7 +1467,7 @@ export default function PluginMarketPage() {
                       })}
                       {plugin.tags && plugin.tags.length > TAG_MAX_VISIBLE && (
                         <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(TAG_MAX_VISIBLE).join(' · ')}>
-                          <span className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-xs font-medium leading-none text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
+                          <span className="shrink-0 rounded-[3px] border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
                         </Tooltip>
                       )}
                       {plugin.latestVersion && (
@@ -1982,7 +2002,13 @@ export default function PluginMarketPage() {
                     ) : null}
                   </div>
                   <Typography variant="caption" color="text.secondary" className="mt-0.5 block truncate">
-                    {t('plugins.detail.publisher')}: {selectedPlugin.publisherName || '-'}
+                    {t('plugins.detail.publisher')}:{' '}
+                    <span className="inline-flex items-center gap-0.5">
+                      {displayPublisherName(selectedPlugin.publisherName, selectedPlugin.publisherOfficial, t) || '-'}
+                      {selectedPlugin.publisherOfficial && (
+                        <BadgeCheck className="h-[14px] w-[14px] shrink-0 text-[#344DFA]" aria-label={t('plugins.publisher.officialBadgeAria')} />
+                      )}
+                    </span>
                   </Typography>
                 </div>
               </div>

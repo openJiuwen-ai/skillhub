@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from 'react-query'
-import { ArrowLeft, Download, Heart, Star, Eye, Play } from 'lucide-react'
+import { ArrowLeft, BadgeCheck, Download, Heart, Star, Eye, Play } from 'lucide-react'
 import { CircularProgress, Tooltip } from '@mui/material'
 import axios from 'axios'
 import { AppHeader } from '@/components/Common/AppHeader'
@@ -39,6 +39,7 @@ import { getSiteConfig } from '@/api/playground'
 import { PlaygroundDrawer } from '@/components/Playground/PlaygroundDrawer'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
+import { displayPublisherName } from '@/hooks/usePluginMarketConfigs'
 
 import {
   formatMarketSkillVersionLabel,
@@ -116,6 +117,7 @@ function versionDetailToListItem(raw: PluginVersionDetailData): AssetDetailQuery
     icon_uri: raw.icon_uri,
     publisher_id: raw.publisher_id,
     publisher_name: raw.publisher_name,
+    publisher_official: raw.publisher_official,
     tags: raw.tags,
     certification: raw.certification,
     plugin_type: raw.plugin_type,
@@ -147,6 +149,7 @@ function mapSkill(raw: MarketplacePluginItem) {
     detailDesc: firstString(raw.detail_desc, raw.detailDesc),
     iconUri: firstString(raw.icon_uri),
     publisherName: firstString(raw.publisher_name),
+    publisherOfficial: Boolean(raw.publisher_official),
     latestVersion: firstString(raw.latest_version),
     tags: normalizeTagList(raw.tags ?? undefined),
     allVersions: Array.isArray(raw.all_versions) ? raw.all_versions : [],
@@ -1170,7 +1173,7 @@ export default function AssetDetailPage() {
                             return (
                               <span
                                 key={tag}
-                                className="inline-flex items-center rounded-[3px] border border-black/5 px-2 py-0.5 text-[12px] font-medium"
+                                className="inline-flex items-center rounded-[3px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
                                 style={{ backgroundColor: c.bg, color: c.fg }}
                               >
                                 {tag}
@@ -1179,7 +1182,7 @@ export default function AssetDetailPage() {
                           })}
                           {displayTags.length > TAG_MAX_VISIBLE && (
                             <Tooltip {...pluginCardTooltipProps} title={displayTags.slice(TAG_MAX_VISIBLE).join(' · ')}>
-                              <span className="inline-flex cursor-default items-center rounded-[3px] border border-gray-300/80 bg-gray-200 px-2 py-0.5 text-[12px] font-medium text-gray-700">
+                              <span className="inline-flex cursor-default items-center rounded-[3px] border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-gray-700">
                                 +{displayTags.length - TAG_MAX_VISIBLE}
                               </span>
                             </Tooltip>
@@ -1392,7 +1395,12 @@ export default function AssetDetailPage() {
                         </div>
                         <div>
                           <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.fieldPublisher')}</div>
-                          <div className="mt-1 text-[13px] text-[#404040]">{skill.publisherName || '—'}</div>
+                          <div className="mt-1 inline-flex items-center gap-0.5 text-[13px] text-[#404040]">
+                            {displayPublisherName(skill.publisherName, skill.publisherOfficial, t) || '—'}
+                            {skill.publisherOfficial && (
+                              <BadgeCheck className="h-[14px] w-[14px] shrink-0 text-[#344DFA]" aria-label={t('plugins.publisher.officialBadgeAria')} />
+                            )}
+                          </div>
                         </div>
                         <div>
                           <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.fieldUpdatedAt')}</div>

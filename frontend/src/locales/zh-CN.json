@@ -98,6 +98,10 @@
     },
     "pinnedBadge": "置顶",
     "pinnedBadgeAria": "置顶展示",
+    "publisher": {
+      "official": "官方",
+      "officialBadgeAria": "官方认证"
+    },
     "groupGrantedBadge": "组群授权",
     "modelAccessNotice": "提示：Swarm Skills 可能会并发访问模型 API，可能会提示模型服务限流报错，但一般不影响最终执行结果。",
     "tableView": {

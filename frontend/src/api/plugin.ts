@@ -57,6 +57,8 @@ export interface MarketplacePluginItem {
   icon_uri?: string | null
   publisher_id: string
   publisher_name: string
+  /** 发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official */
+  publisher_official?: boolean
   tags?: string[] | null
   certification?: string | null
   plugin_type?: string | null
@@ -506,6 +508,8 @@ export interface PluginVersionDetailData {
   detail_desc?: string | null
   publisher_id: string
   publisher_name: string
+  /** 发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official */
+  publisher_official?: boolean
   tags?: string[] | null
   certification?: string | null
   changelog?: string | null
