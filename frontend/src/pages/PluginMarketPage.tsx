@@ -1,6 +1,6 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactElement } from 'react'
+import { cloneElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -28,6 +28,7 @@ import {
   BookOpen,
   AlignLeft,
   Pin,
+  User,
 } from 'lucide-react'
 import {
   Button,
@@ -46,7 +47,7 @@ import {
 } from '@mui/material'
 import { useQueries, useQuery, useQueryClient } from 'react-query'
 import { pluginCardTooltipProps, pluginDetailHeaderTooltipProps } from '@/components/Common/pluginCardTooltip'
-import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
+import { TAG_NEUTRAL, buildTagColorMap, TAG_MAX_VISIBLE, type TagColor } from '@/utils/tagColors'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
 import { AppHeader } from '@/components/Common/AppHeader'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
@@ -505,7 +506,7 @@ function RefetchListOverlay() {
   )
 }
 
-function DetailPluginTags({ tags, hotTagSet }: { tags: string[]; hotTagSet: Set<string> }) {
+function DetailPluginTags({ tags, tagColorMap }: { tags: string[]; tagColorMap: Map<string, TagColor> }) {
   const list = tags ?? []
   if (list.length === 0) return null
   const visible = list.slice(0, TAG_MAX_VISIBLE)
@@ -513,11 +514,11 @@ function DetailPluginTags({ tags, hotTagSet }: { tags: string[]; hotTagSet: Set<
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
       {visible.map((tag) => {
-	        const c = getTagColor(tag, hotTagSet.has(tag))
+        const c = tagColorMap.get(tag) ?? TAG_NEUTRAL
         return (
           <span
             key={tag}
-            className="shrink-0 rounded-md border border-black/5 px-2 py-0.5 text-[11px] font-medium"
+            className="shrink-0 rounded-md border border-black/5 px-2 py-0.5 text-xs font-medium"
             style={{ backgroundColor: c.bg, color: c.fg }}
           >
             {tag}
@@ -526,11 +527,139 @@ function DetailPluginTags({ tags, hotTagSet }: { tags: string[]; hotTagSet: Set<
       })}
       {hidden.length > 0 && (
         <Tooltip {...pluginCardTooltipProps} title={hidden.join(' · ')}>
-          <span className="shrink-0 cursor-default rounded-md border border-gray-300/80 bg-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-700">
+          <span className="shrink-0 cursor-default rounded-md border border-gray-300/80 bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">
             +{hidden.length}
           </span>
         </Tooltip>
       )}
+    </div>
+  )
+}
+
+// 网格卡 meta 行：单行恒定 = 发布者（弹性）+ 标签（自适应）+ 可选 "+N"。
+// 标签用隐藏量测层按真实宽度贪心取最多（≤ TAG_MAX_VISIBLE 个，且整段总宽 ≤ CARD_META_TAGS_AREA_MAX）；
+// "+N" 汇总 chip 可选：放得下才显示，放不下就让位（隐藏标签明细在详情页可见）。
+// 发布者是行内唯一弹性项（min-w-0），空间不足时被压缩出省略号，但不低于 CARD_META_PUBLISHER_FLOOR；
+// 版本号不在本行（固定在标题行右端，见网格卡 JSX）。
+const CARD_META_GAP_PX = 6 // 与 gap-1.5 对应
+const CARD_META_PUBLISHER_FLOOR = 56 // 发布者最低保留宽度（px），保证作者始终可见
+const CARD_META_TAGS_AREA_MAX = 190 // 标签区（含 "+N"）总宽上限（px）：约束标签栏总长，保留行尾留白
+
+function CardMetaLine({
+  publisherName,
+  tags,
+  tagColorMap,
+}: {
+  publisherName?: string
+  tags: string[]
+  tagColorMap: Map<string, TagColor>
+}) {
+  const list = tags ?? []
+  const hasPub = !!publisherName
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const measureRef = useRef<HTMLDivElement | null>(null)
+  const [rowWidth, setRowWidth] = useState(0)
+  const [fit, setFit] = useState(() => ({ count: Math.min(list.length, TAG_MAX_VISIBLE), chip: true }))
+
+  useLayoutEffect(() => {
+    const el = rowRef.current
+    if (!el) return
+    const update = () => setRowWidth(el.clientWidth)
+    update()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  useLayoutEffect(() => {
+    const layer = measureRef.current
+    if (!layer || rowWidth <= 0) return
+    // 量测层子节点用 data-m 标记类型，按类取宽，避免条件渲染导致的位置错位
+    const tagWs = [...layer.querySelectorAll<HTMLElement>('[data-m="tag"]')].map(el => el.offsetWidth)
+    const pubW = layer.querySelector<HTMLElement>('[data-m="pub"]')?.offsetWidth ?? 0
+    const chipW = layer.querySelector<HTMLElement>('[data-m="chip"]')?.offsetWidth ?? 0
+    let fitK = 0
+    let fitChip = false
+    const pubNeed = hasPub ? Math.min(pubW, CARD_META_PUBLISHER_FLOOR) : 0
+    for (let k = list.length; k >= 0; k--) {
+      const tagsW = tagWs.slice(0, k).reduce((acc, w) => acc + w, 0)
+      const chipNeeded = list.length > 0 && k < list.length
+      // 候选 1：带 "+N" 汇总（提示还有隐藏标签）；标签区总宽超上限则放弃
+      if (chipNeeded) {
+        const segChip = tagsW + chipW + CARD_META_GAP_PX * k
+        if (segChip <= CARD_META_TAGS_AREA_MAX && segChip + CARD_META_GAP_PX <= rowWidth - pubNeed) {
+          fitK = k
+          fitChip = true
+          break
+        }
+      }
+      // 候选 2：不带 "+N"（k 取满时无隐藏标签；或放不下汇总芯片时不显示）
+      const segBare = tagsW + CARD_META_GAP_PX * Math.max(0, k - 1)
+      if (segBare <= CARD_META_TAGS_AREA_MAX && segBare + CARD_META_GAP_PX <= rowWidth - pubNeed) {
+        fitK = k
+        fitChip = false
+        break
+      }
+    }
+    setFit({ count: fitK, chip: fitChip })
+  }, [rowWidth, publisherName, list])
+
+  // 真实行：发布者是唯一弹性项（min-w-0），空间不足时被压缩出省略号；
+  // 量测层：shrink-0 保证量到自然宽度
+  const publisherNode = (measure: boolean) =>
+    hasPub ? (
+      <span
+        data-m="pub"
+        title={measure ? undefined : publisherName}
+        className={`inline-flex ${measure ? 'shrink-0' : 'min-w-0'} items-center gap-0.5 truncate rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-[12px] font-normal leading-[18px] text-[#191919]`}
+      >
+        <User className="h-3 w-3 shrink-0 text-[#7B7B7B]" />
+        {publisherName}
+      </span>
+    ) : null
+  const tagNode = (tag: string) => {
+    const c = tagColorMap.get(tag) ?? TAG_NEUTRAL
+    return (
+      <span
+        key={tag}
+        data-m="tag"
+        className="max-w-[120px] shrink-0 truncate rounded-[2px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
+        style={{ backgroundColor: c.bg, color: c.fg }}
+      >
+        {tag}
+      </span>
+    )
+  }
+  const chipNode = (hiddenCount: number, hiddenTags: string[]) => (
+    <Tooltip {...pluginCardTooltipProps} title={hiddenTags.join(' · ')}>
+      <span data-m="chip" className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-xs font-medium leading-none text-gray-700">
+        +{hiddenCount}
+      </span>
+    </Tooltip>
+  )
+  const visibleTags = list.slice(0, fit.count)
+  const hiddenTags = list.slice(fit.count)
+
+  return (
+    <div ref={rowRef} className="relative mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
+      {publisherNode(false)}
+      {visibleTags.map(tag => tagNode(tag))}
+      {fit.chip && hiddenTags.length > 0 && chipNode(hiddenTags.length, hiddenTags)}
+      {/* 量测层：渲染完整集合，与真实行同构，仅供宽度计算 */}
+      <div
+        ref={measureRef}
+        aria-hidden
+        className="invisible pointer-events-none absolute left-0 top-0 flex items-center gap-1.5 whitespace-nowrap"
+        style={{ width: rowWidth > 0 ? rowWidth : undefined }}
+      >
+        {publisherNode(true)}
+        {list.map(tag => tagNode(tag))}
+        {list.length > 0 && chipNode(list.length, list)}
+      </div>
     </div>
   )
 }
@@ -711,6 +840,12 @@ export default function PluginMarketPage() {
   // selectedTags 为空时搜索恢复，searchKeyword 在标签激活期间恒为 ''，二者天然不同时下发。
   const searchDisabled = selectedTags.length > 0
 
+  const siteConfigQuery = useQuery(['site-config'], getSiteConfig, {
+    staleTime: 60_000,
+  })
+  const featuredListTopK = siteConfigQuery.data?.rec_list_top_k
+  const hotListTopK = siteConfigQuery.data?.hot_list_top_k
+
   const { marketPlugins, total, page, loading, fetching, error, refreshMarketPlugins } = usePluginMarketConfigs({
     page: currentPage,
     pageSize,
@@ -723,13 +858,17 @@ export default function PluginMarketPage() {
     orderBy: selectedTags.length > 0
       ? 'install_count'
       : isHotCategory
-        ? 'install_count'
+        ? 'hot_score'
         : isNewestCategory
           ? 'create_time'
           : isFeaturedCategory
             ? (isAgentAssetPluginType(activeType) ? 'install_count' : 'recommend')
-            : undefined,
+            : 'hot_score',
     desc: isHotCategory || isNewestCategory || (isFeaturedCategory && isAgentAssetPluginType(activeType)) ? true : undefined,
+    // 热门 tab 无搜索/无标签时截断到 top_k，只展示最火爆的；搜索和标签态走全量
+    topK: isHotCategory && !searchKeyword && selectedTags.length === 0
+      ? hotListTopK
+      : undefined,
   })
 
   const approvedSkillMarketTotalQuery = usePluginListQuery({
@@ -741,11 +880,6 @@ export default function PluginMarketPage() {
   })
   const approvedSkillMarketTotal = approvedSkillMarketTotalQuery.data?.data?.total
 
-  const siteConfigQuery = useQuery(['site-config'], getSiteConfig, {
-    staleTime: 60_000,
-  })
-  const featuredListTopK = siteConfigQuery.data?.rec_list_top_k
-
   // 标签筛选选项：热门自动推荐 + 运营配置优先展示
   const tagOptionsQuery = useQuery(
     ['plugins', 'tag-options', activeType],
@@ -753,7 +887,7 @@ export default function PluginMarketPage() {
     { staleTime: 60_000, keepPreviousData: true },
   )
   const tagOptions = useMemo(() => tagOptionsQuery.data ?? [], [tagOptionsQuery.data])
-  const hotTagSet = useMemo(() => buildHotTagSet(tagOptions), [tagOptions])
+  const tagColorMap = useMemo(() => buildTagColorMap(tagOptions.map(o => o.tag)), [tagOptions])
 
   const toggleSelectedTag = useCallback((tag: string) => {
     // 点标签 = 进入标签视图 + 清分类回 all + 清搜索。标签/分类互斥，
@@ -1154,6 +1288,10 @@ export default function PluginMarketPage() {
           <Eye className="h-4 w-4 shrink-0 text-[#777777]" />
           {plugin.viewCount}
         </span>
+        <span className={itemClass} title={t('plugins.detail.hotScore')}>
+          <Flame className="h-4 w-4 shrink-0 text-orange-500" />
+          {Math.round(plugin.hotScore)}
+        </span>
       </div>
     )
   }
@@ -1196,35 +1334,21 @@ export default function PluginMarketPage() {
                   <div className="flex min-w-0 items-center gap-2">
                     <h3 className="truncate text-[16px] font-semibold leading-6 text-[#191919]">{plugin.displayName}</h3>
                     {plugin.accessSource === 'group' ? (
-                      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                         {t('plugins.groupGrantedBadge')}
                       </span>
                     ) : null}
-                  </div>
-                  <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
-                    {plugin.tags?.slice(0, TAG_MAX_VISIBLE).map((tag) => {
-                      const c = getTagColor(tag, hotTagSet.has(tag))
-                      return (
-                        <span
-                          key={tag}
-                          className="max-w-[120px] truncate rounded-[2px] border border-black/5 px-1.5 py-0.5 text-[12px] font-normal leading-[18px]"
-                          style={{ backgroundColor: c.bg, color: c.fg }}
-                        >
-                          {tag}
-                        </span>
-                      )
-                    })}
-                    {plugin.tags && plugin.tags.length > TAG_MAX_VISIBLE && (
-                      <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(TAG_MAX_VISIBLE).join(' · ')}>
-                        <span className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[11px] font-medium leading-none text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
-                      </Tooltip>
-                    )}
                     {plugin.latestVersion && (
-                      <span className="ml-2 shrink-0 rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-[11px] font-medium leading-none text-[#5D6B85]">
+                      <span className="ml-auto shrink-0 rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-[11px] font-medium leading-none text-[#5D6B85]">
                         {formatMarketSkillVersionLabel(plugin.latestVersion, plugin)}
                       </span>
                     )}
                   </div>
+                  <CardMetaLine
+                    publisherName={plugin.publisherName}
+                    tags={plugin.tags ?? []}
+                    tagColorMap={tagColorMap}
+                  />
                 </div>
               </div>
               <div className="flex min-h-0 flex-1 flex-col justify-between gap-4 pt-4">
@@ -1255,7 +1379,7 @@ export default function PluginMarketPage() {
                       const v = defaultDownloadVersion(plugin).trim()
                       void handleDownloadPlugin(plugin, v || undefined)
                     }}
-                    className="mt-auto inline-flex h-auto min-w-0 shrink-0 items-center justify-center self-end px-0 py-0 text-[14px] sm:text-[15px] font-semibold leading-none text-transparent bg-[linear-gradient(90deg,#5B57F6_0%,#8B5CFF_100%)] bg-clip-text drop-shadow-[0_0_0_rgba(123,92,255,0)] transition-all duration-200 hover:scale-[1.05] hover:bg-[linear-gradient(90deg,#4F46E5_0%,#A855F7_100%)] hover:drop-shadow-[0_3px_8px_rgba(123,92,255,0.24)] disabled:pointer-events-none disabled:opacity-50"
+                    className="mt-auto inline-flex h-auto min-w-0 shrink-0 items-center justify-center self-end px-0 py-0 text-sm font-semibold leading-none text-transparent bg-[linear-gradient(90deg,#5B57F6_0%,#8B5CFF_100%)] bg-clip-text drop-shadow-[0_0_0_rgba(123,92,255,0)] transition-all duration-200 hover:scale-[1.05] hover:bg-[linear-gradient(90deg,#4F46E5_0%,#A855F7_100%)] hover:drop-shadow-[0_3px_8px_rgba(123,92,255,0.24)] disabled:pointer-events-none disabled:opacity-50"
                   >
                     {downloadingAssetId === plugin.assetId ? `${t('plugins.actions.download')}...` : t('plugins.actions.download')}
                   </button>
@@ -1300,13 +1424,17 @@ export default function PluginMarketPage() {
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <h3 className="truncate text-[16px] font-semibold leading-6 text-[#191919]">{plugin.displayName}</h3>
                       {plugin.pinOrder != null && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200/80">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200/80">
                           <Pin className="h-3 w-3" />
                           {t('plugins.pinnedBadge')}
                         </span>
                       )}
+                      <span className="inline-flex shrink-0 items-center gap-0.5 truncate rounded-[2px] bg-[#F5F5F5] px-1.5 py-0.5 text-xs font-normal leading-[18px] text-[#191919]">
+                        <User className="h-3 w-3 shrink-0 text-[#7B7B7B]" />
+                        {plugin.publisherName}
+                      </span>
                       {plugin.tags && plugin.tags.length > 0 && plugin.tags.slice(0, TAG_MAX_VISIBLE).map((tag) => {
-                        const c = getTagColor(tag, hotTagSet.has(tag))
+                        const c = tagColorMap.get(tag) ?? TAG_NEUTRAL
                         return (
                           <span
                             key={tag}
@@ -1319,16 +1447,16 @@ export default function PluginMarketPage() {
                       })}
                       {plugin.tags && plugin.tags.length > TAG_MAX_VISIBLE && (
                         <Tooltip {...pluginCardTooltipProps} title={plugin.tags.slice(TAG_MAX_VISIBLE).join(' · ')}>
-                          <span className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-[11px] font-medium leading-none text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
+                          <span className="shrink-0 rounded-sm border border-gray-300/80 bg-gray-200 px-1.5 py-0.5 text-xs font-medium leading-none text-gray-700">+{plugin.tags.length - TAG_MAX_VISIBLE}</span>
                         </Tooltip>
                       )}
                       {plugin.latestVersion && (
-                        <span className="shrink-0 rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-[11px] font-medium leading-none text-[#5D6B85]">
+                        <span className="shrink-0 rounded-full bg-[#F4F7FF] px-1.5 py-[3px] text-xs font-medium leading-none text-[#5D6B85]">
                           {formatMarketSkillVersionLabel(plugin.latestVersion, plugin)}
                         </span>
                       )}
                     </div>
-                    <p className="mt-0 truncate text-[14px] leading-[22px] text-[#808080]" title={intro.truncated ? intro.full : undefined}>
+                    <p className="mt-1 truncate text-[14px] leading-[22px] text-[#808080]" title={intro.truncated ? intro.full : undefined}>
                       {intro.display}
                     </p>
                   </div>
@@ -1343,7 +1471,7 @@ export default function PluginMarketPage() {
                       const v = defaultDownloadVersion(plugin).trim()
                       void handleDownloadPlugin(plugin, v || undefined)
                     }}
-                    className="mt-auto inline-flex h-auto min-w-0 shrink-0 items-center justify-center self-end px-0 py-0 text-[14px] sm:text-[15px] font-semibold leading-none text-transparent bg-[linear-gradient(90deg,#5B57F6_0%,#8B5CFF_100%)] bg-clip-text drop-shadow-[0_0_0_rgba(123,92,255,0)] transition-all duration-200 hover:scale-[1.08] hover:bg-[linear-gradient(90deg,#4F46E5_0%,#A855F7_100%)] hover:drop-shadow-[0_4px_10px_rgba(123,92,255,0.32)] disabled:pointer-events-none disabled:opacity-50"
+                    className="mt-auto inline-flex h-auto min-w-0 shrink-0 items-center justify-center self-end px-0 py-0 text-sm font-semibold leading-none text-transparent bg-[linear-gradient(90deg,#5B57F6_0%,#8B5CFF_100%)] bg-clip-text drop-shadow-[0_0_0_rgba(123,92,255,0)] transition-all duration-200 hover:scale-[1.08] hover:bg-[linear-gradient(90deg,#4F46E5_0%,#A855F7_100%)] hover:drop-shadow-[0_4px_10px_rgba(123,92,255,0.32)] disabled:pointer-events-none disabled:opacity-50"
                   >
                     {downloadingAssetId === plugin.assetId ? `${t('plugins.actions.download')}...` : t('plugins.actions.download')}
                   </button>
@@ -1374,7 +1502,7 @@ export default function PluginMarketPage() {
             aria-selected={sidebarView === 'category'}
             onClick={() => handleSidebarViewChange('category')}
             className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
-              sidebarView === 'category' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+              sidebarView === 'category' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-gray-500 hover:text-[#191919]'
             }`}
           >
             {t('plugins.sidebarViewCategory')}
@@ -1385,7 +1513,7 @@ export default function PluginMarketPage() {
             aria-selected={sidebarView === 'tag'}
             onClick={() => handleSidebarViewChange('tag')}
             className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
-              sidebarView === 'tag' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+              sidebarView === 'tag' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-gray-500 hover:text-[#191919]'
             }`}
           >
             {t('plugins.sidebarViewTag')}
@@ -1412,7 +1540,7 @@ export default function PluginMarketPage() {
                       <CategoryIcon category={key} active={isActive} />
                       <span className="truncate text-left font-normal">{label}</span>
                     </span>
-                    {count != null && <span className="shrink-0 text-[13px] tabular-nums text-[#777]">{count.toLocaleString(locale)}</span>}
+                    {count != null && <span className="shrink-0 text-xs tabular-nums text-gray-500">{count.toLocaleString(locale)}</span>}
                   </button>
                 )
               })}
@@ -1423,13 +1551,13 @@ export default function PluginMarketPage() {
             <TagSearchBox activeType={activeType} selectedTags={selectedTags} onToggle={toggleSelectedTag} />
             <SelectedTagsBar variant="desktop" selectedTags={selectedTags} onToggle={toggleSelectedTag} />
             <div className="flex flex-col gap-1.5">
-              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-[#999]">
+              <p className="px-1 text-xs font-medium uppercase tracking-wide text-gray-500">
                 {t('plugins.tagRecommendedHeader')}
               </p>
               <div className="max-h-[calc(100vh-340px)] overflow-y-auto pr-1">
                 {availableTagOptions.length === 0 ? (
                   tagOptions.length === 0 ? (
-                    <p className="px-3 py-4 text-[14px] text-[#999]">{t('plugins.tagListEmpty')}</p>
+                    <p className="px-3 py-4 text-[14px] text-gray-500">{t('plugins.tagListEmpty')}</p>
                   ) : null
                 ) : (
                   availableTagOptions.map(opt => (
@@ -1437,10 +1565,10 @@ export default function PluginMarketPage() {
                       key={opt.tag}
                       type="button"
                       onClick={() => toggleSelectedTag(opt.tag)}
-                      className="flex h-10 w-full items-center justify-between rounded-[4px] px-3 text-[15px] leading-[22px] transition-colors bg-transparent text-[#191919] hover:bg-black/[0.03]"
+                      className="flex h-10 w-full items-center justify-between rounded-[4px] px-3 text-sm leading-[22px] transition-colors bg-transparent text-[#191919] hover:bg-black/[0.03]"
                     >
                       <span className="truncate text-left font-normal">{opt.tag}</span>
-                      <span className="shrink-0 text-[13px] tabular-nums text-[#777]">{opt.count.toLocaleString(locale)}</span>
+                      <span className="shrink-0 text-xs tabular-nums text-gray-500">{opt.count.toLocaleString(locale)}</span>
                     </button>
                   ))
                 )}
@@ -1456,6 +1584,7 @@ export default function PluginMarketPage() {
   const categoryMobileNav = useMemo(
     () => (
       <div className="xl:hidden">
+        <h2 className="mb-3 text-[16px] font-semibold leading-none text-[#191919]">{t('plugins.marketTitle')}</h2>
         {/* 顶部分段切换器：与桌面左栏同构 */}
         <div className="mb-2 grid grid-cols-2 gap-1 rounded-[8px] bg-[#F1F3F9] p-1" role="tablist" aria-label={t('plugins.sidebarViewSwitchAria')}>
           <button
@@ -1464,7 +1593,7 @@ export default function PluginMarketPage() {
             aria-selected={sidebarView === 'category'}
             onClick={() => handleSidebarViewChange('category')}
             className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
-              sidebarView === 'category' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+              sidebarView === 'category' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-gray-500 hover:text-[#191919]'
             }`}
           >
             {t('plugins.sidebarViewCategory')}
@@ -1475,7 +1604,7 @@ export default function PluginMarketPage() {
             aria-selected={sidebarView === 'tag'}
             onClick={() => handleSidebarViewChange('tag')}
             className={`flex h-8 items-center justify-center rounded-[6px] text-[14px] font-medium leading-none transition-colors ${
-              sidebarView === 'tag' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-[#777] hover:text-[#191919]'
+              sidebarView === 'tag' ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-gray-500 hover:text-[#191919]'
             }`}
           >
             {t('plugins.sidebarViewTag')}
@@ -1519,7 +1648,7 @@ export default function PluginMarketPage() {
             >
               {availableTagOptions.length === 0 ? (
                 tagOptions.length === 0 ? (
-                  <span className="px-1 py-1 text-[13px] text-[#999]">{t('plugins.tagListEmpty')}</span>
+                  <span className="px-1 py-1 text-xs text-gray-500">{t('plugins.tagListEmpty')}</span>
                 ) : null
               ) : (
                 availableTagOptions.map(opt => (
@@ -1555,7 +1684,7 @@ export default function PluginMarketPage() {
               <h1 className="mx-auto max-w-[800px] text-balance text-[30px] font-semibold leading-[1.4] tracking-normal text-[#191919] sm:text-[36px] lg:text-[40px] lg:leading-[56px]">
                 {t('plugins.marketTitle')}
               </h1>
-              <p className="mx-auto mt-4 max-w-[760px] text-pretty text-[14px] leading-[18px] tracking-[0.08em] text-[#595959] sm:text-[16px]">
+              <p className="mx-auto mt-4 max-w-[760px] text-pretty text-sm tracking-[0.08em] text-[#595959] sm:text-base">
                 {t('plugins.marketSubtitleLead')}{' '}
                 {typeof approvedSkillMarketTotal === 'number' && (
                   <>
@@ -1711,10 +1840,10 @@ export default function PluginMarketPage() {
 
           <section className="pb-2 pt-16 lg:pt-[64px]">
             {categoryMobileNav}
-            {/* 工具栏横跨两栏上方，右对齐：左栏分段切换器与右栏第一排卡片同处 grid 第一行，
-                二者顶部自然对齐；工具栏不再压在右栏卡片之上。 */}
-            <div className="mb-4 hidden h-7 items-center justify-end gap-1.5 xl:flex">
-              <div className="flex shrink-0 items-center gap-1.5">
+            {/* 桌面端标题与视图切换按钮同行：左栏标题（248px）与右栏右对齐工具栏高度对齐 */}
+            <div className="mb-4 hidden items-center xl:grid xl:grid-cols-[248px_minmax(0,1fr)] xl:gap-6">
+              <h2 className="text-[16px] font-semibold leading-none text-[#191919]">{t('plugins.marketTitle')}</h2>
+              <div className="flex h-7 items-center justify-end gap-1.5">
                 <ViewToggle value={viewMode} onChange={setViewMode} t={t} />
                 <button
                   type="button"
@@ -1783,7 +1912,7 @@ export default function PluginMarketPage() {
                       setPageSize(Number(e.target.value))
                       setCurrentPage(1)
                     }}
-                    className="h-8 rounded-full border border-[#E7EAF3] bg-white px-3 text-[13px] text-slate-600 outline-none"
+                    className="h-8 rounded-full border border-[#E7EAF3] bg-white px-3 text-xs text-slate-600 outline-none"
                   >
                     {PAGE_SIZE_OPTIONS.map(opt => (
                       <option key={opt} value={opt}>{opt}</option>
@@ -1803,7 +1932,7 @@ export default function PluginMarketPage() {
                   >
                     <ChevronLeft className="h-[14px] w-[14px]" />
                   </button>
-                  <div className="rounded-full border border-[#E7EAF3] bg-white px-3 py-[6px] text-[13px] font-medium text-slate-600">
+                  <div className="rounded-full border border-[#E7EAF3] bg-white px-3 py-[6px] text-xs font-medium text-slate-600">
                     {t('common.pagination.pagePrefix')} {page} {t('common.pagination.pageSuffix', { total: totalPages })}
                   </div>
                   <button
@@ -1899,14 +2028,14 @@ export default function PluginMarketPage() {
                       <div className="flex flex-col items-center text-center">
                         <Eye className="mb-2 h-4 w-4 text-sky-600" />
                         <div className="text-lg font-extrabold leading-7 tabular-nums text-sky-700">{selectedPlugin.viewCount}</div>
-                        <div className="mt-2 text-[11px] text-sky-600">{t('plugins.detail.viewCount')}</div>
+                        <div className="mt-2 text-xs text-sky-600">{t('plugins.detail.viewCount')}</div>
                       </div>
                     </div>
                     <div className="min-h-[108px] rounded-lg border border-[#E0E7FF] bg-[#F4F6FF] px-3 py-3">
                       <div className="flex flex-col items-center text-center">
                         <Download className="mb-2 h-4 w-4 text-indigo-600" />
                         <div className="text-lg font-extrabold leading-7 tabular-nums text-indigo-700">{selectedPlugin.installCount}</div>
-                        <div className="mt-2 text-[11px] text-indigo-600">{t('plugins.detail.installCount')}</div>
+                        <div className="mt-2 text-xs text-indigo-600">{t('plugins.detail.installCount')}</div>
                       </div>
                     </div>
                     <div className="min-h-[108px] rounded-lg border border-[#FFE2EA] bg-[#FFF4F7] px-3 py-3">
@@ -1915,14 +2044,14 @@ export default function PluginMarketPage() {
                         <div className="text-lg font-extrabold leading-7 tabular-nums text-rose-700">
                           {interactionStateMap[selectedPlugin.assetId]?.like_count ?? selectedPlugin.likeCount}
                         </div>
-                        <div className="mt-2 text-[11px] text-rose-600">{t('plugins.detail.likeCount')}</div>
+                        <div className="mt-2 text-xs text-rose-600">{t('plugins.detail.likeCount')}</div>
                       </div>
                     </div>
                     <div className="min-h-[108px] rounded-lg border border-[#D8F2F5] bg-[#F2FBFC] px-3 py-3">
                       <div className="flex flex-col items-center text-center">
                         <MessageCircle className="mb-2 h-4 w-4 text-cyan-600" />
                         <div className="text-lg font-extrabold leading-7 tabular-nums text-cyan-700">{selectedPlugin.reviewCount}</div>
-                        <div className="mt-2 text-[11px] text-cyan-600">{t('plugins.detail.reviewCount')}</div>
+                        <div className="mt-2 text-xs text-cyan-600">{t('plugins.detail.reviewCount')}</div>
                       </div>
                     </div>
                   </div>
@@ -2007,7 +2136,7 @@ export default function PluginMarketPage() {
                       </Typography>
                     </div>
                     <div className="mt-1 min-h-[22px]">
-                      {selectedPlugin.tags?.length ? <DetailPluginTags tags={selectedPlugin.tags} hotTagSet={hotTagSet} /> : <Typography variant="body2" color="text.secondary">-</Typography>}
+                      {selectedPlugin.tags?.length ? <DetailPluginTags tags={selectedPlugin.tags} tagColorMap={tagColorMap} /> : <Typography variant="body2" color="text.secondary">-</Typography>}
                     </div>
                   </div>
                   <div>

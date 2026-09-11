@@ -13,6 +13,7 @@ export type MarketplacePluginOrderBy =
   | 'update_time'
   | 'review_count'
   | 'recommend'
+  | 'hot_score'
 
 export interface MarketplacePluginListRequest {
   page?: number
@@ -38,6 +39,8 @@ export interface MarketplacePluginListRequest {
   tags_match?: 'all' | 'any'
   order_by?: MarketplacePluginOrderBy
   desc?: boolean
+  /** 热门 tab 截断：只返回前 top_k 条，total 同步封顶 */
+  top_k?: number
 }
 
 export interface MarketplacePluginItem {
@@ -78,6 +81,7 @@ export interface MarketplacePluginItem {
   star_count?: number
   review_count: number
   average_rating: number
+  hot_score?: number
   create_time?: number | null
   update_time?: number | null
   createTime?: number | null
@@ -348,6 +352,7 @@ export async function getPlugins(
       tags_match: request.tags_match || undefined,
       order_by: request.order_by ?? 'install_count',
       desc: request.desc ?? true,
+      top_k: request.top_k || undefined,
     },
   })
 

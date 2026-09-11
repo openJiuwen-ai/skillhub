@@ -8,6 +8,7 @@ import time
 import unicodedata
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path as FsPath
 from typing import Annotated, Any, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -44,10 +45,11 @@ from plugins_market.core.context import (
     set_user_id,
     set_user_name,
     get_user_id as get_user_id_from_context,
+    get_user_id_or_none,
     get_user_name,
 )
 from plugins_market.core.viewer_context import ViewerContext
-from plugins_market.core.cache import cache_get, cache_set
+from plugins_market.core.cache import cache_delete, cache_get, cache_set, cache_set_nx
 from plugins_market.core.config import settings
 from plugins_market.core.database import get_db
 from plugins_market.core.errors import (
@@ -66,6 +68,7 @@ from plugins_market.core.operation_log import (
     operation_failure_result,
     operation_log_fields,
 )
+from plugins_market.core.rate_limit import client_ip_from_scope
 from plugins_market.core.s3_storage_client import get_storage_client
 from plugins_market.repositories.git_source_repository import GitSourceRepository
 from plugins_market.validation.constants import (
@@ -1339,6 +1342,25 @@ async def get_artifact_download(
 ):
     fetch_user_id: Optional[str] = get_user_id_from_context()
 
+    # 计量去重闸门：同一来源（登录按 user_id，匿名按 IP+UA）同一天同一资产只计一次量，
+    # 防脚本/API 刷量虚增 install_count 与火爆值；重复下载照常服务，只是不重复计数。
+    # 火爆值 recent_dl 即近 7 天 fetch 记录数，闸门挡在写入前，口径自动成为「不同来源数」。
+    # Redis 不可用时 cache_set_nx fail-open 返回 True，照常计数（可用性优先）。
+    # 注意必须用 get_user_id_or_none()：get_user_id() 对匿名返回 "anonymous" 哨兵，
+    # 若当成登录态，所有匿名访客会共享同一指纹，同资产同天只计 1 次（严重少计）。
+    counted_user_id = get_user_id_or_none()
+    # 匿名指纹的 IP 与限流同源（client_ip_from_scope + rate_limit_trust_forwarded）：
+    # nginx 前置时 peer 是代理 IP，直接用会把所有匿名访客的指纹坍缩成 UA 去重，失去 IP 维度。
+    _ip = client_ip_from_scope(request.scope, trust_forwarded=settings.rate_limit_trust_forwarded)
+    _ua = request.headers.get("user-agent", "")
+    if counted_user_id:
+        source_fp = f"u:{counted_user_id}"
+    else:
+        source_fp = "ip:" + hashlib.sha256(f"{_ip}|{_ua}".encode()).hexdigest()[:16]
+    utc_today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    gate_key = f"dlcnt:{artifact_id}:{source_fp}:{utc_today}"
+    counted_today = cache_set_nx(gate_key, 86400 * 8)
+
     with operation_context(operation_type="download_artifact"):
         bind_operation_actor(actor_id=fetch_user_id, actor_type="viewer")
         bind_operation_resource(resource_type="artifact", resource_id=artifact_id, resource_version=version)
@@ -1351,8 +1373,13 @@ async def get_artifact_download(
                 fetch_user_id=fetch_user_id,
                 viewer=viewer,
                 is_cli_download=is_cli_download,
+                counted=counted_today,
             )
         except (PublishError, HTTPException) as exc:
+            # 下载失败（404/403 等）时释放闸门：失败的首日下载不该消耗该来源当天的计量名额。
+            # 仅在本次请求确实占用闸门时释放——counted_today=False 说明名额是更早的成功请求占的，不能动。
+            if counted_today:
+                cache_delete(gate_key)
             _raise_with_operation_failure_log(
                 "artifact download",
                 exc,

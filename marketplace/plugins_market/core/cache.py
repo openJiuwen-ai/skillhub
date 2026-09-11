@@ -67,6 +67,32 @@ def cache_set(key: str, value: str, ttl: int = 86400 * 7) -> None:
         logger.debug("cache_set failed key=%s: %s", key, e)
 
 
+def cache_set_nx(key: str, ttl: int) -> bool:
+    """SET NX EX：key 不存在时写入并返回 True（当天首次）；已存在返回 False。
+
+    用于下载计量去重闸门：无 Redis 或出错时返回 True（fail-open）——
+    可用性优先于精确性，宁可偶尔多计，不因 Redis 故障漏计或阻断下载。
+    """
+    r = _make_client()
+    if r is None:
+        return True
+    try:
+        return bool(r.set(key, "1", nx=True, ex=max(1, ttl)))  # type: ignore[union-attr]
+    except Exception as e:
+        logger.debug("cache_set_nx failed key=%s: %s", key, e)
+        return True
+
+
+def cache_delete(key: str) -> None:
+    r = _make_client()
+    if r is None:
+        return
+    try:
+        r.delete(key)  # type: ignore[union-attr]
+    except Exception as e:
+        logger.debug("cache_delete failed key=%s: %s", key, e)
+
+
 def cache_set_persistent(key: str, value: str) -> None:
     """写入不带 TTL 的永久 key（用于需长期保留的状态，如标星记录）。
 

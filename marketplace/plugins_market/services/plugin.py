@@ -2943,8 +2943,14 @@ def get_download_info(
     fetch_user_id: str | None = None,
     viewer: ViewerContext,
     is_cli_download: bool = False,
+    counted: bool = True,
 ) -> PluginDownloadData:
-    """根据 asset_id（可选 version）返回预签名下载信息。"""
+    """根据 asset_id（可选 version）返回预签名下载信息。
+
+    counted=False 时照常返回下载 URL 但跳过计量（install_count 不累加、
+    不写 fetch 记录）——调用方（路由层）负责当日来源去重闸门，重复下载
+    仍可服务，只是不重复计数。
+    """
     asset_repo = MarketAssetRepository(db)
     version_repo = MarketAssetVersionRepository(db)
     fetch_repo = PluginFetchRecordRepository(db)
@@ -3106,36 +3112,37 @@ def get_download_info(
         )
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    try:
-        updated_rows = asset_repo.increase_install_count_atomic(
-            asset_id=asset.asset_id,
-            now_ms=now_ms,
-        )
-        if updated_rows != 1:
+    if counted:
+        try:
+            updated_rows = asset_repo.increase_install_count_atomic(
+                asset_id=asset.asset_id,
+                now_ms=now_ms,
+            )
+            if updated_rows != 1:
+                raise PublishError(
+                    code=500,
+                    error="db_error",
+                    message=f"更新下载统计失败：asset_id={asset.asset_id}",
+                    error_code="SKILLHUB_DATABASE_ERROR",
+                    error_class="internal",
+                )
+
+            fetch_repo.create_fetch_record(
+                asset_id=asset.asset_id,
+                version_id=version_row.version_id,
+                fetch_user_id=fetch_user_id,
+                create_time=now_ms,
+            )
+            db.commit()
+        except SQLAlchemyError as e:
+            db.rollback()
             raise PublishError(
                 code=500,
                 error="db_error",
-                message=f"更新下载统计失败：asset_id={asset.asset_id}",
+                message="更新下载统计失败",
                 error_code="SKILLHUB_DATABASE_ERROR",
                 error_class="internal",
-            )
-
-        fetch_repo.create_fetch_record(
-            asset_id=asset.asset_id,
-            version_id=version_row.version_id,
-            fetch_user_id=fetch_user_id,
-            create_time=now_ms,
-        )
-        db.commit()
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise PublishError(
-            code=500,
-            error="db_error",
-            message="更新下载统计失败",
-            error_code="SKILLHUB_DATABASE_ERROR",
-            error_class="internal",
-        ) from e
+            ) from e
 
     return PluginDownloadData(
         download_url=download_url,
