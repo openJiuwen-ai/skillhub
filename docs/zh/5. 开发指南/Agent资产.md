@@ -26,7 +26,7 @@ openJiuwen Agentic Hub 市场除 Skill / SwarmSkill 外，支持三类 JiuwenSwa
 - Agent 包装包：`plugin_version` 须与内层 `manifest.json.version` 一致，否则 `400 invalid_version`。
 - 路径均相对内层包根，不得含 `..` 或绝对路径。
 - 静态安全扫描：manifest 引用的 `mcp.json` 与包内脚本不得含危险命令。
-- 市场图标：专家/专家团优先内层 `manifest.avatar`（PNG，如 `avatars/avatar.png`），否则外层 `<outer>/icon.png`；插件无头像，`icon_uri` 为空；连接器见下文 `manifest.icon`。Hub 上传为版本目录 `icon.png`，列表与详情返回 `icon_uri`。无图标时字段为空，不写占位图、不塞 ZIP 下载链接。
+- 市场图标：专家/专家团与插件优先内层 `manifest.avatar`（PNG，如 `avatars/avatar.png`），否则外层 `<outer>/icon.png`；连接器见下文 `manifest.icon`。Hub 上传为版本目录 `icon.png`，列表与详情返回 `icon_uri`。无图标时字段为空，不写占位图、不塞 ZIP 下载链接。
 
 完整字段规范见产品侧《Agent资产组成文件说明》；下文为 **openJiuwen Agentic Hub 发布校验**要点。
 
@@ -61,7 +61,7 @@ Hub 只做**包结构与安全**校验，运行时文件是否齐留给 JiuwenSw
 
 **必填：** `version`、`package_type`、`id`（须等于 `plugin.yaml.name`）
 
-**可选能力：** `skills[]`、`tools[]`、`rails[]`、`mcps[]`（Hub 不因声明文件缺失拒发）
+**可选：** `skills[]`、`tools[]`、`rails[]`、`mcps[]`（Hub 不因声明文件缺失拒发）、`avatar`（PNG；文件不存在则跳过）
 
 **禁止根字段：** `persona`、`agent_card`、`model`、`subagents`、`memories`、`rubrics`
 
@@ -72,13 +72,14 @@ Hub 只做**包结构与安全**校验，运行时文件是否齐留给 JiuwenSw
   "id": "my-plugin",
   "name": "展示名",
   "description": "描述",
+  "avatar": "avatars/avatar.png",
   "skills": [{ "dir": "skills/foo", "mode": "all" }],
   "tools": [{ "file": "tools/t.py", "class": "MyTool" }],
   "mcps": [{ "connector": "amap" }]
 }
 ```
 
-`mcps[]` 支持 `connector`（宿主 connector）或 `file` / `dir`（包内 MCP 配置）。
+`mcps[]` 支持 `connector`（宿主 connector）或 `file` / `dir`（包内 MCP 配置）。市场图标优先 `manifest.avatar`（PNG），否则外层 `icon.png`。
 
 ## 专家/专家团（`package_type: agent_template`）
 

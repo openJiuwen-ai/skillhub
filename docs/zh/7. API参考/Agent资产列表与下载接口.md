@@ -15,7 +15,7 @@
 | `moderation_status` | 公开市场用 `APPROVED` |
 | `asset_id` | 精确查单条 |
 
-**列表项主要字段：** `asset_id`、`name`、`display_name`、`short_desc`、`plugin_type`、`asset_type`、`tags`、`icon_uri`（专家/专家团或 MCP 有市场图标时非空；插件通常为空）、`latest_version`
+**列表项主要字段：** `asset_id`、`name`、`display_name`、`short_desc`、`plugin_type`、`asset_type`、`tags`、`icon_uri`（专家/专家团、插件或 MCP 有市场图标时非空）、`latest_version`
 
 ## 版本详情 `GET /plugins/{asset_id}/versions/{version}`
 
@@ -27,7 +27,7 @@
 |------|------|
 | `display_name` / `short_desc` | 列表与详情标题、摘要 |
 | `detail_desc` | 内层 `README.md` 正文（无则为空） |
-| `icon_uri` | 市场图标预签名 URL（专家/专家团：`manifest.avatar` 或外层 `icon.png`；MCP：`manifest.icon`；插件无头像，通常为 null） |
+| `icon_uri` | 市场图标预签名 URL（专家/专家团与插件：`manifest.avatar` 或外层 `icon.png`；MCP：`manifest.icon`） |
 | `tags` | 市场标签 |
 
 **内层摘要 `agent_package_profile`（只读，来自内层 `manifest.json`）：**

@@ -605,7 +605,7 @@ def test_agent_template_extracts_manifest_avatar_png() -> None:
     assert result["icon_bytes"] == _MIN_PNG
 
 
-def test_agent_plugin_ignores_manifest_avatar() -> None:
+def test_agent_plugin_extracts_manifest_avatar_png() -> None:
     content = _build_wrapped_zip(
         "wellness-plugin",
         "agent-plugin",
@@ -616,7 +616,51 @@ def test_agent_plugin_ignores_manifest_avatar() -> None:
         },
     )
     result = _validate_plugin(content, "wellness-plugin")
-    assert result["icon_bytes"] == b""
+    assert result["icon_bytes"] == _MIN_PNG
+
+
+def test_agent_plugin_falls_back_to_outer_icon_png() -> None:
+    content = _build_wrapped_zip(
+        "wellness-plugin",
+        "agent-plugin",
+        {
+            "manifest.json": _plugin_manifest(),
+            "tools/tool.py": "def run():\n    return True\n",
+        },
+        outer_files={"icon.png": _MIN_PNG},
+    )
+    result = _validate_plugin(content, "wellness-plugin")
+    assert result["icon_bytes"] == _MIN_PNG
+
+
+def test_agent_plugin_prefers_manifest_avatar_over_outer_icon() -> None:
+    content = _build_wrapped_zip(
+        "wellness-plugin",
+        "agent-plugin",
+        {
+            "manifest.json": _plugin_manifest(avatar="avatars/avatar.png"),
+            "tools/tool.py": "def run():\n    return True\n",
+            "avatars/avatar.png": _MIN_PNG,
+        },
+        outer_files={"icon.png": b"not-a-png"},
+    )
+    result = _validate_plugin(content, "wellness-plugin")
+    assert result["icon_bytes"] == _MIN_PNG
+
+
+def test_agent_plugin_rejects_invalid_avatar_png() -> None:
+    content = _build_wrapped_zip(
+        "wellness-plugin",
+        "agent-plugin",
+        {
+            "manifest.json": _plugin_manifest(avatar="avatars/avatar.png"),
+            "tools/tool.py": "def run():\n    return True\n",
+            "avatars/avatar.png": b"not-a-png",
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_plugin(content, "wellness-plugin")
+    assert "PNG" in exc_info.value.detail["message"]
 
 
 def test_agent_template_falls_back_to_outer_icon_png() -> None:

@@ -336,15 +336,14 @@ def validate_agent_asset_layout(
         _dangerous(f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
 
     icon_bytes = b""
-    if runtime_type == RUNTIME_AGENT_TEMPLATE:
-        avatar = manifest.get("avatar")
-        if isinstance(avatar, str) and avatar.strip():
-            avatar_path = _safe_relative_path(avatar, "avatar", error=manifest_error)
-            avatar_member = f"{payload_prefix}{avatar_path}"
-            if _member_exists(members, avatar_member) and avatar_path.lower().endswith(".png"):
-                raw_icon = safe_read_zip_member(zf, members[avatar_member], counter)
-                validate_png_icon_bytes(raw_icon, path=avatar_member)
-                icon_bytes = raw_icon
+    avatar = manifest.get("avatar")
+    if isinstance(avatar, str) and avatar.strip():
+        avatar_path = _safe_relative_path(avatar, "avatar", error=manifest_error)
+        avatar_member = f"{payload_prefix}{avatar_path}"
+        if _member_exists(members, avatar_member) and avatar_path.lower().endswith(".png"):
+            raw_icon = safe_read_zip_member(zf, members[avatar_member], counter)
+            validate_png_icon_bytes(raw_icon, path=avatar_member)
+            icon_bytes = raw_icon
 
     if not icon_bytes:
         icon_path = f"{outer}/icon.png" if outer else "icon.png"
