@@ -683,7 +683,9 @@ def _run_skill_tag_refresh(
         )
     else:
         agent_tag_config = None
-    tag_runtime_config = None if agent_tag_config is not None else _build_skill_tag_runtime_config(tag_config, runtime_config)
+    tag_runtime_config = (
+        None if agent_tag_config is not None else _build_skill_tag_runtime_config(tag_config, runtime_config)
+    )
     try:
         IndexBuilder.build_skill_tags(
             classify_paths,
@@ -759,7 +761,8 @@ def _run_skill_tag_refresh(
             )
         else:
             logger.error(
-                "agent 分类失败：group=%s 本次有 %d 个待分类资产但 LLM 未产出任何映射，mapping=%s",
+                "agent 分类失败：group=%s 本次有 %d 个待分类资产但 LLM 未产出任何映射，"
+                "mapping=%s",
                 group,
                 len(classify_paths),
                 tag_mapping_uri,
