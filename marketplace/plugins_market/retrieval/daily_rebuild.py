@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from botocore.exceptions import ClientError
 from retrieval.indexing.workflows.artifacts import IndexBuildRuntimeConfig
 from plugins_market.core.logging import get_logger
+from plugins_market.retrieval.groups import agent_retrieval_group, scanner_type_for_group
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,20 @@ class SkillTagRefreshOptions:
     skip_lock: bool = False
 
 
+@dataclass
+class AgentTagRefreshOptions:
+    """Parameters for the three independent Agent asset classification groups."""
+
+    db_factory: Any
+    agent_prefixes: Dict[str, str]
+    storage: Any
+    redis_client: Any | None = None
+    build_config: Any | None = None
+    skill_tag_build_config: Any | None = None
+    runtime_config: Any | None = None
+    skip_lock: bool = False
+
+
 @dataclass(frozen=True)
 class IndexItemRecord:
     item_path: str
@@ -89,8 +104,15 @@ def _fetch_valid_item_records(db, group: str, bucket_name: str, uri_scheme: str 
     from plugins_market.core.viewer_context import ANONYMOUS_VIEWER
     from plugins_market.repositories.market_assets_repository import skill_moderation_list_clause
 
+    agent_group = agent_retrieval_group(group)
     if group == SKILL_GROUP:
         type_filter = MarketAssetDB.plugin_type.in_(list(_SKILL_LIKE_PLUGIN_TYPES))
+        moderation_filter = and_(type_filter, skill_moderation_list_clause(ANONYMOUS_VIEWER))
+    elif agent_group is not None:
+        type_filter = and_(
+            MarketAssetDB.asset_type == agent_group.asset_type,
+            MarketAssetDB.plugin_type == agent_group.asset_type,
+        )
         moderation_filter = and_(type_filter, skill_moderation_list_clause(ANONYMOUS_VIEWER))
     else:
         type_filter = MarketAssetDB.plugin_type.in_(list(_PLUGIN_TYPES))
@@ -99,6 +121,7 @@ def _fetch_valid_item_records(db, group: str, bucket_name: str, uri_scheme: str 
     rows = (
         db.query(
             MarketAssetDB.asset_id,
+            MarketAssetDB.asset_type,
             MarketAssetDB.publisher_id,
             MarketAssetDB.name,
             MarketAssetDB.latest_version,
@@ -107,6 +130,7 @@ def _fetch_valid_item_records(db, group: str, bucket_name: str, uri_scheme: str 
             MarketAssetDB.display_name,
             MarketAssetDB.short_desc,
             MarketAssetDB.detail_desc,
+            MarketAssetDB.tags,
         )
         .filter(
             MarketAssetDB.status != "OFFLINE",
@@ -118,9 +142,13 @@ def _fetch_valid_item_records(db, group: str, bucket_name: str, uri_scheme: str 
     records: List[IndexItemRecord] = []
     for row in rows:
         _row_is_skill_like = row.plugin_type in _SKILL_LIKE_PLUGIN_TYPES
-        root = "skills" if _row_is_skill_like else "plugins"
+        root = agent_group.storage_root if agent_group is not None else ("skills" if _row_is_skill_like else "plugins")
         safe_name = row.name.strip().replace(" ", "-")
-        if _row_is_skill_like:
+        if agent_group is not None:
+            eff = (row.public_latest_version or "").strip()
+            if not eff:
+                continue
+        elif _row_is_skill_like:
             eff = (row.public_latest_version or row.latest_version or "").strip()
             if not eff:
                 continue
@@ -135,10 +163,12 @@ def _fetch_valid_item_records(db, group: str, bucket_name: str, uri_scheme: str 
                 item_path=item_path,
                 metadata={
                     "asset_id": row.asset_id,
+                    "asset_type": row.asset_type,
                     "name": row.name,
                     "display_name": row.display_name,
                     "short_desc": row.short_desc or "",
                     "detail_desc": row.detail_desc or "",
+                    "tags": list(row.tags or []),
                     "plugin_type": row.plugin_type,
                     "version": eff,
                 },
@@ -205,6 +235,9 @@ def _obs_uri_join(base_uri: str, leaf_name: str) -> str:
 
 
 def _tag_prefix_for_group(group: str) -> str:
+    agent_group = agent_retrieval_group(group)
+    if agent_group is not None:
+        return agent_group.tag_prefix
     return _SKILL_TAG_PREFIX if group == SKILL_GROUP else _PLUGIN_TAG_PREFIX
 
 
@@ -351,6 +384,28 @@ def _parse_skill_category_mapping_jsonl(text: str) -> Dict[str, Dict[str, str]]:
     return mapping
 
 
+def _extract_asset_id_from_agent_path(item_path: str, group: str) -> Optional[str]:
+    spec = agent_retrieval_group(group)
+    if spec is None:
+        return None
+    pattern = rf"^(?:obs|s3)://[^/]+/{re.escape(spec.storage_root)}/[^/]+/([^/]+)/"
+    match = re.match(pattern, str(item_path or "").strip())
+    return match.group(1) if match else None
+
+
+def _parse_agent_category_mapping_jsonl(text: str, group: str) -> Dict[str, Dict[str, str]]:
+    mapping: Dict[str, Dict[str, str]] = {}
+    for row in _parse_jsonl_rows(text):
+        asset_id = _extract_asset_id_from_agent_path(row.get("skill_path", ""), group)
+        category_id = str(row.get("root_tag_id") or "").strip()
+        if asset_id and category_id:
+            mapping[asset_id] = {
+                "category_id": category_id,
+                "category_name": str(row.get("root_tag_name") or "").strip(),
+            }
+    return mapping
+
+
 def _fetch_uncategorized_skill_paths(db, item_paths: List[str]) -> set[str]:
     from plugins_market.models.market_assets import MarketAssetDB
     from sqlalchemy import or_
@@ -371,6 +426,38 @@ def _fetch_uncategorized_skill_paths(db, item_paths: List[str]) -> set[str]:
     )
     uncategorized_ids = {str(row.asset_id) for row in rows}
     return {path for path in item_paths if (_extract_asset_id_from_obs_skill_path(path) in uncategorized_ids)}
+
+
+def _fetch_uncategorized_agent_paths(db, group: str, item_paths: List[str]) -> set[str]:
+    from sqlalchemy import or_
+
+    from plugins_market.models.market_assets import MarketAssetDB
+
+    asset_ids = {
+        asset_id
+        for asset_id in (_extract_asset_id_from_agent_path(path, group) for path in item_paths)
+        if asset_id
+    }
+    if not asset_ids:
+        return set()
+    rows = (
+        db.query(MarketAssetDB.asset_id)
+        .filter(
+            MarketAssetDB.asset_id.in_(list(asset_ids)),
+            MarketAssetDB.asset_type == group,
+            MarketAssetDB.plugin_type == group,
+            MarketAssetDB.status != "OFFLINE",
+            MarketAssetDB.public_latest_version.isnot(None),
+            or_(MarketAssetDB.category_id.is_(None), MarketAssetDB.category_name.is_(None)),
+        )
+        .all()
+    )
+    uncategorized_ids = {str(row.asset_id) for row in rows}
+    return {
+        path
+        for path in item_paths
+        if _extract_asset_id_from_agent_path(path, group) in uncategorized_ids
+    }
 
 
 def _select_skill_paths_for_incremental_classification(
@@ -447,6 +534,74 @@ def _refresh_skill_categories_from_mapping(db, item_paths: List[str], mapping: D
         logger.warning("skill category refresh skipped due to DB error: %s", exc)
 
 
+def _refresh_agent_categories_from_mapping(
+    db,
+    group: str,
+    item_paths: List[str],
+    mapping: Dict[str, Dict[str, str]],
+) -> None:
+    from plugins_market.models.market_assets import MarketAssetDB
+
+    candidate_ids = {
+        asset_id
+        for asset_id in (_extract_asset_id_from_agent_path(path, group) for path in item_paths)
+        if asset_id
+    }
+    if not candidate_ids:
+        return
+    eligible_rows = (
+        db.query(MarketAssetDB.asset_id)
+        .filter(
+            MarketAssetDB.asset_id.in_(list(candidate_ids)),
+            MarketAssetDB.asset_type == group,
+            MarketAssetDB.plugin_type == group,
+            MarketAssetDB.status != "OFFLINE",
+        )
+        .all()
+    )
+    eligible_ids = {str(row.asset_id) for row in eligible_rows}
+    mapped_ids = eligible_ids & set(mapping)
+    try:
+        stale_ids = eligible_ids - mapped_ids
+        if stale_ids:
+            (
+                db.query(MarketAssetDB)
+                .filter(
+                    MarketAssetDB.asset_id.in_(list(stale_ids)),
+                    MarketAssetDB.asset_type == group,
+                    MarketAssetDB.plugin_type == group,
+                    MarketAssetDB.status != "OFFLINE",
+                )
+                .update(
+                    {MarketAssetDB.category_id: None, MarketAssetDB.category_name: None},
+                    synchronize_session=False,
+                )
+            )
+        if mapped_ids:
+            db.bulk_update_mappings(
+                MarketAssetDB,
+                [
+                    {
+                        "asset_id": asset_id,
+                        "category_id": mapping[asset_id]["category_id"],
+                        "category_name": mapping[asset_id]["category_name"] or None,
+                    }
+                    for asset_id in mapped_ids
+                ],
+            )
+        db.commit()
+        logger.info(
+            "agent category refresh done: group=%s candidates=%d mapped=%d stale_cleared=%d",
+            group,
+            len(eligible_ids),
+            len(mapped_ids),
+            len(stale_ids),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("agent category refresh skipped group=%s due to DB error: %s", group, exc)
+
+
 def _build_skill_tag_runtime_config(tag_config, runtime_config):
     if tag_config is not None and getattr(tag_config, "llm_openai_client", None) is not None:
         return IndexBuildRuntimeConfig(
@@ -477,6 +632,7 @@ def _run_skill_tag_refresh(
     skill_tag_build_config,
     runtime_config,
     uri_scheme: str = "obs",
+    item_metadata_by_path: Dict[str, Dict[str, object]] | None = None,
 ) -> None:
     try:
         from indexing.workflows.index_builder import IndexBuilder  # type: ignore[import]
@@ -491,7 +647,12 @@ def _run_skill_tag_refresh(
         bucket_name,
         uri_scheme=uri_scheme,
     )
-    uncategorized_paths = _fetch_uncategorized_skill_paths(db, current_item_paths) if group == SKILL_GROUP else set()
+    if group == SKILL_GROUP:
+        uncategorized_paths = _fetch_uncategorized_skill_paths(db, current_item_paths)
+    elif agent_retrieval_group(group) is not None:
+        uncategorized_paths = _fetch_uncategorized_agent_paths(db, group, current_item_paths)
+    else:
+        uncategorized_paths = set()
     classify_paths = _select_skill_paths_for_incremental_classification(
         current_item_paths=current_item_paths,
         previous_item_paths=previous_item_paths,
@@ -511,12 +672,18 @@ def _run_skill_tag_refresh(
     t_tags = time.monotonic()
     logger.debug("skill category: starting build_skill_tags for %d items", len(classify_paths))
     tag_config = skill_tag_build_config or build_config
-    tag_runtime_config = _build_skill_tag_runtime_config(tag_config, runtime_config)
+    agent_tag_config = (
+        _build_config_with_item_metadata(tag_config, item_metadata_by_path or {})
+        if agent_retrieval_group(group) is not None and tag_config is not None
+        else None
+    )
+    tag_runtime_config = None if agent_tag_config is not None else _build_skill_tag_runtime_config(tag_config, runtime_config)
     try:
         IndexBuilder.build_skill_tags(
             classify_paths,
             output_tag_uri,
-            item_type=group,
+            item_type=scanner_type_for_group(group),
+            config=agent_tag_config,
             runtime_config=tag_runtime_config,
             require_llm=True,
         )
@@ -575,6 +742,22 @@ def _run_skill_tag_refresh(
                 len(classify_paths),
                 tag_mapping_uri,
             )
+    elif agent_retrieval_group(group) is not None:
+        agent_category_mapping = _parse_agent_category_mapping_jsonl(delta_text, group)
+        if agent_category_mapping:
+            _refresh_agent_categories_from_mapping(db, group, classify_paths, agent_category_mapping)
+            logger.info(
+                "agent category: refreshed group=%s categories for %d items",
+                group,
+                len(agent_category_mapping),
+            )
+        else:
+            logger.error(
+                "agent 分类失败：group=%s 本次有 %d 个待分类资产但 LLM 未产出任何映射，mapping=%s",
+                group,
+                len(classify_paths),
+                tag_mapping_uri,
+            )
 
 
 def rebuild_one_group(
@@ -630,7 +813,7 @@ def rebuild_one_group(
             new_path = IndexBuilder.build(
                 build_inputs,
                 output_dir,
-                item_type=group,
+                item_type=scanner_type_for_group(group),
                 config=effective_build_config,
                 runtime_config=effective_runtime_config,
             )
@@ -696,6 +879,7 @@ def rebuild_one_group(
                 skill_tag_build_config=skill_tag_build_config,
                 runtime_config=runtime_config,
                 uri_scheme=uri_scheme,
+                item_metadata_by_path=item_metadata_by_path,
             )
         except Exception as exc:
             # Category build/refresh failure should not break index rebuild availability.
@@ -717,6 +901,7 @@ def rebuild_one_group(
 
 _REBUILD_LOCK_KEY = "retrieval:rebuild:lock"
 _SKILL_TAG_LOCK_KEY = "retrieval:skill-tag:lock"
+_AGENT_TAG_LOCK_KEY = "retrieval:agent-tag:lock"
 _REBUILD_LOCK_TTL_SECONDS = 2400  # 40-minute upper bound for a full rebuild run
 
 
@@ -733,6 +918,7 @@ def rebuild_all(
     max_index_versions: int = _MAX_INDEX_VERSIONS,
     skip_lock: bool = False,
     run_skill_tag: bool = True,
+    agent_prefixes: Dict[str, str] | None = None,
 ) -> None:
     """Rebuild both index groups. Called from thread-pool by the scheduled job.
 
@@ -758,7 +944,9 @@ def rebuild_all(
 
     try:
         uri_scheme = _storage_uri_scheme(storage)
-        for group, prefix in ((SKILL_GROUP, skill_prefix), (PLUGIN_GROUP, plugin_prefix)):
+        groups = [(SKILL_GROUP, skill_prefix), (PLUGIN_GROUP, plugin_prefix)]
+        groups.extend((agent_prefixes or {}).items())
+        for group, prefix in groups:
             db = db_factory()
             try:
                 rebuild_one_group(
@@ -852,3 +1040,69 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
                 redis_client.delete(_SKILL_TAG_LOCK_KEY)
             except Exception as exc:
                 logger.warning("refresh_skill_tags: failed to release lock: %s", exc)
+
+
+def refresh_agent_tags(options: AgentTagRefreshOptions) -> None:
+    """Refresh classification for each Agent asset type without touching Skill state."""
+    lock_acquired = False
+    if options.redis_client is not None and not options.skip_lock:
+        lock_acquired = bool(
+            options.redis_client.set(
+                _AGENT_TAG_LOCK_KEY,
+                "1",
+                nx=True,
+                ex=_REBUILD_LOCK_TTL_SECONDS,
+            )
+        )
+        if not lock_acquired:
+            logger.info("refresh_agent_tags: another instance holds the lock, skipping this run")
+            return
+
+    try:
+        bucket_name = options.storage.config.bucket_name
+        uri_scheme = _storage_uri_scheme(options.storage)
+        for group, group_prefix in options.agent_prefixes.items():
+            db = options.db_factory()
+            try:
+                records = _fetch_valid_item_records(db, group, bucket_name, uri_scheme=uri_scheme)
+                if not records:
+                    logger.info("refresh_agent_tags: no items for group=%s, skip", group)
+                    continue
+                dirs = list_index_dirs(options.storage, group_prefix)
+                if not dirs:
+                    logger.warning(
+                        "refresh_agent_tags: no index found for group=%s prefix=%s, skip",
+                        group,
+                        group_prefix,
+                    )
+                    continue
+                latest_dir_name = dirs[0].rstrip("/").split("/")[-1]
+                item_paths = [record.item_path for record in records]
+                _run_skill_tag_refresh(
+                    group=group,
+                    db=db,
+                    storage=options.storage,
+                    group_prefix=group_prefix,
+                    output_tag_uri=_build_tag_output_uri(
+                        bucket_name,
+                        group,
+                        dir_name=latest_dir_name,
+                        uri_scheme=uri_scheme,
+                    ),
+                    current_item_paths=item_paths,
+                    build_config=options.build_config,
+                    skill_tag_build_config=options.skill_tag_build_config,
+                    runtime_config=options.runtime_config,
+                    uri_scheme=uri_scheme,
+                    item_metadata_by_path={record.item_path: record.metadata for record in records},
+                )
+            except Exception as exc:
+                logger.error("refresh_agent_tags: group=%s failed: %s", group, exc, exc_info=True)
+            finally:
+                db.close()
+    finally:
+        if options.redis_client is not None and lock_acquired:
+            try:
+                options.redis_client.delete(_AGENT_TAG_LOCK_KEY)
+            except Exception as exc:
+                logger.warning("refresh_agent_tags: failed to release lock: %s", exc)

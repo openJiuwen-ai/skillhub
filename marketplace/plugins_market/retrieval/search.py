@@ -9,22 +9,29 @@ Returns a ranked item_id list, or None when the retrieval system is unavailable
 from typing import List, Optional
 
 from plugins_market.core.logging import get_logger
-from plugins_market.core.moderation import is_skill_like_plugin_type
+from plugins_market.core.moderation import AGENT_ASSET_PLUGIN_TYPES, is_skill_like_plugin_type
 
 logger = get_logger(__name__)
 
 MAX_TOP_K = 500
 
 
-def plugin_type_to_group(plugin_type: str) -> str:
-    """Route plugin_type to index group: skill-like (skill / swarmskill) → skill, all others → plugin.
+def plugin_type_to_group(plugin_type: str, *, asset_type: str | None = None) -> str:
+    """Route a list query to its independent retrieval group.
 
-    支持单值或逗号分隔多值：任一片段命中 skill-like 即归入 SKILL_GROUP（与列表查询语义对齐）。
+    Agent asset_type takes precedence; Skill/SwarmSkill keep sharing the historical
+    skill group, while historical plugin types keep sharing the plugin group.
     """
+    normalized_asset_type = (asset_type or "").strip().lower()
+    if normalized_asset_type in AGENT_ASSET_PLUGIN_TYPES:
+        return normalized_asset_type
+
     pt = (plugin_type or "").strip()
     if not pt:
         return "plugin"
     parts = [p.strip() for p in pt.split(",") if p.strip()]
+    if len(parts) == 1 and parts[0] in AGENT_ASSET_PLUGIN_TYPES:
+        return parts[0]
     if any(is_skill_like_plugin_type(p) for p in parts):
         return "skill"
     return "plugin"
@@ -37,9 +44,10 @@ def retrieval_search(
     page: int,
     page_size: int,
     method: str = "embedding",
+    asset_type: str | None = None,
 ) -> Optional[List[str]]:
     """Return ranked item_id list or None (triggers LIKE fallback in caller)."""
-    group = plugin_type_to_group(plugin_type)
+    group = plugin_type_to_group(plugin_type, asset_type=asset_type)
     if not index_manager.is_ready(group):
         logger.info("retrieval_search: index not ready for group=%s, fallback", group)
         return None

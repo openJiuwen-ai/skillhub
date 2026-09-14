@@ -197,13 +197,23 @@ def _ensure_agent_asset_publish_allowed(
 
 
 def _should_use_retrieval_search(plugin_type: str | None) -> bool:
-    """Agent assets deliberately use SQL keyword matching, never semantic retrieval."""
+    """Use one index group; mixed Agent-type queries keep the SQL fallback."""
     requested = {
         item.strip().lower()
         for item in (plugin_type or "").split(",")
         if item.strip()
     }
-    return bool(requested) and requested.isdisjoint(AGENT_ASSET_PLUGIN_TYPES)
+    return bool(requested) and (
+        requested.isdisjoint(AGENT_ASSET_PLUGIN_TYPES) or len(requested) == 1
+    )
+
+
+def _normalize_agent_list_query(query: PluginListQuery) -> PluginListQuery:
+    """Use Agent asset_type as the canonical list/retrieval discriminator."""
+    asset_type = (query.asset_type or "").strip().lower()
+    if asset_type in AGENT_ASSET_PLUGIN_TYPES and not (query.plugin_type or "").strip():
+        return query.model_copy(update={"asset_type": asset_type, "plugin_type": asset_type})
+    return query
 
 
 def _moderation_for_publish(*, user_id: str, plugin_type: str | None) -> tuple[str | None, str | None]:
@@ -1573,12 +1583,14 @@ def list_plugins_service(
     viewer: ViewerContext,
     use_retrieval_search: bool = True,
 ) -> PluginListResponse:
+    query = _normalize_agent_list_query(query)
     logger.info(
-        "List plugins request: page=%s page_size=%s asset_id=%s "
+        "List plugins request: page=%s page_size=%s asset_id=%s asset_type=%s "
         "publisher_id=%s category_id=%s plugin_type=%s moderation_status=%s order_by=%s desc=%s",
         query.page,
         query.page_size,
         query.asset_id,
+        query.asset_type,
         query.publisher_id,
         query.category_id,
         query.plugin_type,
@@ -1693,6 +1705,7 @@ def list_plugins_service(
             query.page,
             query.page_size,
             method=settings.retrieval_search_method,
+            asset_type=query.asset_type,
         )
         # 守 retrieval_search 契约：None=检索不可用/出错 -> 回退 DB LIKE（下方 repo.list_plugins）；
         # []=检索确认无命中 -> 用空结果（下方 if not ordered 返回空页，不退化为子串 LIKE）。
@@ -1708,6 +1721,9 @@ def list_plugins_service(
             pt_list = [p.strip() for p in plugin_type.split(",") if p.strip()]
             if pt_list:
                 ordered = [row for row in ordered if (row[0].plugin_type or "").strip().lower() in pt_list]
+            asset_type = (query.asset_type or "").strip().lower()
+            if asset_type:
+                ordered = [row for row in ordered if (row[0].asset_type or "").strip().lower() == asset_type]
             ms_list = (query.moderation_status or "").strip().upper() if query.moderation_status else ""
             if ms_list in (MODERATION_PENDING, MODERATION_APPROVED, MODERATION_REJECTED):
                 ids_for_pending = [row[0].asset_id for row in ordered]

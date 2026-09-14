@@ -22,6 +22,8 @@ export interface MarketplacePluginListRequest {
   publisher_id?: string
   /** 与后端 `asset_id` 一致 */
   asset_id?: string
+  /** 资产主类型；三类 Agent 资产与 plugin_type 同值，用于检索与存储分组 */
+  asset_type?: string
   /** 与后端 Query 一致：`plugin_type`（如 tools / mcp-stdio / restful-api / skill） */
   plugin_type?: string
   /** 与后端一致：PENDING | APPROVED | REJECTED，常配合 plugin_type=skill */
@@ -337,6 +339,7 @@ export async function getPlugins(
       search_keyword: request.search_keyword || undefined,
       publisher_id: request.publisher_id || undefined,
       asset_id: request.asset_id || undefined,
+      asset_type: request.asset_type || undefined,
       plugin_type: request.plugin_type || undefined,
       moderation_status: request.moderation_status || undefined,
       plugin_type_exclude: request.plugin_type_exclude || undefined,

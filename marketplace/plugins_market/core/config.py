@@ -221,6 +221,27 @@ class Settings(BaseSettings):
         default="plugins-index",
         validation_alias=AliasChoices("MARKET_RETRIEVAL_PLUGIN_INDEX_OBS_PREFIX", "RETRIEVAL_PLUGIN_INDEX_OBS_PREFIX"),
     )
+    retrieval_agent_plugin_index_obs_prefix: str = Field(
+        default="agent-plugins-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_PLUGIN_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_PLUGIN_INDEX_OBS_PREFIX",
+        ),
+    )
+    retrieval_agent_template_index_obs_prefix: str = Field(
+        default="agent-templates-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_TEMPLATE_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_TEMPLATE_INDEX_OBS_PREFIX",
+        ),
+    )
+    retrieval_agent_mcp_index_obs_prefix: str = Field(
+        default="agent-mcps-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_MCP_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_MCP_INDEX_OBS_PREFIX",
+        ),
+    )
 
     # 检索模块：OBS 上保留的索引版本数（默认 168 = 每小时构建一次保留最近一周）
     retrieval_index_max_versions: int = Field(
@@ -260,6 +281,27 @@ class Settings(BaseSettings):
     retrieval_plugin_index_path: str = Field(
         default="",
         validation_alias=AliasChoices("MARKET_RETRIEVAL_PLUGIN_INDEX_PATH", "RETRIEVAL_PLUGIN_INDEX_PATH"),
+    )
+    retrieval_agent_plugin_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_PLUGIN_INDEX_PATH",
+            "RETRIEVAL_AGENT_PLUGIN_INDEX_PATH",
+        ),
+    )
+    retrieval_agent_template_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_TEMPLATE_INDEX_PATH",
+            "RETRIEVAL_AGENT_TEMPLATE_INDEX_PATH",
+        ),
+    )
+    retrieval_agent_mcp_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_MCP_INDEX_PATH",
+            "RETRIEVAL_AGENT_MCP_INDEX_PATH",
+        ),
     )
 
     # 检索模块：模型 / API 配置（非密钥字段，密钥在 main.py startup 中经 SecurityUtils 解密后注入）

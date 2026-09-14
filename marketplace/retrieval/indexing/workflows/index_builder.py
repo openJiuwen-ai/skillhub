@@ -74,7 +74,9 @@ from .artifacts import (
 )
 
 
-_OBS_PUBLISHER_RE = re.compile(r'^(?:obs|s3)://[^/]+/(?:skills|plugins)/([^/]+)/')
+_OBS_PUBLISHER_RE = re.compile(
+    r'^(?:obs|s3)://[^/]+/(?:skills|plugins|agent-plugins|agent-templates|agent-mcps)/([^/]+)/'
+)
 _SKILLS_TAG_MAPPING_FILENAME = "skills_tag_mapping.jsonl"
 
 

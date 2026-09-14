@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .agent import AgentAssetScanner
 from .base import BaseScanner, ScannedItem
 from .plugin import PluginScanner
 from .skill import SkillScanner
@@ -14,13 +15,15 @@ ScannerType = type[BaseScanner]
 
 def normalize_item_type(item_type: str | None) -> str:
     normalized = str(item_type or "skill").strip().lower()
-    if normalized not in {"skill", "plugin"}:
-        raise ValueError("item_type must be one of: skill, plugin")
+    if normalized not in {"skill", "plugin", "agent"}:
+        raise ValueError("item_type must be one of: skill, plugin, agent")
     return normalized
 
 
 def get_scanner_class(item_type: str | None) -> ScannerType:
     normalized = normalize_item_type(item_type)
+    if normalized == "agent":
+        return AgentAssetScanner
     return PluginScanner if normalized == "plugin" else SkillScanner
 
 
@@ -36,6 +39,7 @@ def create_scanner(
 
 __all__ = [
     "BaseScanner",
+    "AgentAssetScanner",
     "PluginScanner",
     "ScannedItem",
     "SkillScanner",

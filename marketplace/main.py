@@ -140,18 +140,25 @@ async def lifespan(app: FastAPI):
         _git_orphan_db.close()
     from plugins_market.core.s3_storage_client import get_storage_client
     from plugins_market.retrieval.daily_rebuild import (
+        AgentTagRefreshOptions,
         SkillTagRefreshOptions,
         _storage_uri_scheme,
         list_index_dirs,
         rebuild_all,
+        refresh_agent_tags,
         refresh_skill_tags,
     )
     from plugins_market.retrieval.index_manager import get_index_manager
+    from plugins_market.retrieval.groups import AGENT_RETRIEVAL_GROUPS
     from plugins_market.retrieval.reload_consumer import run_reload_consumer
 
     index_manager = get_index_manager()
     skill_prefix = settings.retrieval_skill_index_obs_prefix
     plugin_prefix = settings.retrieval_plugin_index_obs_prefix
+    agent_prefixes = {
+        spec.asset_type: getattr(settings, f"retrieval_{spec.setting_suffix}_index_obs_prefix")
+        for spec in AGENT_RETRIEVAL_GROUPS
+    }
 
     from common.security.security_utils import SecurityUtils
     from openai import OpenAI
@@ -290,12 +297,12 @@ async def lifespan(app: FastAPI):
 
     uri_scheme = _storage_uri_scheme(storage)
 
-    async def _warm_start_one_group(group: str, prefix: str) -> None:
+    async def _warm_start_one_group(group: str, prefix: str, direct_path: str = "") -> None:
         """后台加载单个分组的检索索引。阻塞的下载/加载放线程池，避免卡住事件循环；
         wait_for 给每个分组一个时间上限，超时只跳过该组、不影响服务与其它组。"""
         index_load_timeout = 600  # 每个分组最多等 10 分钟
         try:
-            direct_path = getattr(settings, f"retrieval_{group}_index_path", "").strip()
+            direct_path = direct_path.strip()
             if direct_path:
                 target = direct_path
             else:
@@ -324,9 +331,21 @@ async def lifespan(app: FastAPI):
             logger.warning("retrieval warm-start unexpected error group=%s: %s", group, exc, exc_info=True)
 
     async def _warm_start_indexes() -> None:
-        # 两个分组串行加载（共用下载/解析资源，串行更稳）；整体在后台跑，不阻塞服务启动。
-        for group, prefix in (("skill", skill_prefix), ("plugin", plugin_prefix)):
-            await _warm_start_one_group(group, prefix)
+        # 各分组串行加载（共用下载/解析资源，串行更稳）；整体在后台跑，不阻塞服务启动。
+        groups = [
+            ("skill", skill_prefix, settings.retrieval_skill_index_path),
+            ("plugin", plugin_prefix, settings.retrieval_plugin_index_path),
+        ]
+        groups.extend(
+            (
+                spec.asset_type,
+                agent_prefixes[spec.asset_type],
+                getattr(settings, f"retrieval_{spec.setting_suffix}_index_path"),
+            )
+            for spec in AGENT_RETRIEVAL_GROUPS
+        )
+        for group, prefix, direct_path in groups:
+            await _warm_start_one_group(group, prefix, direct_path)
         logger.info("retrieval warm-start: background warm-up finished")
 
     # 不阻塞 yield：索引就绪前检索接口自动降级（search.py 的 is_ready 守卫），服务立即可用。
@@ -354,6 +373,7 @@ async def lifespan(app: FastAPI):
             run_skill_tag=False,
             max_index_versions=settings.retrieval_index_max_versions,
             skip_lock=skip_lock,
+            agent_prefixes=agent_prefixes,
         )
         elapsed = time.monotonic() - started
         logger.info("retrieval index rebuild run end [skip_lock=%s elapsed=%.1fs]", skip_lock, elapsed)
@@ -365,6 +385,17 @@ async def lifespan(app: FastAPI):
             SkillTagRefreshOptions(
                 db_factory=SessionLocal,
                 skill_prefix=skill_prefix,
+                storage=storage,
+                redis_client=redis_client,
+                build_config=_index_build_config,
+                skill_tag_build_config=_skill_tag_build_config,
+                skip_lock=skip_lock,
+            )
+        )
+        refresh_agent_tags(
+            AgentTagRefreshOptions(
+                db_factory=SessionLocal,
+                agent_prefixes=agent_prefixes,
                 storage=storage,
                 redis_client=redis_client,
                 build_config=_index_build_config,

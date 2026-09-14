@@ -3,7 +3,7 @@
 import { useMemo } from 'react'
 import { usePluginListQuery, type MarketplacePluginItem, type MarketplacePluginListRequest } from '@/api'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
-import { isModeratedMarketAssetType } from '@/utils/pluginType'
+import { isAgentAssetPluginType, isModeratedMarketAssetType } from '@/utils/pluginType'
 
 export interface MarketPlugin {
   assetId: string
@@ -124,6 +124,7 @@ export function usePluginMarketConfigs(params: UsePluginMarketConfigsParams): Us
     page: params.page,
     page_size: params.pageSize,
     search_keyword: params.searchKeyword || undefined,
+    asset_type: isAgentAssetPluginType(params.pluginType) ? params.pluginType : undefined,
     plugin_type: params.pluginType || undefined,
     plugin_type_exclude: params.pluginTypeExclude || undefined,
     category_id: params.categoryId || undefined,
