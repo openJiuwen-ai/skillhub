@@ -335,6 +335,55 @@ def test_agent_classification_uses_agent_scanner_and_market_metadata() -> None:
     )
 
 
+def test_agent_classification_forces_tree_method_when_index_method_lacks_it() -> None:
+    """回归：tag_config 的 method 是索引构建策略（如 embedding_bm25，不含 TREE）时，
+    Agent 分组分类也必须给 build_skill_tags 传带 TREE 位的 config，否则
+    can_build_tree_with_llm 校验失败、分类被静默跳过（resolve_build_config
+    不允许 config 与 runtime_config 同传，不能靠 runtime 补 TREE）。"""
+    path = "obs://market-bucket/agent-plugins/publisher-1/asset-1/1.0.0/file.zip"
+    metadata = {path: {"asset_id": "asset-1", "asset_type": "agent-plugin"}}
+    storage = SimpleNamespace(config=SimpleNamespace(bucket_name="market-bucket"))
+    mapping_text = json.dumps(
+        {"skill_path": path, "root_tag_id": "automation", "root_tag_name": "Automation"}
+    )
+    tag_config = BuildConfig(
+        method=BuildMethod.BM25 | BuildMethod.EMBEDDING,
+        llm_model="test-llm",
+        llm_openai_client=object(),
+    )
+
+    with (
+        patch(
+            "plugins_market.retrieval.daily_rebuild._load_latest_index_manifest_item_paths",
+            return_value=[],
+        ),
+        patch("plugins_market.retrieval.daily_rebuild._fetch_uncategorized_agent_paths", return_value=set()),
+        patch("plugins_market.retrieval.daily_rebuild._read_obs_text", return_value=mapping_text),
+        patch("plugins_market.retrieval.daily_rebuild._write_obs_text"),
+        patch("plugins_market.retrieval.daily_rebuild._load_previous_tag_snapshot_rows", return_value=[]),
+        patch("plugins_market.retrieval.daily_rebuild._refresh_agent_categories_from_mapping"),
+        patch("indexing.workflows.index_builder.IndexBuilder.build_skill_tags") as build_tags,
+    ):
+        _run_skill_tag_refresh(
+            group="agent-plugin",
+            db=object(),
+            storage=storage,
+            group_prefix="agent-plugins-index",
+            output_tag_uri="obs://market-bucket/agent-plugins-tag/20260911010101",
+            current_item_paths=[path],
+            build_config=None,
+            skill_tag_build_config=tag_config,
+            runtime_config=None,
+            item_metadata_by_path=metadata,
+        )
+
+    passed = build_tags.call_args.kwargs
+    assert passed["config"].method & BuildMethod.TREE
+    assert passed["config"].llm_model == "test-llm"
+    assert passed["config"].item_metadata_by_path == metadata
+    assert passed["runtime_config"] is None
+
+
 def test_agent_category_mapping_only_accepts_its_own_storage_root() -> None:
     text = "\n".join(
         [

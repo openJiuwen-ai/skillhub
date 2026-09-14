@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from botocore.exceptions import ClientError
-from retrieval.indexing.workflows.artifacts import IndexBuildRuntimeConfig
+from retrieval.indexing.workflows.artifacts import BuildMethod, IndexBuildRuntimeConfig
 from plugins_market.core.logging import get_logger
 from plugins_market.retrieval.groups import agent_retrieval_group, scanner_type_for_group
 
@@ -672,11 +672,17 @@ def _run_skill_tag_refresh(
     t_tags = time.monotonic()
     logger.debug("skill category: starting build_skill_tags for %d items", len(classify_paths))
     tag_config = skill_tag_build_config or build_config
-    agent_tag_config = (
-        _build_config_with_item_metadata(tag_config, item_metadata_by_path or {})
-        if agent_retrieval_group(group) is not None and tag_config is not None
-        else None
-    )
+    if agent_retrieval_group(group) is not None and tag_config is not None:
+        # Agent 分组：分类走 tree 构建，LLM 取自 tag_config 本身；
+        # resolve_build_config 不允许 config 与 runtime_config 同传，
+        # 因此必须显式带上 TREE 位（tag_config 的 method 是索引构建策略，默认不含 TREE），
+        # 否则 can_build_tree_with_llm 校验失败、分类被静默跳过。
+        agent_tag_config = _build_config_with_item_metadata(
+            replace(tag_config, method=BuildMethod.TREE),
+            item_metadata_by_path or {},
+        )
+    else:
+        agent_tag_config = None
     tag_runtime_config = None if agent_tag_config is not None else _build_skill_tag_runtime_config(tag_config, runtime_config)
     try:
         IndexBuilder.build_skill_tags(
