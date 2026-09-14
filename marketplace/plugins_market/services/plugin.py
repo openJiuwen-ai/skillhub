@@ -977,6 +977,16 @@ def publish(
             message=upload_result.get("error", "插件包上传失败"),
         )
 
+    if existing_version:
+        _invalidate_force_overwrite_raw_artifact(
+            storage,
+            publisher_id=user_id,
+            asset_id=asset_id,
+            version=version,
+            name=name,
+            plugin_type=plugin_type,
+        )
+
     if icon_bytes:
         icon_key = f"{version_dir}icon.png"
         r = storage.upload_bytes(icon_bytes, icon_key)
@@ -2209,6 +2219,58 @@ def _extract_size_and_checksum_from_head(head: dict[str, Any]) -> tuple[int | No
     return size, checksum_sha256
 
 
+def _source_sha256_from_head(head: dict[str, Any]) -> str:
+    metadata = head.get("metadata") or {}
+    raw = metadata.get("source_sha256") or metadata.get("source-sha256") or ""
+    return str(raw).strip().lower()
+
+
+def _can_reuse_cached_raw_artifact(raw_head: dict[str, Any], origin_sha256: str) -> bool:
+    """Reuse raw.zip only when it still matches the current original package."""
+    if not raw_head.get("success"):
+        return False
+    raw_size, raw_checksum = _extract_size_and_checksum_from_head(raw_head)
+    if raw_size is None or not raw_checksum:
+        return False
+    stored_source = _source_sha256_from_head(raw_head)
+    origin = (origin_sha256 or "").strip().lower()
+    has_stored = bool(stored_source)
+    has_origin = bool(origin)
+    if has_stored and has_origin:
+        return stored_source == origin
+    # 源包 sha 已知但 raw.zip 未标记：强制覆盖后的旧缓存，重建一次并打标。
+    if has_origin:
+        return False
+    return not has_stored
+
+
+def _invalidate_force_overwrite_raw_artifact(
+    storage: S3StorageClient,
+    *,
+    publisher_id: str,
+    asset_id: str,
+    version: str,
+    name: str,
+    plugin_type: str | None,
+) -> None:
+    """强制覆盖同版本后删除 raw.zip，避免下载仍返回上一包内容。"""
+    raw_key = _build_raw_artifact_key(
+        publisher_id=publisher_id,
+        asset_id=asset_id,
+        version=version,
+        name=name,
+        plugin_type=plugin_type,
+    )
+    result = storage.delete_object(raw_key)
+    if result.get("success"):
+        return
+    logger.warning(
+        "force overwrite raw.zip delete failed: key=%s error=%s",
+        raw_key,
+        result.get("error"),
+    )
+
+
 def _download_object_to_local_file(storage: S3StorageClient, key: str, target_file: str) -> None:
     body = None
     try:
@@ -2405,11 +2467,12 @@ def _ensure_non_cli_raw_artifact(
     version: str,
     plugin_type: str,
 ) -> tuple[str, int, str]:
+    origin_head = storage.head_object(old_key)
+    origin_sha256 = _extract_size_and_checksum_from_head(origin_head)[1]
     raw_head = storage.head_object(raw_key)
-    if raw_head.get("success"):
+    if _can_reuse_cached_raw_artifact(raw_head, origin_sha256):
         raw_size, raw_checksum = _extract_size_and_checksum_from_head(raw_head)
-        if raw_size is not None and raw_checksum:
-            return raw_key, int(raw_size), raw_checksum
+        return raw_key, int(raw_size or 0), raw_checksum
 
     try:
         with tempfile.TemporaryDirectory(prefix="market_raw_zip_build_") as tmp_dir:
@@ -2430,12 +2493,15 @@ def _ensure_non_cli_raw_artifact(
                     version=version,
                 )
             checksum, size = _compute_file_sha256_and_size(raw_zip_file)
+            raw_metadata = {"sha256": checksum, "size": str(size)}
+            if origin_sha256:
+                raw_metadata["source_sha256"] = origin_sha256
             with open(raw_zip_file, "rb") as rf:
                 storage.s3_client.put_object(
                     Bucket=storage.config.bucket_name,
                     Key=raw_key,
                     Body=rf,
-                    Metadata={"sha256": checksum, "size": str(size)},
+                    Metadata=raw_metadata,
                 )
             return raw_key, int(size), checksum
     except PublishError:

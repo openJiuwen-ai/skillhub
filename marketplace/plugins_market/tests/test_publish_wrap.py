@@ -165,6 +165,27 @@ def _write_wrapped_skill(entry: Path, *, name: str = "demo-skill") -> None:
     )
 
 
+def test_prepare_publish_keeps_skill_permissions_on_version_override(tmp_path: Path) -> None:
+    entry = tmp_path / "demo-skill-pkg"
+    _write_wrapped_skill(entry)
+    permissions = {"tools": {"bash": "ask"}, "version": 2}
+    (entry / "demo-skill" / "skill_permissions.json").write_text(
+        json.dumps(permissions, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    raw_zip = tmp_path / "skill.zip"
+    _zip_dir(entry, raw_zip)
+
+    wrapped = prepare_publish_zip_content(
+        raw_zip.read_bytes(),
+        filename="demo-skill.zip",
+        overrides=PublishMetadataOverrides(version="1.0.1"),
+        default_author="tester",
+    )
+
+    assert json.loads(_zip_text(wrapped, "/skill_permissions.json")) == permissions
+
+
 def test_prepare_publish_applies_version_override_on_wrapped_skill(tmp_path: Path) -> None:
     entry = tmp_path / "demo-skill-pkg"
     _write_wrapped_skill(entry)
