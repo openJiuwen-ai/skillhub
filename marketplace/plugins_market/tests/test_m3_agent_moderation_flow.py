@@ -18,9 +18,12 @@ from plugins_market.core.viewer_context import ViewerContext
 from plugins_market.models.base import Base
 from plugins_market.models.market_assets import MarketAssetDB, MarketAssetVersionDB
 from plugins_market.repositories.market_assets_repository import MarketAssetRepository
+from plugins_market.retrieval.search import plugin_type_to_group
 from plugins_market.schemas.plugin import PluginListQuery
 from plugins_market.services.plugin import (
+    _normalize_agent_list_query,
     _should_use_retrieval_search,
+    list_plugins_service,
     moderate_skill_asset_service,
 )
 
@@ -97,9 +100,45 @@ def _version(
     )
 
 
-def test_agent_tab_skips_semantic_retrieval():
-    assert _should_use_retrieval_search("agent-plugin") is False
+@pytest.mark.parametrize("agent_type", ["agent-plugin", "agent-template", "agent-mcp"])
+def test_agent_tab_uses_its_own_semantic_retrieval_group(agent_type: str):
+    assert _should_use_retrieval_search(agent_type) is True
+    assert plugin_type_to_group(agent_type, asset_type=agent_type) == agent_type
+
+
+def test_skill_like_retrieval_group_is_unchanged():
     assert _should_use_retrieval_search("skill,swarmskill") is True
+    assert plugin_type_to_group("skill") == "skill"
+    assert plugin_type_to_group("swarmskill") == "skill"
+
+
+@pytest.mark.parametrize("agent_type", ["agent-plugin", "agent-template", "agent-mcp"])
+def test_agent_asset_type_drives_list_runtime_filter(agent_type: str):
+    query = _normalize_agent_list_query(PluginListQuery(asset_type=agent_type))
+
+    assert query.asset_type == agent_type
+    assert query.plugin_type == agent_type
+
+
+@patch("plugins_market.services.plugin.retrieval_search", return_value=[])
+def test_agent_list_search_passes_asset_type_to_retrieval(mock_search):
+    db = _db()
+    viewer = ViewerContext(user_id=None, user_login=None, is_system_admin=False)
+
+    result = list_plugins_service(
+        PluginListQuery(
+            asset_type="agent-plugin",
+            search_keyword="automation",
+            order_by="update_time",
+        ),
+        db,
+        SimpleNamespace(),
+        viewer=viewer,
+    )
+
+    assert result.total == 0
+    assert mock_search.call_args.kwargs["asset_type"] == "agent-plugin"
+    assert mock_search.call_args.args[1] == "agent-plugin"
 
 
 def test_pending_queue_finds_agent_with_new_pending_version_while_asset_approved():

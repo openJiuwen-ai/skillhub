@@ -704,6 +704,7 @@ export default function PluginMarketPage() {
   const isNewestCategory = activeCategory === 'newest'
   const isFeaturedCategory = activeCategory === 'featured'
   const activeCategoryId = isSpecialCategoryKey(activeCategory) ? undefined : activeCategory
+  const activeAssetType = isAgentAssetPluginType(activeType) ? activeType : undefined
 
   // 互斥模式：选了任一标签即进入过滤态——搜索框置灰、关键词清空。
   // 反向置灰：因果直接（点标签的直接后果就是禁搜索），无需额外模式切换器命名当前态。
@@ -734,6 +735,7 @@ export default function PluginMarketPage() {
   const approvedSkillMarketTotalQuery = usePluginListQuery({
     page: 1,
     page_size: 1,
+    asset_type: activeAssetType,
     plugin_type: activeType,
     moderation_status: 'APPROVED',
   })
@@ -815,6 +817,7 @@ export default function PluginMarketPage() {
         {
           page: 1,
           page_size: 1,
+          asset_type: activeAssetType,
           plugin_type: activeType,
           moderation_status: 'APPROVED',
           category_id: categoryId,
@@ -824,6 +827,7 @@ export default function PluginMarketPage() {
         getPlugins({
           page: 1,
           page_size: 1,
+          asset_type: activeAssetType,
           plugin_type: activeType,
           moderation_status: 'APPROVED',
           category_id: categoryId,

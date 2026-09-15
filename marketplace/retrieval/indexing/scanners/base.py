@@ -25,6 +25,7 @@ class ScannedItem:
     market_display_name: str = ""
     market_short_desc: str = ""
     market_detail_desc: str = ""
+    additional_retrieval_text: str = ""
     github_url: str = ""
     stars: int = 0
     is_official: bool = False
@@ -43,6 +44,7 @@ class ScannedItem:
             "market_display_name": self.market_display_name,
             "market_short_desc": self.market_short_desc,
             "market_detail_desc": self.market_detail_desc,
+            "additional_retrieval_text": self.additional_retrieval_text,
             "github_url": self.github_url,
             "stars": self.stars,
             "is_official": self.is_official,

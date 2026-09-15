@@ -324,7 +324,7 @@ class PluginListQuery(BaseModel):
     )
     search_keyword: Optional[str] = Field(
         None,
-        description="搜索关键词；agent-plugin / agent-template / agent-mcp 使用数据库关键词匹配，不进入语义检索",
+        description="搜索关键词；Skill/SwarmSkill 与三类 Agent 资产使用各自独立的检索索引",
     )
     moderation_status: Optional[str] = Field(
         None,

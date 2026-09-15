@@ -263,6 +263,7 @@ def build_catalog_records_from_nodes(
         market_display_name = str(scanned.get("market_display_name") or "").strip()
         market_short_desc = str(scanned.get("market_short_desc") or "").strip()
         market_detail_desc = str(scanned.get("market_detail_desc") or "").strip()
+        additional_retrieval_text = str(scanned.get("additional_retrieval_text") or "").strip()
         skill_path = str(scanned.get("path") or "")
         raw_tags = scanned.get("tags")
         tags: Tuple[str, ...] = ()
@@ -285,6 +286,7 @@ def build_catalog_records_from_nodes(
                     market_display_name=market_display_name,
                     market_short_desc=market_short_desc,
                     market_detail_desc=market_detail_desc,
+                    additional_text=additional_retrieval_text,
                     description=description,
                     content=content,
                     cid=cid,
@@ -545,6 +547,7 @@ def build_retrieval_text(
     market_display_name: str = "",
     market_short_desc: str = "",
     market_detail_desc: str = "",
+    additional_text: str = "",
     description: str,
     content: str,
     cid: str,
@@ -555,6 +558,7 @@ def build_retrieval_text(
         compact_text(plugin_display_name, limit=200),
         compact_text(market_display_name, limit=200),
         compact_text(market_short_desc, limit=600),
+        compact_text(additional_text, limit=1600),
         compact_text("" if market_short_desc else description, limit=400),
         compact_text(skill_id, limit=120),
         compact_text(cid, limit=200),
