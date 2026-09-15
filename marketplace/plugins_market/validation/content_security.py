@@ -7,7 +7,8 @@
 远程脚本下载执行等危险内容。本模块提供保守、低误报的规则集：
 
 - 命令字符串（mcp.json command/args/env/headers、cli.json）：下载即执行链等；
-- 脚本文件（.py/.sh 等）：eval/exec、os.system、subprocess shell=True 等。
+- 脚本文件：Python 侧 eval/exec、os.system、subprocess shell=True；
+  JS/TS 侧 eval、new Function、child_process.exec（不把 RegExp.exec / sendmail spawn 当危险）。
 
 规则集有意保守，无法覆盖全部 RCE 变体；命中多条时一并汇总返回。
 """
@@ -32,6 +33,8 @@ SCRIPT_FILE_EXTENSIONS: tuple[str, ...] = (
     ".cjs",
     ".ts",
 )
+_JS_LIKE_EXTENSIONS: tuple[str, ...] = (".js", ".mjs", ".cjs", ".ts")
+_PY_LIKE_EXTENSIONS: tuple[str, ...] = (".py",)
 
 # 下载后直接执行：curl/wget 管道进 shell，或 PowerShell 下载执行
 _PIPE_TO_SHELL_RE = re.compile(
@@ -51,6 +54,11 @@ _COMMAND_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 
 _EVAL_RE = re.compile(r"\beval\s*\(")
 _EXEC_RE = re.compile(r"\bexec\s*\(")
+_NEW_FUNCTION_RE = re.compile(r"\bnew\s+Function\s*\(")
+# 只拦 exec 族，避免误伤 nodemailer 等打包进未使用的 sendmail spawn
+_CHILD_PROCESS_RE = re.compile(
+    r"""['"](?:node:)?child_process['"]\s*\)\s*\.\s*exec(?:Sync|File)?\s*\("""
+)
 
 _OS_SYSTEM_RE = re.compile(r"\bos\.system\s*\(")
 _OS_POPEN_RE = re.compile(r"\bos\.popen\s*\(")
@@ -58,14 +66,22 @@ _SUBPROCESS_SHELL_RE = re.compile(
     r"\bsubprocess\.(?:run|Popen|call|check_call|check_output|getoutput|getstatusoutput)"
     r"\s*\([\s\S]{0,800}?\bshell\s*=\s*True\b"
 )
-_SCRIPT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+# 各语言共用：下载即执行、eval（Python/JS 均危险）
+_COMMON_SCRIPT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (_PIPE_TO_SHELL_RE, "下载后直接执行的命令链"),
     (_SHELL_WRAPPED_DOWNLOAD_RE, "shell 包裹的下载执行命令"),
     (_EVAL_RE, "eval 动态代码执行"),
+)
+# Python exec()；不得套用到 JS，否则会误伤打包产物里的 RegExp.exec()
+_PY_SCRIPT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (_EXEC_RE, "exec 动态代码执行"),
     (_OS_SYSTEM_RE, "os.system Shell 执行入口"),
     (_OS_POPEN_RE, "os.popen Shell 执行入口"),
     (_SUBPROCESS_SHELL_RE, "subprocess shell=True 执行入口"),
+)
+_JS_SCRIPT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_NEW_FUNCTION_RE, "Function 动态代码执行"),
+    (_CHILD_PROCESS_RE, "child_process 进程执行入口"),
 )
 
 
@@ -77,9 +93,32 @@ def find_dangerous_command(command: str) -> str | None:
     return None
 
 
-def find_dangerous_script_content(text: str) -> str | None:
-    """脚本内容命中危险模式时返回原因描述，否则返回 None。"""
-    for pattern, reason in _SCRIPT_RULES:
+def _script_kind(filename: str) -> str:
+    if not filename:
+        return "all"
+    lower = filename.lower().replace("\\", "/")
+    if lower.endswith(_JS_LIKE_EXTENSIONS):
+        return "js"
+    if lower.endswith(_PY_LIKE_EXTENSIONS):
+        return "py"
+    return "other"
+
+
+def _rules_for_kind(kind: str) -> tuple[tuple[re.Pattern[str], str], ...]:
+    rules = _COMMON_SCRIPT_RULES
+    if kind in ("py", "all"):
+        rules += _PY_SCRIPT_RULES
+    if kind in ("js", "all"):
+        rules += _JS_SCRIPT_RULES
+    return rules
+
+
+def find_dangerous_script_content(text: str, *, filename: str = "") -> str | None:
+    """脚本内容命中危险模式时返回原因描述，否则返回 None。
+
+    filename 用于按语言选规则。缺省时套用全部语言规则（偏严）。
+    """
+    for pattern, reason in _rules_for_kind(_script_kind(filename)):
         if pattern.search(text):
             return reason
     return None
@@ -145,9 +184,13 @@ def _collect_dangerous_zip_scripts(
         if original.replace("\\", "/").endswith("/"):
             continue
         raw = safe_read_zip_member(zf, original, counter)
-        reason = find_dangerous_script_content(raw.decode("utf-8", errors="replace"))
+        relative = normalized[len(payload_prefix):]
+        reason = find_dangerous_script_content(
+            raw.decode("utf-8", errors="replace"),
+            filename=relative,
+        )
         if reason:
-            hits.append((normalized[len(payload_prefix):], reason))
+            hits.append((relative, reason))
     return hits
 
 

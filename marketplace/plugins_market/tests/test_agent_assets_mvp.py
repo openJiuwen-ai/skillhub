@@ -463,6 +463,43 @@ def test_agent_mcp_allows_missing_icon_file() -> None:
     assert result["icon_bytes"] == b""
 
 
+def test_agent_mcp_allows_js_regexp_exec_in_skill_bundle() -> None:
+    content = _build_wrapped_zip(
+        "netease-email",
+        "agent-mcp",
+        {
+            "manifest.json": _mcp_manifest(
+                "netease-email",
+                integration={"type": "skill-only"},
+            ),
+            "skills/scripts/imap.bundle.js": (
+                "const match = /ID \\((.+)\\)/.exec(cmd);\n"
+                "function n(e,t){return t.exec(e)}\n"
+            ),
+        },
+    )
+    result = _validate_mcp(content, "netease-email")
+    assert result["integration_type"] == "skill-only"
+
+
+def test_agent_mcp_rejects_js_eval_in_skill_bundle() -> None:
+    content = _build_wrapped_zip(
+        "netease-email",
+        "agent-mcp",
+        {
+            "manifest.json": _mcp_manifest(
+                "netease-email",
+                integration={"type": "skill-only"},
+            ),
+            "skills/scripts/imap.bundle.js": "eval(payload)\n",
+        },
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_mcp(content, "netease-email")
+    assert exc_info.value.detail["error"] == "dangerous_content"
+    assert "skills/scripts/imap.bundle.js" in exc_info.value.detail["message"]
+
+
 def test_agent_mcp_rejects_dangerous_second_server() -> None:
     content = _build_wrapped_zip(
         "dangerous-mcp",
