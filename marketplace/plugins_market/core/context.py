@@ -41,6 +41,15 @@ def get_user_id() -> str:
     return user_id_var.get() or "anonymous"
 
 
+def get_user_id_or_none() -> Optional[str]:
+    """登录用户的真实 user_id，未登录返回 None。
+
+    与 get_user_id() 的区别：后者把未登录归一成 "anonymous" 哨兵字符串，适合日志/审计展示；
+    计量去重等需要区分「匿名」与「登录」的逻辑必须用本函数，否则所有匿名请求会共享同一个哨兵指纹。
+    """
+    return user_id_var.get()
+
+
 def set_user_name(user_name: Optional[str]) -> None:
     user_name_var.set(user_name)
 

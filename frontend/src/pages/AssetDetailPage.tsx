@@ -9,7 +9,7 @@ import { CircularProgress, Tooltip } from '@mui/material'
 import axios from 'axios'
 import { AppHeader } from '@/components/Common/AppHeader'
 import { pluginCardTooltipProps } from '@/components/Common/pluginCardTooltip'
-import { getTagColor, buildHotTagSet, TAG_MAX_VISIBLE } from '@/utils/tagColors'
+import { TAG_NEUTRAL, buildTagColorMap, TAG_MAX_VISIBLE } from '@/utils/tagColors'
 import { Breadcrumbs } from '@/components/Common/Breadcrumbs'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
 import { VersionFileTree } from '@/components/Common/VersionFileTree'
@@ -879,12 +879,16 @@ export default function AssetDetailPage() {
     },
     { enabled: Boolean(skill?.assetId), retry: 1 },
   )
+  // 多色标签配色：热门档（top-N）两两不同色，长尾回退中性灰。数据与侧边栏标签云同源。
   const hotTagQuery = useQuery(
     ['plugins', 'tag-options', skillRaw?.plugin_type],
     () => getPluginTagOptions({ plugin_type: skillRaw?.plugin_type ?? undefined, limit: 20 }),
     { enabled: Boolean(skillRaw?.plugin_type), staleTime: 60_000 },
   )
-  const hotTagSet = useMemo(() => buildHotTagSet(hotTagQuery.data ?? []), [hotTagQuery.data])
+  const tagColorMap = useMemo(
+    () => buildTagColorMap((hotTagQuery.data ?? []).map(o => o.tag)),
+    [hotTagQuery.data],
+  )
   const interactionState: UserInteractionState | null = interactionsQuery.data ?? null
   const liked = interactionState?.liked ?? false
   const starred = interactionState?.starred ?? false
@@ -1162,7 +1166,7 @@ export default function AssetDetailPage() {
                       {displayTags.length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {displayTags.slice(0, TAG_MAX_VISIBLE).map((tag) => {
-                            const c = getTagColor(tag, hotTagSet.has(tag))
+                            const c = tagColorMap.get(tag) ?? TAG_NEUTRAL
                             return (
                               <span
                                 key={tag}
