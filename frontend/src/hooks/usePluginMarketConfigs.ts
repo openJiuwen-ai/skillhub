@@ -15,6 +15,8 @@ export interface MarketPlugin {
   iconUri: string
   publisherId: string
   publisherName: string
+  /** 发布者是否为官方（system_admin），后端标记位；渲染时据此显示 官方/Official */
+  publisherOfficial: boolean
   tags: string[]
   certification: string
   runTime: string
@@ -83,6 +85,17 @@ function normalizeModerationStatus(raw: string | null | undefined): 'APPROVED' |
   return 'APPROVED'
 }
 
+// 后端用 publisher_official 标记 system_admin 发布的资产（publisher_name 本身原样下发，
+// 避免与恰好叫 official/官方 的真实用户名冲突），这里按当前语言渲染为 官方/Official。
+export function displayPublisherName(
+  name: string | null | undefined,
+  isOfficial: boolean | undefined,
+  t: (key: string) => string,
+): string {
+  if (isOfficial) return t('plugins.publisher.official')
+  return name || ''
+}
+
 function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
   const accessSource = item.access_source || 'public'
   return {
@@ -95,6 +108,7 @@ function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
     iconUri: resolvePluginIconUrl(item.icon_uri || ''),
     publisherId: item.publisher_id,
     publisherName: item.publisher_name,
+    publisherOfficial: Boolean(item.publisher_official),
     tags: item.tags || [],
     certification: item.certification || '',
     runTime: firstString(item.plugin_type, item.run_time),

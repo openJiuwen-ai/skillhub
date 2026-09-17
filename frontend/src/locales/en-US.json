@@ -98,6 +98,10 @@
     },
     "pinnedBadge": "Pinned",
     "pinnedBadgeAria": "Pinned for visibility",
+    "publisher": {
+      "official": "Official",
+      "officialBadgeAria": "Verified official publisher"
+    },
     "groupGrantedBadge": "Group grant",
     "modelAccessNotice": "Heads up: Swarm Skills may call model APIs concurrently and occasionally hit provider rate limits. These errors usually don't affect the final result.",
     "tableView": {

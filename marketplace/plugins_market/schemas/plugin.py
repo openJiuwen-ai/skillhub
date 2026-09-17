@@ -4,9 +4,22 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, List, Optional
 
 from fastapi import UploadFile
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from plugins_market.core.config import settings
 from plugins_market.validation.constants import QUERY_TAGS_MAX_LEN
+
+
+# system_admin 账号发布的资产，市场列表/详情序列化时打 publisher_official 标记位，
+# 前端据此把发布者显示名渲染为 官方/Official（i18n key: plugins.publisher.official）。
+# publisher_name 本身始终原样下发：官方与否由显式标记决定，避免与恰好叫
+# official / 官方 的真实用户名冲突（防冒充）。审核列表与 clawhub 兼容接口（直读 DB 模型）不受影响。
+# 判定依据是 publisher_id == system_admin_user（服务端写入、用户不可控），
+# 而不是 publisher_name（展示名，git-import 等路径可为任意值，同名普通用户会被误标记）。
+# 官方导入但保留品牌名的资产（如 publisher_id=system_admin、name=huawei）同样标记为官方：
+# 发布者确实是官方渠道，品牌名照常展示，仅附带官方认证徽标。
+def _is_official_publisher(publisher_id: Any) -> bool:
+    return str(publisher_id or "").strip() == settings.system_admin_user
 
 
 @dataclass
@@ -225,6 +238,13 @@ class PluginVersionDetail(BaseModel):
     detail_desc: Optional[str] = None
     publisher_id: str
     publisher_name: str
+    publisher_official: bool = Field(False, description="发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official")
+
+    @model_validator(mode="after")
+    def _mark_official_publisher(self) -> "PluginVersionDetail":
+        self.publisher_official = _is_official_publisher(self.publisher_id)
+        return self
+
     tags: Optional[List[str]] = None
     category_id: Optional[str] = None
     category_name: Optional[str] = None
@@ -475,6 +495,13 @@ class PluginListItem(BaseModel):
     icon_uri: Optional[str] = None
     publisher_id: str
     publisher_name: str
+    publisher_official: bool = Field(False, description="发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official")
+
+    @model_validator(mode="after")
+    def _mark_official_publisher(self) -> "PluginListItem":
+        self.publisher_official = _is_official_publisher(self.publisher_id)
+        return self
+
     tags: Optional[List[str]] = None
     category_id: Optional[str] = None
     category_name: Optional[str] = None
