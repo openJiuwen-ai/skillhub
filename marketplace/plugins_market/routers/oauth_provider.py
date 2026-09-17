@@ -13,7 +13,7 @@ import json
 import secrets
 from enum import Enum
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Header, status
@@ -67,6 +67,66 @@ def _frontend_login_url() -> str:
     return f"{base}/login"
 
 
+# redirect_to 仅允许回环地址（RFC 8252 loopback），供本地客户端（如 jiuwenclaw
+# 本地服务）接收一次性 oauth_session 回跳；网页版部署仍走默认前端 /login。
+# 按 RFC 8252 §7.3 只收字面 IP：localhost 依赖 hosts/DNS 解析，可被本机
+# 解析配置重定向，故不纳入白名单。
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
+
+
+def _validate_loopback_redirect(raw: str | None) -> str | None:
+    """校验 redirect_to：仅 http + 回环 host，端口不限。非法返回 None。
+
+    必须做 URL 解析后精确匹配，禁止字符串前缀判断——
+    ``http://127.0.0.1.evil.com`` / ``http://127.0.0.1@evil.com`` 均以 127 开头。
+    """
+    if not raw:
+        return None
+    try:
+        parts = urlsplit(raw.strip())
+    except ValueError:
+        return None
+    if parts.scheme != "http":
+        return None
+    host = (parts.hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        return None
+    # 拒绝 userinfo（http://evil.com@127.0.0.1/ 的 hostname 是 127.0.0.1，
+    # 但 userinfo 形态一律视为可疑构造）
+    if "@" in (parts.netloc or ""):
+        return None
+    if not parts.path:
+        return None
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, parts.fragment))
+
+
+def _append_query_params(url: str, extra: dict[str, str]) -> str:
+    """向 url 合并 query 参数，正确处理已有 query（如 redirect_to 自带 client_state）。"""
+    parts = urlsplit(url)
+    merged = dict(parse_qsl(parts.query, keep_blank_values=True))
+    merged.update(extra)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(merged), parts.fragment))
+
+
+def _login_redirect_target(state_record: dict[str, Any] | None) -> str:
+    """state 记录中的合法 redirect_to，缺省回退前端 /login。"""
+    redirect_to = _validate_loopback_redirect(
+        state_record.get("redirect_to") if isinstance(state_record, dict) else None
+    )
+    return redirect_to or _frontend_login_url()
+
+
+def _load_state_record(raw: str | None) -> dict[str, Any] | None:
+    """解析 state 存储值；旧值 "1" 或损坏 JSON 返回 None（视为无 redirect_to）。"""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _redirect_error(
     message: str,
     *,
@@ -74,6 +134,7 @@ def _redirect_error(
     error_code: str | None = None,
     error_class: str | None = None,
     error_name: str | None = None,
+    redirect_to: str | None = None,
 ) -> RedirectResponse:
     params = {"oauth_error": message}
     if status_code is not None:
@@ -84,8 +145,10 @@ def _redirect_error(
         params["oauth_error_class"] = error_class
     if error_name:
         params["oauth_error_name"] = error_name
+    # redirect_to 为空时回退默认前端 /login；目标若非法由 _validate_loopback_redirect 拦下
+    target = _validate_loopback_redirect(redirect_to) or _frontend_login_url()
     return RedirectResponse(
-        url=f"{_frontend_login_url()}?{urlencode(params, quote_via=quote)}",
+        url=_append_query_params(target, params),
         status_code=302,
     )
 
@@ -195,7 +258,12 @@ def _assert_oauth_ready(provider: OAuthProvider) -> None:
         )
 
 
-def _redirect_from_publish_error(exc: BusinessError, *, provider: OAuthProvider | None = None) -> RedirectResponse:
+def _redirect_from_publish_error(
+    exc: BusinessError,
+    *,
+    provider: OAuthProvider | None = None,
+    redirect_to: str | None = None,
+) -> RedirectResponse:
     if provider is not None:
         logger.warning(
             "oauth callback redirect",
@@ -218,6 +286,7 @@ def _redirect_from_publish_error(exc: BusinessError, *, provider: OAuthProvider 
         error_code=exc.detail.get("error_code"),
         error_class=exc.detail.get("error_class"),
         error_name=exc.detail.get("error"),
+        redirect_to=redirect_to,
     )
 
 
@@ -246,6 +315,7 @@ def _oauth_redirect_error(
     *,
     provider: OAuthProvider | None = None,
     status_code: int = 400,
+    redirect_to: str | None = None,
 ) -> RedirectResponse:
     exc = BusinessError(
         code=status_code,
@@ -255,7 +325,7 @@ def _oauth_redirect_error(
         error_code=error_code,
         error_class=error_class,
     )
-    return _redirect_from_publish_error(exc, provider=provider)
+    return _redirect_from_publish_error(exc, provider=provider, redirect_to=redirect_to)
 
 
 async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAuthProvider, code: str) -> dict:
@@ -330,15 +400,39 @@ async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAu
 
 
 @router.get("/oauth/{provider}/start")
-async def oauth_start(provider: OAuthProvider):
-    """浏览器访问：重定向到对应厂商授权页。"""
+async def oauth_start(provider: OAuthProvider, redirect_to: str | None = None):
+    """浏览器访问：重定向到对应厂商授权页。
+
+    redirect_to：本地客户端（loopback）回调地址，登录完成后 oauth_session 将
+    302 到该地址而非前端 /login。仅允许 http://127.0.0.1:port、http://[::1]:port
+    （RFC 8252 字面 IP，不含 localhost）；非法值直接 400，不回退默认（避免调用方
+    误以为回跳生效）。
+    """
     with operation_context(operation_type="oauth_start"):
         bind_operation_actor(actor_type="anonymous")
         bind_operation_resource(resource_type="oauth_provider", resource_id=provider.value)
         _assert_oauth_ready(provider)
+
+        validated_redirect_to = _validate_loopback_redirect(redirect_to)
+        if redirect_to and not validated_redirect_to:
+            raise BusinessError(
+                code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                error="oauth_invalid_redirect_to",
+                message="redirect_to 仅允许 http 回环地址（127.0.0.1 / ::1）",
+                error_code="SKILLHUB_OAUTH_INVALID_REDIRECT_TO",
+                error_class="validation",
+            )
+
         state = secrets.token_urlsafe(32)
         store = get_oauth_str_store()
-        store.set_ex(_state_key(provider, state), "1", 600)
+        # state 记录携带 redirect_to：回调时从服务端取出，绝不在 /callback 上
+        # 作为参数接收（信任决策只在 /start 一处做）
+        store.set_ex(
+            _state_key(provider, state),
+            json.dumps({"redirect_to": validated_redirect_to}, ensure_ascii=False),
+            600,
+        )
 
         if provider == OAuthProvider.agentos:
             params = {
@@ -380,19 +474,42 @@ async def oauth_callback(
     error: str | None = None,
     error_description: str | None = None,
 ):
-    """用 code 换 access_token，拉用户信息，写入一次性 oauth_session 后重定向前端 /login。"""
+    """用 code 换 access_token，拉用户信息，写入一次性 oauth_session 后重定向。
+
+    回跳目标：state 记录携带的合法 redirect_to（本地客户端），缺省前端 /login。
+    """
     with operation_context(operation_type="oauth_callback"):
         bind_operation_actor(actor_type="anonymous")
         bind_operation_resource(resource_type="oauth_provider", resource_id=provider.value)
         label = _provider_label(provider)
+
+        # state 记录里的 redirect_to 决定所有出口（成功/失败）的回跳目标；
+        # state 校验前的失败（如厂商返回 error）也尽量查一次记录取回目标，
+        # 查不到再回退默认前端 /login
+        store = get_oauth_str_store()
+        redirect_to: str | None = None
+
+        def _peek_redirect_to(state_value: str | None) -> str | None:
+            if not state_value:
+                return None
+            record = _load_state_record(store.get(_state_key(provider, state_value)))
+            return _validate_loopback_redirect(
+                record.get("redirect_to") if isinstance(record, dict) else None
+            )
+
         try:
             _assert_oauth_ready(provider)
         except BusinessError as exc:
-            return _redirect_from_publish_error(exc, provider=provider)
+            return _redirect_from_publish_error(exc, provider=provider, redirect_to=_peek_redirect_to(state))
 
         if error:
             msg = error_description or error or "授权已取消"
-            return _oauth_redirect_error(msg, "SKILLHUB_OAUTH_AUTHORIZATION_REJECTED", provider=provider)
+            return _oauth_redirect_error(
+                msg,
+                "SKILLHUB_OAUTH_AUTHORIZATION_REJECTED",
+                provider=provider,
+                redirect_to=_peek_redirect_to(state),
+            )
 
         if not code or not state:
             return _oauth_redirect_error(
@@ -400,17 +517,21 @@ async def oauth_callback(
                 "SKILLHUB_OAUTH_MISSING_CODE_OR_STATE",
                 "validation",
                 provider=provider,
+                redirect_to=_peek_redirect_to(state),
             )
 
-        store = get_oauth_str_store()
         state_key = _state_key(provider, state)
-        if not store.get(state_key):
+        # 原子取出并删除：state 一次性，与 /session 的 get_del 对齐（F-57 补修）
+        raw_state = store.get_del(state_key)
+        if not raw_state:
             return _oauth_redirect_error(
                 "状态无效或已过期，请重新登录",
                 "SKILLHUB_OAUTH_STATE_INVALID",
                 provider=provider,
             )
-        store.delete(state_key)
+        state_record = _load_state_record(raw_state)
+        if isinstance(state_record, dict):
+            redirect_to = _validate_loopback_redirect(state_record.get("redirect_to"))
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -422,6 +543,7 @@ async def oauth_callback(
                         "SKILLHUB_OAUTH_ACCESS_TOKEN_MISSING",
                         "upstream",
                         provider=provider,
+                        redirect_to=redirect_to,
                     )
 
                 u = await fetch_oauth_user_profile(provider.value, access_token)
@@ -441,6 +563,7 @@ async def oauth_callback(
                         "SKILLHUB_OAUTH_PROFILE_FETCH_FAILED",
                         "upstream",
                         provider=provider,
+                        redirect_to=redirect_to,
                     )
 
                 uid_raw = u.get("id") or ""
@@ -461,6 +584,7 @@ async def oauth_callback(
                         "SKILLHUB_OAUTH_USER_ID_MISSING",
                         "upstream",
                         provider=provider,
+                        redirect_to=redirect_to,
                     )
 
                 login = (u.get("login") or u.get("username") or "").strip() or str(uid_raw).strip()
@@ -493,16 +617,20 @@ async def oauth_callback(
                         user_id=uid,
                     ),
                 )
+                # 回跳目标：redirect_to（loopback，含调用方自带 query 如 client_state）
+                # 或默认前端 /login；query 合并保证不破坏已有参数
                 return RedirectResponse(
-                    url=(
-                        f"{_frontend_login_url()}?"
-                        f"oauth_session={quote(pending, safe='')}"
-                        f"&oauth_provider={quote(provider.value, safe='')}"
+                    url=_append_query_params(
+                        _login_redirect_target({"redirect_to": redirect_to}),
+                        {
+                            "oauth_session": pending,
+                            "oauth_provider": provider.value,
+                        },
                     ),
                     status_code=302,
                 )
         except BusinessError as exc:
-            return _redirect_from_publish_error(exc, provider=provider)
+            return _redirect_from_publish_error(exc, provider=provider, redirect_to=redirect_to)
         except httpx.RequestError:
             logger.exception(
                 "oauth request failed",
@@ -524,6 +652,7 @@ async def oauth_callback(
                 "SKILLHUB_OAUTH_REQUEST_FAILED",
                 "upstream",
                 provider=provider,
+                redirect_to=redirect_to,
             )
         except Exception:
             logger.exception(
@@ -562,6 +691,7 @@ async def oauth_callback(
                 error_code="SKILLHUB_INTERNAL_UNEXPECTED",
                 error_class="internal",
                 error_name="internal_error",
+                redirect_to=redirect_to,
             )
 
 

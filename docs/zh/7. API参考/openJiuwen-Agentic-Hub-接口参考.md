@@ -16,7 +16,7 @@
 | 方法 | 路径 | 主要参数 | 鉴权 | 最低角色 |
 |------|------|----------|------|----------|
 | **认证** | | | | |
-| GET | `/auth/oauth/{provider}/start` | 路径：`provider` | — | — |
+| GET | `/auth/oauth/{provider}/start` | 路径：`provider`；Query：`redirect_to`（可选，仅 loopback 回跳） | — | — |
 | GET | `/auth/oauth/{provider}/callback` | Query：`code`✱、`state`✱ | — | — |
 | POST | `/auth/oauth/{provider}/session` | Body：`oauth_session`✱ | — | — |
 | GET | `/auth/me` | Header：`Authorization`✱ | Bearer | 登录用户 |
@@ -166,10 +166,24 @@
 |----|------|
 | **鉴权** | 无需 |
 | **路径参数** | `provider`：`gitcode` \| `github` |
+| **Query 参数** | `redirect_to`（可选）：本地客户端回调地址，见下方说明 |
+
+**`redirect_to` — 本地客户端回跳（loopback）**
+
+供本机运行的第三方客户端（如 jiuwenclaw / jiuwenswarm 本地服务）接收登录结果。传入后，OAuth 完成时的一次性 `oauth_session` 将 **302 到该地址**（而非前端 `/login`），失败时错误参数同样回跳该地址。
+
+- 仅允许 `http://127.0.0.1:{port}`、`http://[::1]:{port}`（RFC 8252 loopback 字面 IP；端口任意，须带 path。**不含 `localhost`**——其解析依赖本机 hosts/DNS，可能被指向非回环地址）；
+- 非法值（外网域名、`https`、`file://`、无 path、`127.0.0.1.evil.com` 等前缀仿冒）返回 **400** `SKILLHUB_OAUTH_INVALID_REDIRECT_TO`，不回退默认行为；
+- `redirect_to` 保存在服务端 `state` 记录中随授权流程流转，回调时不接受任何外部传入的回跳地址；
+- 地址可自带 query（如客户端自己的防 CSRF nonce `client_state`），回跳时原样保留并追加 `oauth_session` / `oauth_provider`；
+- 不传该参数时行为与旧版完全一致（回跳前端 `/login`）。
 
 ```bash
-# 浏览器访问
+# 浏览器访问（网页版默认流程）
 open "https://swarmskills.openjiuwen.com/api/v1/auth/oauth/gitcode/start"
+
+# 本地客户端（redirect_to 须整体 URL 编码：值自带 query 时嵌套的 ?、& 会被截断）
+open "https://swarmskills.openjiuwen.com/api/v1/auth/oauth/gitcode/start?redirect_to=http%3A%2F%2F127.0.0.1%3A3000%2Fcallback%3Fclient_state%3Dxyz"
 ```
 
 ---
@@ -178,13 +192,15 @@ open "https://swarmskills.openjiuwen.com/api/v1/auth/oauth/gitcode/start"
 
 OAuth 厂商回调。用 `code` 换取 token，拉取用户信息，写入一次性 `oauth_session`，**302** 重定向到前端 `/login?oauth_session=...`。
 
+若 `/start` 时携带了合法的 `redirect_to`（loopback），则本接口 **302 到该地址**并追加 `oauth_session`、`oauth_provider`（原 query 参数如 `client_state` 保留）。回跳目标取自服务端 `state` 记录，回调本身不接受任何回跳参数。
+
 | Query | 必填 | 说明 |
 |-------|:----:|------|
 | `code` | ✓ | 授权码 |
 | `state` | ✓ | 与 start 时一致 |
 | `error` | | 用户拒绝授权等 |
 
-**失败时** 不返回 JSON，而是 302 到登录页并在 query 中附带 `oauth_error`、`oauth_error_code` 等，详见 [OAuth 回调错误](./openJiuwen-Agentic-Hub.md#oauth-回调重定向错误)。
+**失败时** 不返回 JSON，而是 302 到回跳目标（`redirect_to` 或默认前端登录页）并在 query 中附带 `oauth_error`、`oauth_error_code` 等，详见 [OAuth 回调错误](./openJiuwen-Agentic-Hub.md#oauth-回调重定向错误)。
 
 ---
 

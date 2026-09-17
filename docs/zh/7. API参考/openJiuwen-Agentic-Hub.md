@@ -143,11 +143,11 @@
 
 #### OAuth 回调重定向错误
 
-`GET /api/v1/auth/oauth/{provider}/callback` 失败不会返回 JSON，而是 **302 重定向** 到前端登录页，并在 query 中附带结构化错误参数：
+`GET /api/v1/auth/oauth/{provider}/callback` 失败不会返回 JSON，而是 **302 重定向** 到回跳目标（`/start` 传入的合法 `redirect_to` loopback 地址，缺省为前端登录页），并在 query 中附带结构化错误参数：
 
 | Query 参数 | 含义 |
 |---|---|
-| `oauth_error` | 前端登录页展示用错误文案 |
+| `oauth_error` | 前端登录页 / 本地客户端展示用错误文案 |
 | `oauth_status` | 对应 HTTP 状态码 |
 | `oauth_error_code` | 稳定机器码 |
 | `oauth_error_class` | 错误大类 |
@@ -157,7 +157,12 @@
 
 ```text
 /login?oauth_error=状态无效或已过期，请重新登录&oauth_status=400&oauth_error_code=SKILLHUB_OAUTH_STATE_INVALID&oauth_error_class=auth&oauth_error_name=oauth_state_invalid
+
+# 携带 redirect_to 时（原 query 如 client_state 保留）：
+http://127.0.0.1:3000/callback?client_state=xyz&oauth_error=...&oauth_error_code=...
 ```
+
+`GET /auth/oauth/{provider}/start` 的 `redirect_to` 参数非法时返回 **400** JSON（`error_code: SKILLHUB_OAUTH_INVALID_REDIRECT_TO`），不发起授权跳转；该参数仅接受 `http` 回环地址（`127.0.0.1` / `[::1]`，端口任意，须带 path；**不含 `localhost`**，RFC 8252 §7.3 只允许字面 IP）。
 
 #### 通用错误码
 
