@@ -142,6 +142,7 @@ export type DetectedPublishPluginType =
   | PublishPluginType
   | 'agent-plugin'
   | 'agent-template'
+  | 'agent-group'
   | 'agent-mcp'
   | 'unknown'
 

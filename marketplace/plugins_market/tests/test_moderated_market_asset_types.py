@@ -51,7 +51,7 @@ class TestModeratedTypeHelpers(unittest.TestCase):
         self.assertEqual(SKILL_LIKE_PLUGIN_TYPES, frozenset({"skill", "swarmskill"}))
         self.assertEqual(
             AGENT_ASSET_PLUGIN_TYPES,
-            frozenset({"agent-plugin", "agent-template", "agent-mcp"}),
+            frozenset({"agent-plugin", "agent-template", "agent-group", "agent-mcp"}),
         )
         self.assertEqual(MODERATED_MARKET_ASSET_TYPES, SKILL_LIKE_PLUGIN_TYPES | AGENT_ASSET_PLUGIN_TYPES)
 
@@ -60,13 +60,15 @@ class TestModeratedTypeHelpers(unittest.TestCase):
 
         self.assertEqual(moderated_asset_type_label("agent-plugin"), "插件")
         self.assertEqual(moderated_asset_type_label("agent-mcp"), "连接器")
-        self.assertEqual(moderated_asset_type_label("agent-template"), "专家/专家团")
+        self.assertEqual(moderated_asset_type_label("agent-template"), "专家")
+        self.assertEqual(moderated_asset_type_label("agent-group"), "专家团")
 
     def test_predicates(self):
         self.assertTrue(is_skill_like_plugin_type("swarmskill"))
         self.assertTrue(is_skill_like_plugin_type("teamskills"))
         self.assertFalse(is_skill_like_plugin_type("agent-plugin"))
         self.assertTrue(is_wrapped_agent_asset_type("agent-template"))
+        self.assertTrue(is_wrapped_agent_asset_type("agent-group"))
         self.assertTrue(is_moderated_market_asset_type("agent-mcp"))
         self.assertTrue(is_moderated_market_asset_type("skill"))
         self.assertFalse(is_moderated_market_asset_type("tools"))
@@ -147,6 +149,7 @@ class TestAgentPublishGates(unittest.TestCase):
 
     def test_moderated_includes_agents_for_block_nonskill(self):
         self.assertTrue(is_moderated_market_asset_type("agent-template"))
+        self.assertTrue(is_moderated_market_asset_type("agent-group"))
         self.assertFalse(is_moderated_market_asset_type("tools"))
 
 

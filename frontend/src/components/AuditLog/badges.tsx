@@ -96,7 +96,12 @@ export function getEventTypeLabel(value: string): string {
   return EVENT_TYPE_META[value]?.label || value
 }
 
-const AGENT_ASSET_RESOURCE_TYPES = new Set(['agent-plugin', 'agent-template', 'agent-mcp'])
+const AGENT_ASSET_RESOURCE_TYPES = new Set([
+  'agent-plugin',
+  'agent-template',
+  'agent-group',
+  'agent-mcp',
+])
 const MARKET_ASSET_RESOURCE_TYPES = new Set(['skill', 'swarmskill', 'plugin'])
 
 /** 把一条审计记录归到对应的操作对象形态，名称列 / 类型 badge 都由此分支。 */
@@ -222,7 +227,8 @@ const OBJECT_TYPE_LABEL: Record<string, string> = {
   swarmskill: 'swarmskill',
   plugin: '普通插件',
   'agent-plugin': '插件',
-  'agent-template': '专家/专家团',
+  'agent-template': '专家',
+  'agent-group': '专家团',
   'agent-mcp': '连接器',
   audit_log: '日志',
   git_source: 'Git 源',

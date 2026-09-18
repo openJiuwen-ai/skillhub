@@ -71,6 +71,32 @@ def test_extract_agent_template_profile() -> None:
     assert profile["manifest_tags"] == ["健康"]
 
 
+def test_extract_agent_group_profile() -> None:
+    manifest = {
+        "version": "1.0.0",
+        "package_type": "agent_group",
+        "name": "coach",
+        "description": "Sales team",
+        "instruction": "协调销售分析",
+        "agents": ["leader", "analyst"],
+        "skills": ["deal-review"],
+        "quick_inputs": [{"zh": "复盘本周订单"}],
+        "tags": [{"zh": "销售"}],
+    }
+    zf = _build_zip({"manifest.json": json.dumps(manifest)})
+    with zf:
+        profile = extract_agent_package_profile(zf)
+    assert profile is not None
+    assert profile["package_type"] == "agent_group"
+    assert profile["persona_markdown"] == "协调销售分析"
+    assert profile["quick_inputs"] == ["复盘本周订单"]
+    kinds = [(item["kind"], item["id"]) for item in profile["capabilities"]]
+    assert ("agent", "leader") in kinds
+    assert ("agent", "analyst") in kinds
+    assert ("skill", "deal-review") in kinds
+    assert profile["manifest_tags"] == ["销售"]
+
+
 def test_extract_agent_mcp_profile() -> None:
     manifest = {
         "version": "1.0.0",

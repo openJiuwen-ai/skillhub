@@ -100,7 +100,7 @@ def _version(
     )
 
 
-@pytest.mark.parametrize("agent_type", ["agent-plugin", "agent-template", "agent-mcp"])
+@pytest.mark.parametrize("agent_type", ["agent-plugin", "agent-template", "agent-group", "agent-mcp"])
 def test_agent_tab_uses_its_own_semantic_retrieval_group(agent_type: str):
     assert _should_use_retrieval_search(agent_type) is True
     assert plugin_type_to_group(agent_type, asset_type=agent_type) == agent_type
@@ -112,7 +112,7 @@ def test_skill_like_retrieval_group_is_unchanged():
     assert plugin_type_to_group("swarmskill") == "skill"
 
 
-@pytest.mark.parametrize("agent_type", ["agent-plugin", "agent-template", "agent-mcp"])
+@pytest.mark.parametrize("agent_type", ["agent-plugin", "agent-template", "agent-group", "agent-mcp"])
 def test_agent_asset_type_drives_list_runtime_filter(agent_type: str):
     query = _normalize_agent_list_query(PluginListQuery(asset_type=agent_type))
 

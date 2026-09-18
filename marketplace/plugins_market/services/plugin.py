@@ -98,6 +98,7 @@ from plugins_market.validation.constants import (
     RUNTIME_SKILL,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_MCP,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     VERSION_PATTERN,
     is_valid_market_version,
@@ -191,7 +192,7 @@ def _is_wrapped_agent_asset_type(plugin_type: str | None) -> bool:
 def _ensure_agent_asset_publish_allowed(
     plugin_type: str | None, *, is_system_admin: bool
 ) -> None:
-    """三类 Agent 资产允许已登录用户发布（鉴权在路由层完成）；保留钩子便于后续加配额等限制。"""
+    """四类 Agent 资产允许已登录用户发布（鉴权在路由层完成）；保留钩子便于后续加配额等限制。"""
     del plugin_type, is_system_admin
     return
 
@@ -217,7 +218,7 @@ def _normalize_agent_list_query(query: PluginListQuery) -> PluginListQuery:
 
 
 def _moderation_for_publish(*, user_id: str, plugin_type: str | None) -> tuple[str | None, str | None]:
-    """非 moderated 类型始终已通过；Skill/SwarmSkill/三类 Agent 由普通用户发布为审核中，系统管理员发布为通过。"""
+    """非 moderated 类型始终已通过；Skill/SwarmSkill/四类 Agent 由普通用户发布为审核中，系统管理员发布为通过。"""
     if not is_moderated_market_asset_type(plugin_type):
         return MODERATION_APPROVED, None
     if (user_id or "").strip() == (settings.system_admin_user or "").strip():
@@ -353,6 +354,8 @@ def _storage_root(asset_type: str | None, plugin_type: str | None = None) -> str
     normalized_asset_type = (asset_type or "").strip().lower()
     if normalized_asset_type == RUNTIME_AGENT_TEMPLATE:
         return "agent-templates"
+    if normalized_asset_type == RUNTIME_AGENT_GROUP:
+        return "agent-groups"
     if normalized_asset_type == RUNTIME_AGENT_PLUGIN:
         return "agent-plugins"
     if normalized_asset_type == RUNTIME_AGENT_MCP:
@@ -764,13 +767,13 @@ def publish(
             error_class="validation",
         )
     # 开关：开启后拒绝 tools / mcp-stdio / restful-api 等非 moderated 类型；
-    # 放行 Skill / SwarmSkill / 三类 Agent（审核或系统身份免审由 _moderation_for_publish 处理）。
+    # 放行 Skill / SwarmSkill / 四类 Agent（审核或系统身份免审由 _moderation_for_publish 处理）。
     if settings.block_nonskill_plugin_publish and not is_moderated_market_asset_type(rt):
         raise PublishError(
             code=403,
             error="plugin_type_publish_disabled",
             message=(
-                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-mcp；"
+                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / agent-mcp；"
                 "tools / mcp-stdio / restful-api 类型发布已关闭"
             ),
         )
@@ -898,7 +901,7 @@ def publish(
     existing_version = version_repo.get_version(asset_id=asset_id, version=version)
     is_skill_like_publish = is_skill_like_plugin_type(plugin_type)
     is_moderated_publish = is_moderated_market_asset_type(plugin_type)
-    # LLM 审查仅 Skill / SwarmSkill；三类 Agent 直接进审核（或系统身份免审）。
+    # LLM 审查仅 Skill / SwarmSkill；四类 Agent 直接进审核（或系统身份免审）。
     supports_system_skill_review = is_skill_like_publish
     needs_skill_review = bool(
         supports_system_skill_review and settings.skill_review_enabled and not is_system_admin_publisher
@@ -1603,7 +1606,7 @@ def list_plugins_service(
     market_public_scoped = repo.is_market_public_scoped_list(query, viewer)
 
     keyword = (query.search_keyword or "").strip()
-    # 默认仍只搜 skill/swarmskill（与原行为一致）；仅当显式检索三类新增智能体资产
+    # 默认仍只搜 skill/swarmskill（与原行为一致）；仅当显式检索四类新增智能体资产
     # 时才跳过该默认，避免扩大旧调用方的返回范围。
     if (
         not query.plugin_type
@@ -2683,7 +2686,7 @@ def moderate_skill_asset_service(
         raise PublishError(
             code=400,
             error="not_skill",
-            message="仅支持对 Skill / SwarmSkill / agent-plugin / agent-template / agent-mcp 类型资源进行审核",
+            message="仅支持对 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / agent-mcp 类型资源进行审核",
             error_code="SKILLHUB_PLUGIN_NOT_SKILL",
             error_class="validation",
         )
@@ -3273,7 +3276,12 @@ def _load_agent_package_profile_for_version(
     plugin_type: str | None,
 ) -> AgentPackageProfile | None:
     normalized = (plugin_type or "").strip().lower()
-    if normalized not in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP):
+    if normalized not in (
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    ):
         return None
     from plugins_market.core.cache import cache_get, cache_set  # noqa: PLC0415
 

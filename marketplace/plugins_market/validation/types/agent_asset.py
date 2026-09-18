@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Validation for wrapped JiuwenSwarm agent plugins and agent templates."""
+"""Validation for wrapped JiuwenSwarm agent plugins, templates, and groups."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from plugins_market.validation.constants import (
     PLUGIN_TAG_MAX_LEN,
     PLUGIN_YAML_DESCRIPTION_MAX_LEN,
     RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
 )
 from plugins_market.validation.content_security import (
@@ -209,6 +210,39 @@ def _validate_declared_subagents(entries: Any, *, error: str) -> None:
             _safe_relative_path(raw_dir, f"subagents[{index}].dir", error=error)
 
 
+def _validate_declared_agent_names(entries: Any, *, error: str) -> None:
+    if entries is None:
+        return
+    if not isinstance(entries, list):
+        _invalid(error, "manifest.agents 必须为数组")
+    for index, item in enumerate(entries):
+        if not isinstance(item, str) or not item.strip():
+            _invalid(error, f"manifest.agents[{index}] 必须为非空字符串")
+        name = item.strip()
+        if name in {".", ".."} or "/" in name or "\\" in name:
+            _invalid(error, f"manifest.agents[{index}] 不得包含路径分隔符")
+
+
+def _validate_declared_group_skills(entries: Any, *, error: str) -> None:
+    if entries is None:
+        return
+    if not isinstance(entries, list):
+        _invalid(error, "manifest.skills 必须为数组")
+    for index, item in enumerate(entries):
+        if isinstance(item, str):
+            name = item.strip()
+            reserved_or_empty = not name or name in {".", ".."}
+            has_path_sep = "/" in name or "\\" in name
+            if reserved_or_empty or has_path_sep:
+                _invalid(error, f"manifest.skills[{index}] 必须为非空技能名且不得含路径")
+            continue
+        if not isinstance(item, dict):
+            _invalid(error, f"manifest.skills[{index}] 必须为字符串或对象")
+        raw_dir = item.get("dir")
+        if isinstance(raw_dir, str) and raw_dir.strip():
+            _safe_relative_path(raw_dir, f"skills[{index}].dir", error=error)
+
+
 def _validate_agent_plugin_capabilities(manifest: dict[str, Any]) -> None:
     error = "invalid_agent_plugin_capability"
     for forbidden in ("persona", "agent_card", "model", "subagents", "memories", "rubrics"):
@@ -258,7 +292,13 @@ def validate_agent_asset_layout(
     manifest = _read_manifest(zf, manifest_original, counter, error=manifest_error)
     version = _required_string(manifest, "version", error=manifest_error)
     package_type = _required_string(manifest, "package_type", error=manifest_error)
-    expected_package_type = "plugin" if runtime_type == RUNTIME_AGENT_PLUGIN else "agent_template"
+    expected_package_type = {
+        RUNTIME_AGENT_PLUGIN: "plugin",
+        RUNTIME_AGENT_TEMPLATE: "agent_template",
+        RUNTIME_AGENT_GROUP: "agent_group",
+    }.get(runtime_type)
+    if expected_package_type is None:
+        _invalid("invalid_plugin_config", f"不支持的智能体资产类型：{runtime_type}")
     if package_type != expected_package_type:
         _invalid(
             manifest_error,
@@ -322,6 +362,23 @@ def validate_agent_asset_layout(
             localized_manifest_text(manifest.get("display_description")) or template_desc
         )
         asset_type = RUNTIME_AGENT_TEMPLATE
+    elif runtime_type == RUNTIME_AGENT_GROUP:
+        identity = _required_string(manifest, "name", error="invalid_manifest_json")
+        group_desc = _required_string(manifest, "description", error="invalid_manifest_json")
+        if identity != asset_name:
+            _invalid(
+                "invalid_manifest_json",
+                f"manifest.name {identity!r} 必须与 plugin.yaml.name {asset_name!r} 一致",
+            )
+        _validate_declared_agent_names(manifest.get("agents"), error="invalid_manifest_json")
+        _validate_declared_group_skills(manifest.get("skills"), error="invalid_skill_md")
+        display_name = (
+            localized_manifest_text(manifest.get("display_name")) or identity
+        )
+        short_desc = (
+            localized_manifest_text(manifest.get("display_description")) or group_desc
+        )
+        asset_type = RUNTIME_AGENT_GROUP
     else:  # defensive guard
         _invalid("invalid_plugin_config", f"不支持的智能体资产类型：{runtime_type}")
 

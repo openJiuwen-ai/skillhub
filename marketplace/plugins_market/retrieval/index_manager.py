@@ -22,7 +22,7 @@ PLUGIN_GROUP = "plugin"
 
 # Storage path pattern: obs:// (OBS) or s3:// (MinIO) prefix
 _OBS_ASSET_ID_RE = re.compile(
-    r'^(?:obs|s3)://[^/]+/(?:skills|plugins|agent-plugins|agent-templates|agent-mcps)/([^/]+)/([^/]+)/'
+    r'^(?:obs|s3)://[^/]+/(?:skills|plugins|agent-plugins|agent-templates|agent-groups|agent-mcps)/([^/]+)/([^/]+)/'
 )
 
 

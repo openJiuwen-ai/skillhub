@@ -192,6 +192,17 @@ function AgentTemplateGlyph({ className = '' }: { className?: string }) {
   )
 }
 
+function AgentGroupGlyph({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <circle cx="9" cy="9.2" r="2.3" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M5 17.2c.5-2.3 2.1-3.5 4-3.5s3.5 1.2 4 3.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <circle cx="15.4" cy="9.5" r="2" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12.6 17.2c.5-1.8 1.8-2.8 3.3-2.8 1.5 0 2.9 1 3.4 2.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 function AgentMcpGlyph({ className = '' }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
@@ -1747,6 +1758,11 @@ export default function PluginMarketPage() {
                     value: 'agent-template' as const,
                     label: t('plugins.marketTypeLabel.agent-template'),
                     icon: AgentTemplateGlyph,
+                  },
+                  {
+                    value: 'agent-group' as const,
+                    label: t('plugins.marketTypeLabel.agent-group'),
+                    icon: AgentGroupGlyph,
                   },
                 ]).map(option => {
                   const active = activeType === option.value

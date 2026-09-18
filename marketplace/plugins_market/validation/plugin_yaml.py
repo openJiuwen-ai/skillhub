@@ -26,6 +26,7 @@ from plugins_market.validation.constants import (
     PLUGIN_YAML_DESCRIPTION_MAX_LEN,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_MCP,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_SKILL,
     SKILL_NAME_MAX_LEN,
@@ -281,6 +282,7 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
         RUNTIME_SKILL,
         RUNTIME_AGENT_PLUGIN,
         RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
     ):
         _validate_compatibility_python(data)

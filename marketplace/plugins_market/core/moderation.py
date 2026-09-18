@@ -7,6 +7,7 @@ from __future__ import annotations
 from plugins_market.validation.constants import (
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
 )
 
@@ -23,11 +24,12 @@ AGENT_ASSET_PLUGIN_TYPES = frozenset(
     {
         RUNTIME_AGENT_PLUGIN,
         RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
     }
 )
 
-# 走审核 / 公开可见性聚合的市场资产类型 = skill-like ∪ agent 三类。
+# 走审核 / 公开可见性聚合的市场资产类型 = skill-like ∪ agent 四类。
 # 不含 tools / mcp-stdio / restful-api（历史插件，仍按「非 moderated」直通）。
 MODERATED_MARKET_ASSET_TYPES = SKILL_LIKE_PLUGIN_TYPES | AGENT_ASSET_PLUGIN_TYPES
 
@@ -51,7 +53,7 @@ def is_wrapped_agent_asset_type(plugin_type: str | None) -> bool:
 
 
 def is_moderated_market_asset_type(plugin_type: str | None) -> bool:
-    """是否参与上架审核与公开可见性闸门（Skill/SwarmSkill + 三类 Agent）。"""
+    """是否参与上架审核与公开可见性闸门（Skill/SwarmSkill + Agent 资产）。"""
     return normalize_market_plugin_type(plugin_type) in MODERATED_MARKET_ASSET_TYPES
 
 
@@ -61,7 +63,8 @@ def moderated_asset_type_label(plugin_type: str | None) -> str:
         "skill": "Skill",
         "swarmskill": "SwarmSkill",
         RUNTIME_AGENT_PLUGIN: "插件",
-        RUNTIME_AGENT_TEMPLATE: "专家/专家团",
+        RUNTIME_AGENT_TEMPLATE: "专家",
+        RUNTIME_AGENT_GROUP: "专家团",
         RUNTIME_AGENT_MCP: "连接器",
     }
     return labels.get(normalize_market_plugin_type(plugin_type), "市场资产")

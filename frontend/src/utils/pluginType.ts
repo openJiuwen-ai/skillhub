@@ -4,10 +4,15 @@ export const PRIMARY_SKILL_PLUGIN_TYPE = 'swarmskill'
 export const SKILL_LIKE_PLUGIN_TYPES = ['skill', 'swarmskill'] as const
 export const SKILL_LIKE_QUERY_VALUE = SKILL_LIKE_PLUGIN_TYPES.join(',')
 
-export const AGENT_ASSET_PLUGIN_TYPES = ['agent-plugin', 'agent-mcp', 'agent-template'] as const
+export const AGENT_ASSET_PLUGIN_TYPES = [
+  'agent-plugin',
+  'agent-mcp',
+  'agent-template',
+  'agent-group',
+] as const
 export const AGENT_ASSET_QUERY_VALUE = AGENT_ASSET_PLUGIN_TYPES.join(',')
 
-/** 市场五个平级 Tab（与后端 MODERATED_MARKET_ASSET_TYPES 对齐，顺序即 Tab / 发布类型下拉顺序）。 */
+/** 市场六个平级 Tab（与后端 MODERATED_MARKET_ASSET_TYPES 对齐，顺序即 Tab / 发布类型下拉顺序）。 */
 export const MARKET_TAB_PLUGIN_TYPES = [
   'swarmskill',
   'skill',
@@ -72,7 +77,7 @@ export function getPrimarySkillPluginType(): SkillLikePluginType {
   return PRIMARY_SKILL_PLUGIN_TYPE
 }
 
-/** 详情页路由：Skill/SwarmSkill → /skills/:id；三类 Agent → /assets/:id。 */
+/** 详情页路由：Skill/SwarmSkill → /skills/:id；Agent 资产 → /assets/:id。 */
 export function assetDetailPath(assetId: string, pluginType?: string | null): string {
   const id = encodeURIComponent(assetId)
   if (isAgentAssetPluginType(pluginType)) {

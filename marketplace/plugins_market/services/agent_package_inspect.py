@@ -150,6 +150,7 @@ def _extract_plugin_template_profile(
     prefix: str,
     package_type: str,
 ) -> dict[str, Any]:
+    """Read capabilities from plugin / agent_template / agent_group manifests."""
     capabilities: list[dict[str, str]] = []
     _append_skill_capabilities(zf, names, prefix, manifest.get("skills"), capabilities)
 
@@ -196,12 +197,46 @@ def _extract_plugin_template_profile(
                 }
             )
 
+    agents = manifest.get("agents")
+    if isinstance(agents, list):
+        for index, item in enumerate(agents):
+            if not isinstance(item, str) or not item.strip():
+                continue
+            agent_name = item.strip()
+            capabilities.append(
+                {
+                    "kind": "agent",
+                    "id": agent_name,
+                    "name": agent_name,
+                    "description": "",
+                }
+            )
+
+    skills = manifest.get("skills")
+    if isinstance(skills, list):
+        for index, item in enumerate(skills):
+            if not isinstance(item, str) or not item.strip():
+                continue
+            skill_name = item.strip()
+            capabilities.append(
+                {
+                    "kind": "skill",
+                    "id": skill_name,
+                    "name": skill_name,
+                    "description": "",
+                }
+            )
+
     persona_markdown: str | None = None
     persona = manifest.get("persona")
     if isinstance(persona, dict):
         persona_dir = persona.get("dir")
         if isinstance(persona_dir, str) and persona_dir.strip():
             persona_markdown = _read_persona_markdown(zf, names, prefix, persona_dir)
+    if not persona_markdown:
+        instruction = manifest.get("instruction")
+        if isinstance(instruction, str) and instruction.strip():
+            persona_markdown = instruction.strip()
 
     quick_inputs: list[str] = []
     raw_quick = manifest.get("quick_inputs")
@@ -280,7 +315,7 @@ def _extract_mcp_profile(
 
 
 def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
-    """Parse inner manifest.json for agent-plugin / agent-template / agent-mcp detail display."""
+    """Parse inner manifest.json for wrapped Agent asset detail display."""
     names = [info.filename for info in zf.infolist() if not info.is_dir()]
     manifest_member = _find_inner_manifest_member(names)
     if not manifest_member:
@@ -298,7 +333,7 @@ def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
     package_type = manifest.get("package_type")
     prefix = _payload_prefix(manifest_member)
 
-    if package_type in ("plugin", "agent_template"):
+    if package_type in ("plugin", "agent_template", "agent_group"):
         return _extract_plugin_template_profile(zf, names, manifest, prefix, package_type)
 
     if package_type == "mcp":

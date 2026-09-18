@@ -9,6 +9,7 @@ const PUBLISH_TYPE_LABEL_KEYS: Record<string, string> = {
   swarmskill: 'publish.typeSwarmSkill',
   'agent-plugin': 'publish.typeAgentPlugin',
   'agent-template': 'publish.typeAgentTemplate',
+  'agent-group': 'publish.typeAgentGroup',
   'agent-mcp': 'publish.typeAgentMcp',
 }
 
@@ -53,6 +54,14 @@ function agentPluginLinkKeys(type: PublishDrawerType): {
       metadataLocked: 'publish.fieldMetadataLockedHintAgentTemplate',
     }
   }
+  if (type === 'agent-group') {
+    return {
+      label: 'publish.fieldPluginIdAgentGroup',
+      hint: 'publish.fieldPluginIdHelpAgentGroup',
+      newOption: 'publish.pluginIdNewOptionAgentGroup',
+      metadataLocked: 'publish.fieldMetadataLockedHintAgentGroup',
+    }
+  }
   if (type === 'agent-mcp') {
     return {
       label: 'publish.fieldPluginIdAgentMcp',
@@ -76,15 +85,19 @@ export function resolvePublishFormFieldLabels(type: PublishDrawerType, t: TFunct
     const pkgNameKey =
       type === 'agent-template'
         ? 'publish.fieldPkgNameAgentTemplate'
-        : type === 'agent-mcp'
-          ? 'publish.fieldPkgNameAgentMcp'
-          : 'publish.fieldPkgNameAgentPlugin'
+        : type === 'agent-group'
+          ? 'publish.fieldPkgNameAgentGroup'
+          : type === 'agent-mcp'
+            ? 'publish.fieldPkgNameAgentMcp'
+            : 'publish.fieldPkgNameAgentPlugin'
     const placeholderKey =
       type === 'agent-template'
         ? 'publish.namePlaceholderAgentTemplate'
-        : type === 'agent-mcp'
-          ? 'publish.namePlaceholderAgentMcp'
-          : 'publish.namePlaceholderAgentPlugin'
+        : type === 'agent-group'
+          ? 'publish.namePlaceholderAgentGroup'
+          : type === 'agent-mcp'
+            ? 'publish.namePlaceholderAgentMcp'
+            : 'publish.namePlaceholderAgentPlugin'
     return {
       pkgName: t(pkgNameKey),
       pkgNameHelp: t('publish.fieldPkgNameAgentHelp'),
