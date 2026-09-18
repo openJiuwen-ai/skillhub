@@ -185,6 +185,36 @@ def test_raw_agent_template_is_wrapped_from_manifest_name(tmp_path: Path) -> Non
         package.unlink(missing_ok=True)
 
 
+def test_raw_agent_group_is_wrapped_from_manifest_name(tmp_path: Path) -> None:
+    entry = tmp_path / "sales-team"
+    entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "version": "1.0.0",
+                "package_type": "agent_group",
+                "name": "sales-team",
+                "description": "Sales expert team",
+                "display_name": {"zh": "销售专家团"},
+                "agents": ["leader", "analyst"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package, name, version = _normalize(entry)
+    try:
+        plugin_yaml = yaml.safe_load(_zip_text(package, "/plugin.yaml"))
+        metadata = extract_plugin_metadata(package.read_bytes())
+        assert (name, version) == ("sales-team", "1.0.0")
+        assert plugin_yaml["runtime"]["type"] == "agent-group"
+        assert plugin_yaml["display_name"] == "销售专家团"
+        assert metadata["asset_type"] == "agent-group"
+        assert metadata["plugin_type"] == "agent-group"
+    finally:
+        package.unlink(missing_ok=True)
+
+
 def test_raw_agent_mcp_is_wrapped_from_entry_name_and_overrides(tmp_path: Path) -> None:
     entry = tmp_path / "amap"
     entry.mkdir()

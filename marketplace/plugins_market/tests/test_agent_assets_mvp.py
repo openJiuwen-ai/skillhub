@@ -16,7 +16,11 @@ import yaml
 
 from plugins_market.core.errors import PublishError
 from plugins_market.imports.skill_import_service import _mcp_builtin_index_entries
-from plugins_market.validation.constants import RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE
+from plugins_market.validation.constants import (
+    RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_GROUP,
+    RUNTIME_AGENT_TEMPLATE,
+)
 from plugins_market.validation.types.agent_asset import AgentAssetOuterRef, validate_agent_asset_layout
 from plugins_market.validation.types.agent_mcp import validate_agent_mcp_layout
 from plugins_market.validation.zip_utils import DecompressCounter
@@ -65,6 +69,21 @@ def _validate_template(content: bytes, name: str) -> dict:
                 name=name,
                 version="1.0.0",
                 runtime_type=RUNTIME_AGENT_TEMPLATE,
+            ),
+            counter,
+        )
+
+
+def _validate_group(content: bytes, name: str) -> dict:
+    counter = DecompressCounter()
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        return validate_agent_asset_layout(
+            zf,
+            AgentAssetOuterRef(
+                prefix=f"{name}/",
+                name=name,
+                version="1.0.0",
+                runtime_type=RUNTIME_AGENT_GROUP,
             ),
             counter,
         )
@@ -326,6 +345,62 @@ def test_agent_template_without_persona_is_allowed() -> None:
     )
     result = _validate_template(content, "coach")
     assert result["asset_type"] == "agent-template"
+
+
+def _group_manifest(**extra: object) -> str:
+    manifest: dict[str, object] = {
+        "version": "1.0.0",
+        "package_type": "agent_group",
+        "name": "sales-team",
+        "description": "Sales expert team",
+        "display_name": {"zh": "销售专家团"},
+        "instruction": "协调销售分析",
+        "agents": ["leader", "analyst"],
+        "skills": ["deal-review"],
+    }
+    manifest.update(extra)
+    return json.dumps(manifest)
+
+
+def test_agent_group_without_agents_is_allowed() -> None:
+    content = _build_wrapped_zip(
+        "sales-team",
+        "agent-group",
+        {
+            "manifest.json": json.dumps(
+                {
+                    "version": "1.0.0",
+                    "package_type": "agent_group",
+                    "name": "sales-team",
+                    "description": "Sales expert team",
+                }
+            ),
+        },
+    )
+    result = _validate_group(content, "sales-team")
+    assert result["asset_type"] == "agent-group"
+
+
+def test_agent_group_allows_declared_agents_without_member_dirs() -> None:
+    content = _build_wrapped_zip(
+        "sales-team",
+        "agent-group",
+        {"manifest.json": _group_manifest()},
+    )
+    result = _validate_group(content, "sales-team")
+    assert result["asset_type"] == "agent-group"
+    assert result["display_name"] == "销售专家团"
+
+
+def test_agent_group_rejects_agent_template_package_type() -> None:
+    content = _build_wrapped_zip(
+        "sales-team",
+        "agent-group",
+        {"manifest.json": _template_manifest(name="sales-team")},
+    )
+    with pytest.raises(PublishError) as exc_info:
+        _validate_group(content, "sales-team")
+    assert exc_info.value.detail["error"] == "invalid_manifest_json"
 
 
 def test_agent_mcp_rejects_missing_manifest() -> None:

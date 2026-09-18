@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Retrieval configuration for the three wrapped Agent asset types."""
+"""Retrieval configuration for wrapped Agent asset types."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from plugins_market.validation.constants import (
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
 )
 
@@ -28,6 +29,7 @@ class AgentRetrievalGroup:
 AGENT_RETRIEVAL_GROUPS = (
     AgentRetrievalGroup(RUNTIME_AGENT_PLUGIN, "agent-plugins", "agent-plugins-index", "agent-plugins-tag"),
     AgentRetrievalGroup(RUNTIME_AGENT_TEMPLATE, "agent-templates", "agent-templates-index", "agent-templates-tag"),
+    AgentRetrievalGroup(RUNTIME_AGENT_GROUP, "agent-groups", "agent-groups-index", "agent-groups-tag"),
     AgentRetrievalGroup(RUNTIME_AGENT_MCP, "agent-mcps", "agent-mcps-index", "agent-mcps-tag"),
 )
 

@@ -1402,7 +1402,7 @@ async def get_artifact_download(
         )
 
     # 审计：下载是系统对外提供数据出口，需长期保留下载记录。
-    # resource_type 依资产实际 plugin_type 记录；三类新增资产保留精确 type。
+    # resource_type 依资产实际 plugin_type 记录；四类 Agent 资产保留精确 type。
     # 团队技能下载会被统计成 skill，会污染 resource_type 维度下的“使用量”展示。
     # 失败下载（404/403 等）当前由 GET 路径外，不在 audit_failed 覆盖范围内，暂不补录失败；
     # 若未来需要追踪未授权访问尝试，可在上方 except 分支前补一条 FAILED 审计。

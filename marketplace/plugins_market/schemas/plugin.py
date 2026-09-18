@@ -183,7 +183,7 @@ class PluginVersionDeleteData(BaseModel):
 class AssetVersionDeleteData(PluginVersionDeleteData):
     """Delete response for agent assets, retaining their exact asset type."""
 
-    asset_type: Literal["agent-plugin", "agent-template", "agent-mcp"]
+    asset_type: Literal["agent-plugin", "agent-template", "agent-group", "agent-mcp"]
 
 
 class PluginTemplatePresignData(BaseModel):
@@ -291,7 +291,7 @@ class PluginVersionDetail(BaseModel):
     )
     agent_package_profile: Optional[AgentPackageProfile] = Field(
         None,
-        description="agent-plugin / agent-template / agent-mcp 内层 manifest 只读摘要",
+        description="agent-plugin / agent-template / agent-group / agent-mcp 内层 manifest 只读摘要",
     )
 
 
@@ -353,7 +353,7 @@ class PluginListQuery(BaseModel):
     )
     search_keyword: Optional[str] = Field(
         None,
-        description="搜索关键词；Skill/SwarmSkill 与三类 Agent 资产使用各自独立的检索索引",
+        description="搜索关键词；Skill/SwarmSkill 与四类 Agent 资产使用各自独立的检索索引",
     )
     moderation_status: Optional[str] = Field(
         None,

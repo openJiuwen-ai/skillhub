@@ -49,7 +49,7 @@ class ViewerContext:
             return "admin"
         if asset.publisher_id and self.user_id and asset.publisher_id == self.user_id:
             return "owner"
-        # 组群授权仅 Skill / SwarmSkill；Agent 三类不走 group ACL。
+        # 组群授权仅 Skill / SwarmSkill；Agent 四类不走 group ACL。
         if db is not None and self.user_id and is_skill_like_plugin_type(asset.plugin_type):
             grant_repo = MarketGroupSkillGrantRepository(db)
             if grant_repo.user_has_asset_grant(user_id=self.user_id, asset_id=asset.asset_id):

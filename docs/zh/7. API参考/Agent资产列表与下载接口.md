@@ -6,7 +6,7 @@
 
 ## 列表 `GET /plugins`
 
-**必传：** `plugin_type=agent-plugin` | `agent-template` | `agent-mcp`（可逗号多值）
+**必传：** `plugin_type=agent-plugin` | `agent-template` | `agent-group` | `agent-mcp`（可逗号多值）
 
 | 参数 | 说明 |
 |------|------|
@@ -15,7 +15,7 @@
 | `moderation_status` | 公开市场用 `APPROVED` |
 | `asset_id` | 精确查单条 |
 
-**列表项主要字段：** `asset_id`、`name`、`display_name`、`short_desc`、`plugin_type`、`asset_type`、`tags`、`icon_uri`（专家/专家团、插件或 MCP 有市场图标时非空）、`latest_version`
+**列表项主要字段：** `asset_id`、`name`、`display_name`、`short_desc`、`plugin_type`、`asset_type`、`tags`、`icon_uri`（专家、专家团、插件或 MCP 有市场图标时非空）、`latest_version`
 
 ## 版本详情 `GET /plugins/{asset_id}/versions/{version}`
 
@@ -27,21 +27,21 @@
 |------|------|
 | `display_name` / `short_desc` | 列表与详情标题、摘要 |
 | `detail_desc` | 内层 `README.md` 正文（无则为空） |
-| `icon_uri` | 市场图标预签名 URL（专家/专家团与插件：`manifest.avatar` 或外层 `icon.png`；MCP：`manifest.icon`） |
+| `icon_uri` | 市场图标预签名 URL（专家、专家团与插件：`manifest.avatar` 或外层 `icon.png`；MCP：`manifest.icon`） |
 | `tags` | 市场标签 |
 
 **内层摘要 `agent_package_profile`（只读，来自内层 `manifest.json`）：**
 
-| 字段 | plugin | template | mcp |
-|------|:------:|:--------:|:---:|
-| `package_type` | `plugin` | `agent_template` | `mcp` |
-| `category` / `source` | ✓ | ✓ | ✓ |
-| `integration_type` | — | — | ✓ |
-| `credentials_type` | — | — | ✓ |
-| `persona_markdown` | — | ✓ | — |
-| `quick_inputs` | ✓ | ✓ | ✓（来自 manifest `examples`） |
-| `capabilities[]` | skill/tool/rail/mcp/subagent | 同左 | skill/integration |
-| `manifest_tags` | ✓ | ✓ | ✓ |
+| 字段 | plugin | template | group | mcp |
+|------|:------:|:--------:|:----:|:---:|
+| `package_type` | `plugin` | `agent_template` | `agent_group` | `mcp` |
+| `category` / `source` | ✓ | ✓ | ✓ | ✓ |
+| `integration_type` | — | — | — | ✓ |
+| `credentials_type` | — | — | — | ✓ |
+| `persona_markdown` | — | ✓ | ✓（`instruction`） | — |
+| `quick_inputs` | ✓ | ✓ | ✓ | ✓（来自 manifest `examples`） |
+| `capabilities[]` | skill/tool/rail/mcp/subagent | 同左 | agent/skill | skill/integration |
+| `manifest_tags` | ✓ | ✓ | ✓ | ✓ |
 
 `capabilities[]` 每项：`kind`、`id`、`name`、`description`。
 

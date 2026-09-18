@@ -23,6 +23,7 @@ from plugins_market.validation.constants import (
     PLUGIN_YAML_DESCRIPTION_MAX_LEN,
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_SKILL,
     SKILL_DESC_MAX_LEN,
@@ -90,6 +91,7 @@ _ADMIN_IMPORT_RUNTIME_TYPES = {
     RUNTIME_SKILL,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_MCP,
 }
 
@@ -128,7 +130,7 @@ def _patch_native_agent_manifest(
     manifest["version"] = version
     if runtime_type == RUNTIME_AGENT_PLUGIN:
         manifest["id"] = name
-    elif runtime_type == RUNTIME_AGENT_TEMPLATE:
+    elif runtime_type in (RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
         manifest["name"] = name
     elif runtime_type == RUNTIME_AGENT_MCP:
         manifest["id"] = name
@@ -150,7 +152,12 @@ def _build_native_agent_staging(
     manifest: dict[str, Any] | None = None,
     allow_publish_overrides: bool = False,
 ) -> tuple[str, str]:
-    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP):
+    if runtime_type in (
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    ):
         if manifest is None:
             manifest = load_json_object_file(
                 entry / "manifest.json", label="manifest.json"
@@ -204,7 +211,12 @@ def _build_native_agent_staging(
 
     staging.mkdir(parents=True, exist_ok=True)
     shutil.copytree(entry, staging / name, dirs_exist_ok=True)
-    if runtime_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_MCP):
+    if runtime_type in (
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    ):
         _patch_native_agent_manifest(
             staging / name,
             runtime_type=runtime_type,
@@ -243,6 +255,7 @@ def detect_import_entry_type(entry: Path) -> str | None:
         manifest_type = {
             "plugin": RUNTIME_AGENT_PLUGIN,
             "agent_template": RUNTIME_AGENT_TEMPLATE,
+            "agent_group": RUNTIME_AGENT_GROUP,
             "mcp": RUNTIME_AGENT_MCP,
         }.get(package_type)
         if manifest_type is not None:
@@ -527,7 +540,11 @@ def entry_to_publish_zip(
                         data["version"] = ov
                         py.write_text(dump_plugin_yaml(data), encoding="utf-8")
                         version = ov
-            elif entry_type in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+            elif entry_type in (
+                RUNTIME_AGENT_PLUGIN,
+                RUNTIME_AGENT_TEMPLATE,
+                RUNTIME_AGENT_GROUP,
+            ):
                 if entry_overrides.get("version") not in (None, ""):
                     if not allow_publish_overrides:
                         raise ValueError(

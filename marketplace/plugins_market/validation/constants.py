@@ -72,6 +72,7 @@ RUNTIME_MCP_STDIO = "mcp-stdio"
 RUNTIME_RESTFUL_API = "restful-api"
 RUNTIME_AGENT_PLUGIN = "agent-plugin"
 RUNTIME_AGENT_TEMPLATE = "agent-template"
+RUNTIME_AGENT_GROUP = "agent-group"
 RUNTIME_AGENT_MCP = "agent-mcp"
 SUPPORTED_RUNTIME_TYPES = {
     RUNTIME_SKILL,
@@ -80,8 +81,17 @@ SUPPORTED_RUNTIME_TYPES = {
     RUNTIME_RESTFUL_API,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_MCP,
 }
+WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
+    {
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    }
+)
 
 # ---------------------------------------------------------------------------
 # File / zip size limits

@@ -94,7 +94,9 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
         ? 'agent-plugin'
         : packageType === 'agent_template'
           ? 'agent-template'
-          : '',
+          : packageType === 'agent_group'
+            ? 'agent-group'
+            : '',
     )
     if (!isAgentAssetPluginType(pluginType)) {
       throw new Error('AGENT_ZIP_UNSUPPORTED_TYPE')

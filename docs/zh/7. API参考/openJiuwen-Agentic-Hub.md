@@ -45,7 +45,7 @@
 
 | 方法 | 路径 | 鉴权 | 摘要 |
 |------|------|------|------|
-| POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；Skill / SwarmSkill / 三类 Agent 均支持；请求头 **`X-Checksum-SHA256`** | 发布市场资产（multipart zip） [#核心资源] |
+| POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；Skill / SwarmSkill / 四类 Agent 均支持；请求头 **`X-Checksum-SHA256`** | 发布市场资产（multipart zip） [#核心资源] |
 | GET | `/api/v1/plugins` | **无需**（可选 Bearer 或 X-System-Token 用于个性化展示） | 市场资产分页列表；支持 `asset_type` / `plugin_type` 与标签过滤 [#核心资源] |
 | GET | `/api/v1/plugins/tags` | **无需** | 按 `plugin_type` 聚合市场资产标签 `(tag, count)` [#核心资源] |
 | GET | `/api/v1/plugins/publish-template` | Bearer **`或`** `X-System-Token` | 发布页 Skill 模板 zip 预签名 GET [#核心资源] |
@@ -54,7 +54,7 @@
 | DELETE | `/api/v1/plugins/{asset_id}/versions/{version}` | Bearer **`或`** `X-System-Token` | 删除指定版本 ⚠️`version=all` 将**不可逆**删除该资产全部版本及对象存储物理文件 [#核心资源] |
 | GET | `/api/v1/artifacts/{id}` | **可选** Bearer 或 X-System-Token（用于识别拉取方；无效或冲突凭证按匿名） | 下载信息（预签名 URL 等，`version` 可选） [#核心资源] |
 | POST | `/api/v1/plugins/skill-import` | **仅** `X-System-Token`；请求头 **`X-Checksum-SHA256`** | 按原有语义批量导入 Skill（multipart zip 集合包） [#核心资源] |
-| POST | `/api/v1/plugins/asset-import` | **仅** `X-System-Token`；请求头 **`X-Checksum-SHA256`** | 批量导入 Skill 与三类 agent 资产（multipart zip 集合包） [#核心资源] |
+| POST | `/api/v1/plugins/asset-import` | **仅** `X-System-Token`；请求头 **`X-Checksum-SHA256`** | 批量导入 Skill 与四类 Agent 资产（multipart zip 集合包） [#核心资源] |
 
 #### Git 源管理（`ResponseModel`）
 
@@ -247,10 +247,10 @@ paths:
       summary: 发布市场资产
       description: |
         上传并发布单个市场资产。鉴权需二选一：Authorization Bearer 或 X-System-Token（必须且只能提供一个）。
-        Skill / SwarmSkill / 三类 Agent 均支持 Bearer 或 X-System-Token（必须且仅能一种）。
+        Skill / SwarmSkill / 四类 Agent 均支持 Bearer 或 X-System-Token（必须且仅能一种）。
         普通用户发布 Agent 资产进入审核；系统管理员可跳过。服务端根据包内 plugin.yaml.runtime.type
         与内层原生包派生 asset_type / plugin_type，客户端不单独传类型字段。
-        visibility=private 对 Skill 与三类 agent 资产均生效，仅发布者和系统管理员可查看详情或下载，且不会进入公开列表。
+        visibility=private 对 Skill 与四类 Agent 资产均生效，仅发布者和系统管理员可查看详情或下载，且不会进入公开列表。
       operationId: publishSkill
       tags:
         - Skill 管理
@@ -513,7 +513,7 @@ paths:
       summary: 获取市场资产列表
       description: |
         支持分页、筛选与排序。不传 asset_type / plugin_type 时保持原行为，仅查询 skill、swarmskill。
-        Skill / Swarm Skill 的 search_keyword 走语义检索；agent-plugin、agent-template、agent-mcp 固定走数据库关键词匹配。
+        Skill / Swarm Skill 的 search_keyword 走语义检索；agent-plugin、agent-template、agent-group、agent-mcp 固定走数据库关键词匹配。
         列表项 `items[]` 中除 `latest_version` 外，还提供 **`all_versions`**：该资产在 `market_asset_versions` 中的全部版本号，
         按 `create_time`、`version` **升序**（发布时间线从早到晚）；无版本记录时为 `[]`。
       operationId: listSkills
@@ -559,7 +559,7 @@ paths:
         - name: asset_type
           in: query
           required: false
-          description: 资产大类；可传 plugin、agent-plugin、agent-template、agent-mcp
+          description: 资产大类；可传 plugin、agent-plugin、agent-template、agent-group、agent-mcp
           schema:
             type: string
         - name: publisher_id
@@ -583,7 +583,7 @@ paths:
         - name: plugin_type
           in: query
           required: false
-          description: 插件运行类型（精确匹配，支持 skill、swarmskill、agent-plugin、agent-template、agent-mcp；兼容旧别名 teamskills）。当 asset_type、plugin_type、plugin_type_exclude 都不传时，服务端默认按 skill,swarmskill 过滤。
+          description: 插件运行类型（精确匹配，支持 skill、swarmskill、agent-plugin、agent-template、agent-group、agent-mcp；兼容旧别名 teamskills）。当 asset_type、plugin_type、plugin_type_exclude 都不传时，服务端默认按 skill,swarmskill 过滤。
           schema:
             type: string
         - name: plugin_type_exclude
@@ -597,7 +597,7 @@ paths:
           required: false
           description: |
             搜索关键词。Skill / Swarm Skill 走语义检索；检索不可用时回退 DB 子串匹配，检索确认无命中时返回空页。
-            agent-plugin、agent-template、agent-mcp 不进入语义检索，固定按名称、描述、标签做数据库关键词匹配。
+            agent-plugin、agent-template、agent-group、agent-mcp 不进入语义检索，固定按名称、描述、标签做数据库关键词匹配。
           schema:
             type: string
         - name: moderation_status
@@ -689,7 +689,7 @@ paths:
         - name: plugin_type
           in: query
           required: false
-          description: 限定插件运行类型（skill / swarmskill / agent-plugin / agent-template / agent-mcp），缺省为全部类型
+          description: 限定插件运行类型（skill / swarmskill / agent-plugin / agent-template / agent-group / agent-mcp），缺省为全部类型
           schema:
             type: string
             example: skill
@@ -955,7 +955,7 @@ paths:
     post:
       summary: 批量导入市场资产
       description: |
-        上传市场资产集合包（ZIP），支持 Skill、agent-plugin、agent-template、agent-mcp 混合导入，也支持整包即单个资产。
+        上传市场资产集合包（ZIP），支持 Skill、agent-plugin、agent-template、agent-group、agent-mcp 混合导入，也支持整包即单个资产。
         仅支持 X-System-Token；与 skill-import 使用独立限流桶，不改变旧 Skill 导入接口的包布局、错误码或响应结构。
         根级可选 manifest.json / index.json；各条目的识别、包装和校验规则与单资产 POST /plugins 一致。
         entries.version 仅支持 Skill 和裸 agent-mcp；其他 agent 条目传入该覆盖值会返回清单错误。index.json.mcps 的 source 不得重复。
@@ -1043,7 +1043,7 @@ paths:
                       code: 400
                       data: null
                       error: "invalid_asset_bundle"
-                      message: "无有效资产目录（支持 Skill/TeamSkill、agent-plugin、agent-template、agent-mcp）"
+                      message: "无有效资产目录（支持 Skill/TeamSkill、agent-plugin、agent-template、agent-group、agent-mcp）"
                 manifest_invalid:
                   summary: 根级清单结构非法
                   value:
@@ -1289,7 +1289,7 @@ paths:
       summary: 获取某个版本的市场资产详情
       description: |
         不进行强制 token 校验。可选携带 Authorization Bearer 或 X-System-Token，用于可见性和审核权限判断；无效或同时提供时按匿名访问。
-        响应 data 始终返回 asset_type / plugin_type；三类 agent 资产的两个字段同值。
+        响应 data 始终返回 asset_type / plugin_type；四类 Agent 资产的两个字段同值。
       operationId: getSkillVersionDetail
       tags:
         - Skill 管理
@@ -1348,7 +1348,7 @@ paths:
       summary: 删除某个版本的市场资产
       description: |
         鉴权：Authorization Bearer 或 X-System-Token 二选一（必须且只能提供一个）。
-        支持 Skill、普通插件以及 agent-plugin、agent-template、agent-mcp。
+        支持 Skill、普通插件以及 agent-plugin、agent-template、agent-group、agent-mcp。
         agent 资产的响应 data 会额外返回精确的 asset_type，原 Skill 删除响应结构不变。
         ⚠️ `version=all` 将不可逆删除该资产全部版本及对象存储（OSS/S3）物理文件，请谨慎调用。
       operationId: deleteSkillVersion
@@ -1419,8 +1419,8 @@ paths:
                         description: 删除前抓拍的资产展示名称，兼容旧审计字段命名
                       asset_type:
                         type: string
-                        enum: [agent-plugin, agent-template, agent-mcp]
-                        description: 仅删除三类 agent 资产时返回
+                        enum: [agent-plugin, agent-template, agent-group, agent-mcp]
+                        description: 仅删除四类 Agent 资产时返回
         '401':
           description: 未授权 / token 无效
         '403':
@@ -1689,7 +1689,7 @@ paths:
       summary: 获取市场资产下载链接
       description: |
         根据市场资产 ID 获取下载链接，支持指定版本下载。不指定版本时返回最新可见版本。可选携带 Authorization Bearer 或 X-System-Token 识别下载方；无效或同时提供时按匿名访问。
-        is_cli_download=true 返回完整市场包装 zip；false 返回 raw.zip：Skill 为 SKILL.md 所在目录内容，三类 agent 资产为剥离外层 plugin.yaml 后的原生内层包。
+        is_cli_download=true 返回完整市场包装 zip；false 返回 raw.zip：Skill 为 SKILL.md 所在目录内容，四类 Agent 资产为剥离外层 plugin.yaml 后的原生内层包。
         响应 data 返回 asset_type / plugin_type，供客户端识别实际资产类型。
       operationId: downloadSkill
       tags:
@@ -2569,7 +2569,7 @@ components:
               description: 通用市场资产 ID；与 plugin_id 同值
             asset_type:
               type: string
-              description: 资产大类；普通 Skill/插件为 plugin，三类 agent 资产为对应 agent-* 值
+              description: 资产大类；普通 Skill/插件为 plugin，四类 Agent 资产为对应 agent-* 值
             name:
               type: string
               description: 资产名称
@@ -2939,7 +2939,7 @@ components:
           description: 资产 ID
         asset_type:
           type: string
-          description: 资产大类；三类 agent 资产返回对应 agent-* 值
+          description: 资产大类；四类 Agent 资产返回对应 agent-* 值
         name:
           type: string
           description: 资产名称
@@ -2959,7 +2959,7 @@ components:
         plugin_type:
           type: string
           nullable: true
-          description: 资产具体运行类型，如 skill、swarmskill、agent-plugin、agent-template、agent-mcp
+          description: 资产具体运行类型，如 skill、swarmskill、agent-plugin、agent-template、agent-group、agent-mcp
 
     PluginTemplatePresignData:
       type: object
@@ -3176,7 +3176,7 @@ components:
             asset_type:
               type: string
               nullable: true
-              description: 资产大类，如 plugin、agent-plugin、agent-template、agent-mcp
+              description: 资产大类，如 plugin、agent-plugin、agent-template、agent-group、agent-mcp
             plugin_type:
               type: string
               nullable: true

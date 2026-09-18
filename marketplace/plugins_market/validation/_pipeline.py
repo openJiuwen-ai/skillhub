@@ -15,6 +15,7 @@ from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_MCP,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_MCP_STDIO,
     RUNTIME_RESTFUL_API,
@@ -219,7 +220,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             detail_desc = readme_raw.decode("utf-8", errors="replace")
             icon_bytes = layout["icon_bytes"]
 
-        elif rt in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE):
+        elif rt in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
             layout = validate_agent_asset_layout(
                 zf,
                 AgentAssetOuterRef(

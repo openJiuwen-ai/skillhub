@@ -75,6 +75,7 @@ def _asset(
     [
         ("agent-plugin", "agent-plugins"),
         ("agent-template", "agent-templates"),
+        ("agent-group", "agent-groups"),
         ("agent-mcp", "agent-mcps"),
     ],
 )
@@ -216,7 +217,7 @@ def test_retrieval_search_routes_by_agent_asset_type() -> None:
     assert manager.groups == ["agent-plugin", "agent-plugin"]
 
 
-@pytest.mark.parametrize("storage_root", ["agent-plugins", "agent-templates", "agent-mcps"])
+@pytest.mark.parametrize("storage_root", ["agent-plugins", "agent-templates", "agent-groups", "agent-mcps"])
 def test_agent_index_catalog_path_maps_back_to_asset_id(storage_root: str) -> None:
     record = SimpleNamespace(
         payload="cid-1",
@@ -236,9 +237,11 @@ def test_agent_index_settings_have_separate_obs_prefixes_and_direct_paths() -> N
 
     assert settings.retrieval_agent_plugin_index_obs_prefix == "agent-plugins-index"
     assert settings.retrieval_agent_template_index_obs_prefix == "agent-templates-index"
+    assert settings.retrieval_agent_group_index_obs_prefix == "agent-groups-index"
     assert settings.retrieval_agent_mcp_index_obs_prefix == "agent-mcps-index"
     assert settings.retrieval_agent_plugin_index_path == ""
     assert settings.retrieval_agent_template_index_path == ""
+    assert settings.retrieval_agent_group_index_path == ""
     assert settings.retrieval_agent_mcp_index_path == ""
 
 
@@ -278,6 +281,7 @@ def test_rebuild_all_adds_agent_groups_without_changing_existing_groups() -> Non
     [
         ("agent-plugin", "agent-plugins-tag"),
         ("agent-template", "agent-templates-tag"),
+        ("agent-group", "agent-groups-tag"),
         ("agent-mcp", "agent-mcps-tag"),
     ],
 )
@@ -535,7 +539,7 @@ def test_skill_retrieval_text_does_not_gain_agent_only_detail_field() -> None:
     assert "AGENT_ONLY_DETAIL_MARKER" not in records[0].retrieval_text
 
 
-@pytest.mark.parametrize("storage_root", ["agent-plugins", "agent-templates", "agent-mcps"])
+@pytest.mark.parametrize("storage_root", ["agent-plugins", "agent-templates", "agent-groups", "agent-mcps"])
 def test_same_named_agent_assets_from_different_publishers_remain_unique(storage_root: str) -> None:
     first = _unique_dir_name(
         f"obs://bucket/{storage_root}/publisher-a/asset-a/1.0.0/file.zip",

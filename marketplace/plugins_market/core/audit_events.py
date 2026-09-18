@@ -137,6 +137,7 @@ class ResourceType:
     PLUGIN = "plugin"
     AGENT_PLUGIN = "agent-plugin"
     AGENT_TEMPLATE = "agent-template"
+    AGENT_GROUP = "agent-group"
     AGENT_MCP = "agent-mcp"
     GIT_SOURCE = "git_source"
     SKILL_BUNDLE = "skill_bundle"
@@ -151,6 +152,7 @@ ASSET_LINKED_RESOURCE_TYPES: frozenset[str] = frozenset(
         ResourceType.PLUGIN,
         ResourceType.AGENT_PLUGIN,
         ResourceType.AGENT_TEMPLATE,
+        ResourceType.AGENT_GROUP,
         ResourceType.AGENT_MCP,
     }
 )

@@ -281,7 +281,7 @@ def skill_import_from_staging_dir(
             code=400,
             error="invalid_asset_bundle" if allow_multi_asset else "invalid_skill_bundle",
             message=(
-                "无有效资产目录（支持 Skill/TeamSkill、agent-plugin、agent-template、agent-mcp）"
+                "无有效资产目录（支持 Skill/TeamSkill、agent-plugin、agent-template、agent-group、agent-mcp）"
                 if allow_multi_asset
                 else "无有效 skill 顶层目录（简单包：根目录 SKILL.md；标准包：plugin.yaml + 子目录 SKILL.md，icon.png 可选）"
             ),

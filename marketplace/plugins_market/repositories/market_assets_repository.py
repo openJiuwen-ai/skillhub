@@ -153,7 +153,7 @@ def skill_moderation_list_clause(
     publisher_scoped: bool = False,
     moderation_queue_scoped: bool = False,
 ):
-    """市场列表/检索可见性（Skill / SwarmSkill / 三类 Agent）。
+    """市场列表/检索可见性（Skill / SwarmSkill / 四类 Agent）。
 
     - 公开市场（首页、搜索、未带本人 publisher_id）：仅展示已通过审核的 moderated 资产。
     - 个人「我的」（publisher_id 筛选且为本人）：展示本人全部状态。

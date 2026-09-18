@@ -2,8 +2,8 @@
 
 """发布期静态内容安全扫描。
 
-多资产（agent-plugin / agent-template / agent-mcp）由管理员发布、免审核，
-但"免审核"不等于"免静态安全扫描"：结构合法的包仍可能携带命令注入、
+多资产（agent-plugin / agent-template / agent-group / agent-mcp）与 Skill 一样走审核闸门
+（系统管理员可跳过），但跳过审核不等于跳过静态安全扫描：结构合法的包仍可能携带命令注入、
 远程脚本下载执行等危险内容。本模块提供保守、低误报的规则集：
 
 - 命令字符串（mcp.json command/args/env/headers、cli.json）：下载即执行链等；

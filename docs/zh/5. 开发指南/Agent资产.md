@@ -1,6 +1,6 @@
 # Agent 资产
 
-openJiuwen Agentic Hub 市场除 Skill / SwarmSkill 外，支持三类 JiuwenSwarm Agent 资产。复用同一套发布、列表、详情与下载 API，通过 `plugin_type` / `asset_type` 区分。
+openJiuwen Agentic Hub 市场除 Skill / SwarmSkill 外，支持四类 JiuwenSwarm Agent 资产。复用同一套发布、列表、详情与下载 API，通过 `plugin_type` / `asset_type` 区分。
 
 ## 类型对照
 
@@ -8,16 +8,17 @@ openJiuwen Agentic Hub 市场除 Skill / SwarmSkill 外，支持三类 JiuwenSwa
 |--------|---------------|----------|------|
 | 插件 | `agent-plugin` | `manifest.json`（`package_type: plugin`） | 挂载能力，无独立 Agent 身份 |
 | 连接器 | `agent-mcp` | `manifest.json`（`package_type: mcp`） | MCP / CLI / Skill-only 集成包 |
-| 专家/专家团 | `agent-template` | `manifest.json`（`package_type: agent_template`） | 完整 Agent 角色包 |
+| 专家 | `agent-template` | `manifest.json`（`package_type: agent_template`） | 完整 Agent 角色包 |
+| 专家团 | `agent-group` | `manifest.json`（`package_type: agent_group`） | 含 leader 与成员的 AgentGroup 包 |
 
-`asset_type` 与 `plugin_type` 同值。对象存储前缀分别为 `agent-plugins/`、`agent-templates/`、`agent-mcps/`。
+`asset_type` 与 `plugin_type` 同值。对象存储前缀分别为 `agent-plugins/`、`agent-templates/`、`agent-groups/`、`agent-mcps/`。
 
 ## 包结构
 
 ```text
 <outer>/plugin.yaml          # 市场外层，全包唯一
 <outer>/<name>/              # 内层目录名 = plugin.yaml.name
-    manifest.json            # 运行时入口（三类均有）
+    manifest.json            # 运行时入口（四类均有）
     ...
 ```
 
@@ -26,7 +27,7 @@ openJiuwen Agentic Hub 市场除 Skill / SwarmSkill 外，支持三类 JiuwenSwa
 - Agent 包装包：`plugin_version` 须与内层 `manifest.json.version` 一致，否则 `400 invalid_version`。
 - 路径均相对内层包根，不得含 `..` 或绝对路径。
 - 静态安全扫描：manifest 引用的 `mcp.json` 与包内脚本不得含危险命令。
-- 市场图标：专家/专家团与插件优先内层 `manifest.avatar`（PNG，如 `avatars/avatar.png`），否则外层 `<outer>/icon.png`；连接器见下文 `manifest.icon`。Hub 上传为版本目录 `icon.png`，列表与详情返回 `icon_uri`。无图标时字段为空，不写占位图、不塞 ZIP 下载链接。
+- 市场图标：专家、专家团与插件优先内层 `manifest.avatar`（PNG，如 `avatars/avatar.png`），否则外层 `<outer>/icon.png`；连接器见下文 `manifest.icon`。Hub 上传为版本目录 `icon.png`，列表与详情返回 `icon_uri`。无图标时字段为空，不写占位图、不塞 ZIP 下载链接。
 
 完整字段规范见产品侧《Agent资产组成文件说明》；下文为 **openJiuwen Agentic Hub 发布校验**要点。
 
@@ -53,7 +54,7 @@ Hub 只做**包结构与安全**校验，运行时文件是否齐留给 JiuwenSw
 
 ## 检索
 
-- `GET /api/v1/plugins` 须显式传 `plugin_type=agent-plugin` / `agent-template` / `agent-mcp`（可逗号多值）。
+- `GET /api/v1/plugins` 须显式传 `plugin_type=agent-plugin` / `agent-template` / `agent-group` / `agent-mcp`（可逗号多值）。
 - 不传类型时默认仅 `skill,swarmskill`，**不会**混入 Agent 资产。
 - `search_keyword` 走数据库关键词匹配，不走语义检索。
 
@@ -81,7 +82,7 @@ Hub 只做**包结构与安全**校验，运行时文件是否齐留给 JiuwenSw
 
 `mcps[]` 支持 `connector`（宿主 connector）或 `file` / `dir`（包内 MCP 配置）。市场图标优先 `manifest.avatar`（PNG），否则外层 `icon.png`。
 
-## 专家/专家团（`package_type: agent_template`）
+## 专家（`package_type: agent_template`）
 
 **必填：** `version`、`package_type`、`name`（须等于 `plugin.yaml.name`）、`description`
 
@@ -100,6 +101,28 @@ Hub 只做**包结构与安全**校验，运行时文件是否齐留给 JiuwenSw
 
 - `persona`：可选；声明时只检查 `dir` 路径安全，不要求目录内有 `.md`。
 - `model.file` / `subagents[].dir`：有则检查路径安全；Hub 不读 JSON、不要求 `.subagent.json`。
+
+## 专家团（`package_type: agent_group`）
+
+**必填：** `version`、`package_type: agent_group`、`name`（须等于 `plugin.yaml.name`）、`description`
+
+外层 `runtime.type` 为 `agent-group`。Hub 不因缺少 `agents/` 成员目录或 `leader` 拒发。
+
+**可选：** `agents[]`（成员名字符串）、`skills[]`（技能名或 `{dir}`）、`instruction`、`avatar`
+
+```json
+{
+  "version": "1.0.0",
+  "package_type": "agent_group",
+  "name": "my-team",
+  "description": "一句话描述",
+  "instruction": "协调成员完成目标",
+  "agents": ["leader", "analyst"]
+}
+```
+
+- `agents[]`：声明时须为非空字符串且不得含路径分隔符；**不要求**包含 `leader`，也不检查 `agents/<name>/` 是否存在。
+- `skills[]`：可为技能名字符串，或带 `dir` 的对象（只查路径安全）。
 
 ## 连接器（`package_type: mcp`）
 
