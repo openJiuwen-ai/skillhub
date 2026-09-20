@@ -521,7 +521,7 @@ Software: i18next-browser-languagedetector 8.2.0
 License: MIT License
 Please see above
 
-Software: js-yaml 4.3.0
+Software: js-yaml 4.3.2
 
 License: MIT License
 Please see above
