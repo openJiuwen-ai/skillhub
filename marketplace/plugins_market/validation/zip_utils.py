@@ -16,7 +16,7 @@ import io
 import struct
 import zipfile
 import zlib
-from typing import Iterator
+from typing import Iterator, NoReturn
 
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
@@ -75,7 +75,7 @@ class DecompressCounter:
 # Path safety
 # ---------------------------------------------------------------------------
 
-def raise_corrupt_zip(exc: BaseException) -> None:
+def raise_corrupt_zip(exc: BaseException) -> NoReturn:
     """Map client-controlled corrupt ZIP errors to a bounded 4xx."""
     raise PublishError(
         code=400,

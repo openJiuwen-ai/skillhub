@@ -6,6 +6,10 @@ import zipfile
 import pytest
 
 from plugins_market.core.errors import PublishError
+from plugins_market.imports.publish_wrap import (
+    PublishMetadataOverrides,
+    prepare_publish_zip_content,
+)
 from plugins_market.validation import extract_plugin_metadata
 
 
@@ -26,16 +30,26 @@ def _skill_zip() -> bytes:
 
 
 def test_truncated_zip_is_invalid_file_format() -> None:
+    truncated = _skill_zip()[:-32]
     with pytest.raises(PublishError) as exc_info:
-        extract_plugin_metadata(_skill_zip()[:-32])
+        extract_plugin_metadata(truncated)
     assert exc_info.value.code == 400
     assert exc_info.value.error in {"invalid_file_format", "invalid_plugin_config"}
+    with pytest.raises(PublishError) as wrap_info:
+        prepare_publish_zip_content(
+            truncated,
+            filename="truncated.zip",
+            overrides=PublishMetadataOverrides(),
+            default_author="tester",
+        )
+    assert wrap_info.value.code == 400
+    assert wrap_info.value.error == "invalid_file_format"
 
 
 def test_crc_corrupt_zip_is_invalid_file_format() -> None:
     raw = bytearray(_skill_zip())
     eocd = bytes(raw).rfind(b"PK\x05\x06")
-    cd_off = int.from_bytes(raw[eocd + 16 : eocd + 20], "little")
+    cd_off = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
     raw[cd_off + 16] ^= 0xFF
     with pytest.raises(PublishError) as exc_info:
         extract_plugin_metadata(bytes(raw))
@@ -45,8 +59,8 @@ def test_crc_corrupt_zip_is_invalid_file_format() -> None:
 def test_declared_size_mismatch_is_invalid_file_format() -> None:
     raw = bytearray(_skill_zip())
     eocd = bytes(raw).rfind(b"PK\x05\x06")
-    cd_off = int.from_bytes(raw[eocd + 16 : eocd + 20], "little")
-    raw[cd_off + 24 : cd_off + 28] = (1).to_bytes(4, "little")
+    cd_off = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
+    raw[cd_off + 24:cd_off + 28] = (1).to_bytes(4, "little")
     raw[22:26] = (1).to_bytes(4, "little")
     with pytest.raises(PublishError) as exc_info:
         extract_plugin_metadata(bytes(raw))
