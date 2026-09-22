@@ -115,6 +115,8 @@ MAX_YAML_BYTES = 1 * 1024 * 1024  # 1 MB per YAML document
 YAML_MAX_DEPTH = 100
 YAML_MAX_ALIASES = 1000
 YAML_MAX_SCALAR_LEN = 1 * 1024 * 1024  # 1 MB per scalar string
+# 节点上限：覆盖 1 MiB 量级合法 YAML，同时挡住图爆炸
+YAML_MAX_NODES = 200_000
 
 # ---------------------------------------------------------------------------
 # JSON parsing limits

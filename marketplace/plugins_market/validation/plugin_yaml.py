@@ -10,8 +10,6 @@ from typing import Any
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 import yaml
-import yaml.composer
-import yaml.constructor
 import yaml.nodes
 
 from plugins_market.core.errors import PublishError
@@ -34,6 +32,7 @@ from plugins_market.validation.constants import (
     SUPPORTED_RUNTIME_TYPES,
     YAML_MAX_ALIASES,
     YAML_MAX_DEPTH,
+    YAML_MAX_NODES,
     YAML_MAX_SCALAR_LEN,
     is_valid_market_version,
 )
@@ -56,6 +55,7 @@ class _BoundedSafeLoader(yaml.SafeLoader):
         super().__init__(stream)
         self._compose_depth = 0
         self._alias_count = 0
+        self._node_count = 0
 
     def compose_node(self, parent: Any, index: Any) -> yaml.nodes.Node:
         # PyYAML 6 Composer 在 compose_node 内直接处理 AliasEvent，
@@ -66,6 +66,11 @@ class _BoundedSafeLoader(yaml.SafeLoader):
                 raise yaml.YAMLError(
                     f"YAML 别名/锚点数量超过上限（最大 {YAML_MAX_ALIASES}）"
                 )
+        self._node_count += 1
+        if self._node_count > YAML_MAX_NODES:
+            raise yaml.YAMLError(
+                f"YAML 节点数量超过上限（最大 {YAML_MAX_NODES}）"
+            )
         return super().compose_node(parent, index)
 
     def compose_mapping_node(self, anchor: str | None) -> yaml.nodes.MappingNode:
@@ -115,6 +120,27 @@ def _reject_excess_yaml_aliases(text: str) -> None:
         loader.dispose()
 
 
+def _walk_loaded_yaml_limits(obj: Any, *, depth: int = 1, nodes: list[int] | None = None) -> None:
+    holder = nodes if nodes is not None else [0]
+    holder[0] += 1
+    if holder[0] > YAML_MAX_NODES:
+        raise yaml.YAMLError(f"YAML 节点数量超过上限（最大 {YAML_MAX_NODES}）")
+    if depth > YAML_MAX_DEPTH:
+        raise yaml.YAMLError(f"YAML 嵌套深度超过上限（最大 {YAML_MAX_DEPTH} 层）")
+    if isinstance(obj, str) and len(obj) > YAML_MAX_SCALAR_LEN:
+        raise yaml.YAMLError(
+            f"YAML 标量字符串长度超过上限（最大 {YAML_MAX_SCALAR_LEN // 1024} KB）"
+        )
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            _walk_loaded_yaml_limits(key, depth=depth + 1, nodes=holder)
+            _walk_loaded_yaml_limits(value, depth=depth + 1, nodes=holder)
+        return
+    if isinstance(obj, list):
+        for item in obj:
+            _walk_loaded_yaml_limits(item, depth=depth + 1, nodes=holder)
+
+
 def safe_load_yaml(text: str, *, context: str = "YAML") -> Any:
     """Parse YAML text with resource-limit guards.
 
@@ -130,6 +156,15 @@ def safe_load_yaml(text: str, *, context: str = "YAML") -> Any:
     """
     try:
         _reject_excess_yaml_aliases(text)
+        c_loader_cls = getattr(yaml, "CSafeLoader", None)
+        if c_loader_cls is not None:
+            loader = c_loader_cls(text)
+            try:
+                data = loader.get_single_data()
+            finally:
+                loader.dispose()
+            _walk_loaded_yaml_limits(data)
+            return data
         loader = _BoundedSafeLoader(text)
         try:
             return loader.get_single_data()
