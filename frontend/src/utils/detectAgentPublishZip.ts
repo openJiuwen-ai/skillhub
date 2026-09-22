@@ -3,6 +3,7 @@
 import JSZip from 'jszip'
 import { load as yamlLoad } from 'js-yaml'
 import { isAgentAssetPluginType, normalizePluginType, type AgentAssetPluginType } from '@/utils/pluginType'
+import { loadPublishZip, zipEntryString } from '@/utils/publishZip'
 
 export type AgentZipInspectResult = {
   pluginType: AgentAssetPluginType
@@ -66,7 +67,7 @@ function findManifestPath(paths: string[]): string | null {
 async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZipInspectResult> {
   const manifestPath = findManifestPath(paths)
   if (manifestPath) {
-    const text = await zip.files[manifestPath].async('string')
+    const text = await zipEntryString(zip.files[manifestPath], 'AGENT_ZIP_CORRUPT')
     let manifest: Record<string, unknown>
     try {
       manifest = JSON.parse(text) as Record<string, unknown>
@@ -128,14 +129,14 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
  * 完整包校验仍由服务端完成；表单字段以用户输入为准覆盖预填值。
  */
 export async function inspectAgentPublishZip(file: File): Promise<AgentZipInspectResult> {
-  const zip = await JSZip.loadAsync(file)
+  const zip = await loadPublishZip(file, 'AGENT_ZIP_CORRUPT')
   const paths = Object.keys(zip.files)
   const yamlPath = findPluginYamlPath(paths)
   if (!yamlPath) {
     return inspectBareNativeZip(zip, paths)
   }
 
-  const text = await zip.files[yamlPath].async('string')
+  const text = await zipEntryString(zip.files[yamlPath], 'AGENT_ZIP_CORRUPT')
   let doc: Record<string, unknown>
   try {
     const parsed = yamlLoad(text)

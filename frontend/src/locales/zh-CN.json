@@ -673,6 +673,7 @@
     "agentErrorMissingVersion": "请填写版本号（裸连接器包必填）",
     "agentErrorInvalidManifest": "manifest.json 无法解析",
     "agentErrorUnrecognizedLayout": "无法识别包布局，请上传原生包或标准市场包装包",
+    "agentErrorCorruptZip": "请上传完整的 zip 文件。空文件、损坏包，或把文件夹改名成 .zip，都无法解析。",
     "fieldPluginIdSwarmSkill": "关联 Swarm Skill",
     "fieldPluginIdHelpSwarmSkill": "选「新 Swarm Skill」即首次发布；在列表中选某项则为该 Swarm Skill 发布新版本。",
     "pluginIdNewOptionSwarmSkill": "新 Swarm Skill（首次发布）",
