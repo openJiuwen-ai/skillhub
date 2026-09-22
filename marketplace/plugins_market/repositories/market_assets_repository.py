@@ -341,6 +341,49 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
         rows = self.db.execute(q).fetchall()
         return [(r.tag, int(r.cnt)) for r in rows]
 
+    def category_totals(
+        self,
+        *,
+        asset_type: str | None = None,
+        plugin_type: str | None = None,
+    ) -> Tuple[Dict[str, int], int]:
+        """按 category_id 聚合市场可见资产数，替代逐分类的 page_size=1 count。
+
+        口径与 list_plugins 的 total 一致（匿名访客市场口径）；
+        市场页对所有登录态可见性相同，结果可共享缓存。
+        返回 ({category_id: count}，未分类不进 totals, 含未分类的总数)。
+        """
+        q = self.query().filter(MarketAssetDB.status != "OFFLINE")
+        if asset_type:
+            q = q.filter(MarketAssetDB.asset_type == asset_type)
+        pt_list = [p.strip() for p in (plugin_type or "").split(",") if p.strip()]
+        if len(pt_list) == 1:
+            q = q.filter(MarketAssetDB.plugin_type == pt_list[0])
+        elif pt_list:
+            q = q.filter(MarketAssetDB.plugin_type.in_(pt_list))
+        mod_clause = skill_moderation_list_clause(_anonymous_viewer())
+        if mod_clause is not None:
+            q = q.filter(mod_clause)
+        q = q.filter(
+            or_(
+                MarketAssetDB.moderation_status.is_(None),
+                MarketAssetDB.moderation_status == "",
+                MarketAssetDB.moderation_status == "APPROVED",
+            )
+        )
+        rows = (
+            q.with_entities(MarketAssetDB.category_id, func.count(MarketAssetDB.asset_id))
+            .group_by(MarketAssetDB.category_id)
+            .all()
+        )
+        totals: Dict[str, int] = {}
+        total_all = 0
+        for category_id, cnt in rows:
+            total_all += int(cnt)
+            if category_id:
+                totals[str(category_id)] = int(cnt)
+        return totals, total_all
+
     @staticmethod
     def _is_publisher_scoped_list(params: PluginListQuery, viewer: "ViewerContext") -> bool:
         """个人「我的 Skills」：publisher_id 筛选且为当前用户本人。"""

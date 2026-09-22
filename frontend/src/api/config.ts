@@ -32,6 +32,8 @@ export const API_ENDPOINTS = {
     LIST: '/plugins',
     /** GET /api/v1/plugins/tags - 标签筛选选项（热门自动推荐 + 运营配置优先） */
     TAGS: '/plugins/tags',
+    /** GET /api/v1/plugins/category-totals - 侧栏分类计数聚合（一条 GROUP BY 替代逐分类 page_size=1） */
+    CATEGORY_TOTALS: '/plugins/category-totals',
     MY_STARS: '/plugins/my/stars',
     MY_LIKES: '/plugins/my/likes',
     interactionsBatch: '/plugins/interactions/batch',

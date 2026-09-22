@@ -67,6 +67,9 @@ DATABASE_URL = _get_effective_database_url()
 engine = create_engine(
     DATABASE_URL,
     **sqlalchemy_pool_kwargs(),
+    # 同步 DB 在事件循环上执行：socket 读挂住会冻结整个服务，三超时保证秒级报错；
+    # 有超过 30s 的合法大查询需另建 engine（read_timeout 是 engine 级参数）。
+    connect_args={"connect_timeout": 5, "read_timeout": 30, "write_timeout": 30},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

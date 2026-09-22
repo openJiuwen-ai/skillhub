@@ -83,6 +83,7 @@ from plugins_market.schemas.common import ResponseModel
 from plugins_market.schemas.plugin import (
     AssetVersionDeleteData,
     AssetImportResponse,
+    CategoryTotalsData,
     GitSourceCreateRequest,
     GitSourceItem,
     GitSourceListResponse,
@@ -1303,6 +1304,44 @@ async def list_plugin_tags(
 
     cache_set(cache_key, json.dumps([{"tag": opt.tag, "count": opt.count} for opt in data]), _TAG_OPTIONS_CACHE_TTL)
     return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
+
+
+# 分类计数变化慢，缓存 30s 挡住首页侧栏的计数扇出
+_CATEGORY_TOTALS_CACHE_TTL = 30
+
+
+@plugin_router.get(
+    "/category-totals",
+    response_model=ResponseModel[CategoryTotalsData],
+)
+async def get_category_totals(
+    db: Session = Depends(get_db),
+    asset_type: Optional[str] = Query(None, description="资产类型（精确匹配，与列表接口同语义）"),
+    plugin_type: Optional[str] = Query(None, description="插件类型（精确匹配，逗号分隔多个，与列表接口同语义）"),
+):
+    """侧栏分类计数聚合：一次返回所有分类的可见资产数与总数，口径与列表 total 一致。"""
+    at = (asset_type or "").strip() or None
+    pt = (plugin_type or "").strip() or None
+    cache_key = f"plugins:category-totals:v1:{at or '-'}:{pt or '-'}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        try:
+            payload = json.loads(hit)
+            return ResponseModel(
+                code=status.HTTP_200_OK,
+                message="ok",
+                data=CategoryTotalsData(totals=payload["totals"], all=payload["all"]),
+            )
+        except Exception:
+            pass  # 缓存值损坏（反序列化失败）-> 回源重算，不阻断请求
+
+    totals, total_all = MarketAssetRepository(db).category_totals(asset_type=at, plugin_type=pt)
+    cache_set(cache_key, json.dumps({"totals": totals, "all": total_all}), _CATEGORY_TOTALS_CACHE_TTL)
+    return ResponseModel(
+        code=status.HTTP_200_OK,
+        message="ok",
+        data=CategoryTotalsData(totals=totals, all=total_all),
+    )
 
 
 @plugin_router.get(
