@@ -48,6 +48,7 @@
 | POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；Skill / SwarmSkill / 四类 Agent 均支持；请求头 **`X-Checksum-SHA256`** | 发布市场资产（multipart zip） [#核心资源] |
 | GET | `/api/v1/plugins` | **无需**（可选 Bearer 或 X-System-Token 用于个性化展示） | 市场资产分页列表；支持 `asset_type` / `plugin_type` 与标签过滤 [#核心资源] |
 | GET | `/api/v1/plugins/tags` | **无需** | 按 `plugin_type` 聚合市场资产标签 `(tag, count)` [#核心资源] |
+| GET | `/api/v1/plugins/category-totals` | **无需** | 一次返回全部市场 tab 类型的分类计数 `{plugin_type: {totals, all}}`，口径与列表 total 一致；服务端缓存 30s [#核心资源] |
 | GET | `/api/v1/plugins/publish-template` | Bearer **`或`** `X-System-Token` | 发布页 Skill 模板 zip 预签名 GET [#核心资源] |
 | GET | `/api/v1/plugins/{asset_id}/versions/{version}` | **无需**（可选 Bearer 或 X-System-Token） | 指定版本详情 [#核心资源] |
 | GET | `/api/v1/plugins/{asset_id}/versions/{version}/files` | **无需**（可选 Bearer 或 X-System-Token） | 版本 zip 包内文件列表；`with_content=<path>` 可附带单个文本文件内容 [#核心资源] |
@@ -745,6 +746,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/plugins/category-totals:
+    get:
+      summary: 分类计数聚合（全部市场类型）
+      description: |
+        市场侧栏分类计数数据源：一次返回全部市场 tab 类型（skill / swarmskill / agent-plugin /
+        agent-template / agent-group / agent-mcp）各自的分类计数与总数；前端加载时请求一次，
+        切换类型直接使用本地缓存，不再重复请求。
+        过滤口径与市场列表 total 一致：排除 OFFLINE，匿名访客市场可见性，
+        资产级 moderation_status ∈ {NULL, '', 'APPROVED'}；agent 四类与列表同样要求
+        asset_type == plugin_type == 该类型，skill 两类只按 plugin_type。
+        服务端按结果缓存 30s。未分类资产计入 all 但不出现在 totals；无资产的分类不出现在
+        totals（前端按 0 显示）。
+      operationId: getPluginCategoryTotals
+      tags:
+        - Skill 管理
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code:
+                    type: integer
+                    example: 200
+                  message:
+                    type: string
+                    example: ok
+                  data:
+                    type: object
+                    description: plugin_type -> 分类计数
+                    additionalProperties:
+                      $ref: '#/components/schemas/CategoryTotals'
+                    example:
+                      skill:
+                        totals:
+                          finance-wealth: 2
+                          office-productivity: 1
+                        all: 5
         '500':
           description: 服务器内部错误
           content:
@@ -2765,6 +2814,21 @@ components:
         git_version_display_as_commit:
           type: boolean
           description: 为 true 时前端将 latest_version 文案显示为 commit 短码
+
+    CategoryTotals:
+      type: object
+      required:
+        - totals
+        - all
+      properties:
+        totals:
+          type: object
+          description: category_id -> 可见资产数（未分类不计入；无资产的分类不出现，前端按 0 显示）
+          additionalProperties:
+            type: integer
+        all:
+          type: integer
+          description: 该类型全部可见资产总数（含未分类），与不带 category_id 的列表 total 同口径
 
     SkillListResponse:
       type: object
