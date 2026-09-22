@@ -57,6 +57,17 @@ class _BoundedSafeLoader(yaml.SafeLoader):
         self._compose_depth = 0
         self._alias_count = 0
 
+    def compose_node(self, parent: Any, index: Any) -> yaml.nodes.Node:
+        # PyYAML 6 Composer 在 compose_node 内直接处理 AliasEvent，
+        # 没有 compose_alias_node 调度点；必须在此计数。
+        if self.check_event(yaml.AliasEvent):
+            self._alias_count += 1
+            if self._alias_count > YAML_MAX_ALIASES:
+                raise yaml.YAMLError(
+                    f"YAML 别名/锚点数量超过上限（最大 {YAML_MAX_ALIASES}）"
+                )
+        return super().compose_node(parent, index)
+
     def compose_mapping_node(self, anchor: str | None) -> yaml.nodes.MappingNode:
         self._compose_depth += 1
         if self._compose_depth > YAML_MAX_DEPTH:
@@ -85,13 +96,23 @@ class _BoundedSafeLoader(yaml.SafeLoader):
             )
         return node
 
-    def compose_alias_node(self, anchor: str) -> yaml.nodes.Node:
-        self._alias_count += 1
-        if self._alias_count > YAML_MAX_ALIASES:
-            raise yaml.YAMLError(
-                f"YAML 别名/锚点数量超过上限（最大 {YAML_MAX_ALIASES}）"
-            )
-        return super().compose_alias_node(anchor)
+
+def _reject_excess_yaml_aliases(text: str) -> None:
+    """Count AliasToken before load. Works with PyYAML 6 C and Python parsers."""
+    loader_cls = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    loader = loader_cls(text)
+    try:
+        alias_count = 0
+        while loader.check_token():
+            token = loader.get_token()
+            if type(token).__name__ == "AliasToken" or isinstance(token, yaml.AliasToken):
+                alias_count += 1
+                if alias_count > YAML_MAX_ALIASES:
+                    raise yaml.YAMLError(
+                        f"YAML 别名/锚点数量超过上限（最大 {YAML_MAX_ALIASES}）"
+                    )
+    finally:
+        loader.dispose()
 
 
 def safe_load_yaml(text: str, *, context: str = "YAML") -> Any:
@@ -108,6 +129,7 @@ def safe_load_yaml(text: str, *, context: str = "YAML") -> Any:
         PublishError on parse failure or resource-limit violation.
     """
     try:
+        _reject_excess_yaml_aliases(text)
         loader = _BoundedSafeLoader(text)
         try:
             return loader.get_single_data()
