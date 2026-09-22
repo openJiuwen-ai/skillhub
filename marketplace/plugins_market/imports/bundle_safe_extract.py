@@ -99,6 +99,11 @@ def skill_import_extract_zip_to_dir(bundle_zip: Path, dest: Path) -> None:
         counter = DecompressCounter()
 
         for info in zf.infolist():
+            orig = getattr(info, "orig_filename", None)
+            if isinstance(orig, bytes):
+                orig = orig.decode("latin-1")
+            if isinstance(orig, str) and "\x00" in orig:
+                raise ValueError("illegal zip entry path")
             name = normalize_zip_entry_name(info.filename)
             if name is None:
                 continue

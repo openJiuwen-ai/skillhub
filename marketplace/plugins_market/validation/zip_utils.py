@@ -62,6 +62,17 @@ class DecompressCounter:
 # Path safety
 # ---------------------------------------------------------------------------
 
+def _zip_info_path_names(info: zipfile.ZipInfo) -> list[str]:
+    """Return decoded names, including orig_filename before zipfile strips NUL."""
+    names: list[str] = []
+    for value in (info.filename, getattr(info, "orig_filename", None)):
+        if isinstance(value, bytes):
+            value = value.decode("latin-1")
+        if isinstance(value, str) and value not in names:
+            names.append(value)
+    return names
+
+
 def _validate_zip_entry_path(name: str) -> None:
     """Raise PublishError if the zip entry name is dangerous."""
     if not name or "\x00" in name:
@@ -131,7 +142,8 @@ def validate_zip_safety(zf: zipfile.ZipFile) -> None:
 
     total_declared = 0
     for info in infos:
-        _validate_zip_entry_path(info.filename)
+        for path_name in _zip_info_path_names(info):
+            _validate_zip_entry_path(path_name)
 
         if _is_symlink(info):
             raise PublishError(
