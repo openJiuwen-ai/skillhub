@@ -21,7 +21,11 @@ from plugins_market.validation.constants import (
     ZIP_ENTRY_WINDOWS_DRIVE_PATTERN,
     ZIP_STREAM_READ_CHUNK_BYTES,
 )
-from plugins_market.validation.zip_utils import DecompressCounter, validate_zip_safety
+from plugins_market.validation.zip_utils import (
+    DecompressCounter,
+    raise_corrupt_zip,
+    validate_zip_safety,
+)
 
 
 def _reraise_publish_as_value(exc: PublishError) -> None:
@@ -90,7 +94,15 @@ def skill_import_extract_zip_to_dir(bundle_zip: Path, dest: Path) -> None:
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(bundle_zip, "r") as zf:
+    try:
+        zf_cm = zipfile.ZipFile(bundle_zip, "r")
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, OSError, RuntimeError) as exc:
+        try:
+            raise_corrupt_zip(exc)
+        except PublishError as e:
+            _reraise_publish_as_value(e)
+
+    with zf_cm as zf:
         try:
             validate_zip_safety(zf)
         except PublishError as e:
@@ -99,6 +111,11 @@ def skill_import_extract_zip_to_dir(bundle_zip: Path, dest: Path) -> None:
         counter = DecompressCounter()
 
         for info in zf.infolist():
+            orig = getattr(info, "orig_filename", None)
+            if isinstance(orig, bytes):
+                orig = orig.decode("latin-1")
+            if isinstance(orig, str) and "\x00" in orig:
+                raise ValueError("illegal zip entry path")
             name = normalize_zip_entry_name(info.filename)
             if name is None:
                 continue
@@ -115,17 +132,25 @@ def skill_import_extract_zip_to_dir(bundle_zip: Path, dest: Path) -> None:
 
             target.parent.mkdir(parents=True, exist_ok=True)
             member_read = 0
-            with zf.open(info, "r") as src, open(target, "wb") as out:
-                while True:
-                    chunk = src.read(ZIP_STREAM_READ_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    member_read += len(chunk)
-                    try:
-                        counter.add(len(chunk))
-                    except PublishError as e:
-                        _reraise_publish_as_value(e)
-                    out.write(chunk)
+            try:
+                with zf.open(info, "r") as src, open(target, "wb") as out:
+                    while True:
+                        chunk = src.read(ZIP_STREAM_READ_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        member_read += len(chunk)
+                        try:
+                            counter.add(len(chunk))
+                        except PublishError as e:
+                            _reraise_publish_as_value(e)
+                        out.write(chunk)
+            except PublishError:
+                raise
+            except (zipfile.BadZipFile, zipfile.LargeZipFile, RuntimeError, EOFError, OSError) as exc:
+                try:
+                    raise_corrupt_zip(exc)
+                except PublishError as e:
+                    _reraise_publish_as_value(e)
 
             declared = int(info.file_size)
             if member_read != declared:

@@ -115,6 +115,8 @@ MAX_YAML_BYTES = 1 * 1024 * 1024  # 1 MB per YAML document
 YAML_MAX_DEPTH = 100
 YAML_MAX_ALIASES = 1000
 YAML_MAX_SCALAR_LEN = 1 * 1024 * 1024  # 1 MB per scalar string
+# 节点上限：覆盖 1 MiB 量级合法 YAML，同时挡住图爆炸
+YAML_MAX_NODES = 200_000
 
 # ---------------------------------------------------------------------------
 # JSON parsing limits
@@ -140,6 +142,8 @@ QUERY_TAGS_MAX_LEN = 512
 QUERY_TAGS_MAX_COUNT = 20
 # 与 models.market_assets.MarketAssetDB.short_desc 列宽一致；较长文案走 detail_desc（Text）
 MARKET_ASSET_SHORT_DESC_MAX_LEN = 4096
+# MySQL TEXT 上限 65535 字节；超限须在写库前 4xx，避免 DataError 500
+MARKET_ASSET_DETAIL_DESC_MAX_BYTES = 65535
 
 # ---------------------------------------------------------------------------
 # Icon / PNG（仅当包内存在 icon.png 时校验；无则跳过校验且不写入占位对象）

@@ -12,8 +12,11 @@ Two-layer defence:
 
 from __future__ import annotations
 
+import io
+import struct
 import zipfile
-from typing import Iterator
+import zlib
+from typing import Iterator, NoReturn
 
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
@@ -24,6 +27,16 @@ from plugins_market.validation.constants import (
     PNG_MAGIC,
     ZIP_ENTRY_WINDOWS_DRIVE_PATTERN,
     ZIP_STREAM_READ_CHUNK_BYTES,
+)
+
+_ZIP_CORRUPT_ERRORS = (
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+    EOFError,
+    OSError,
+    struct.error,
+    zlib.error,
+    RuntimeError,
 )
 
 # Windows drive-letter prefix, e.g. C: or c:
@@ -61,6 +74,36 @@ class DecompressCounter:
 # ---------------------------------------------------------------------------
 # Path safety
 # ---------------------------------------------------------------------------
+
+def raise_corrupt_zip(exc: BaseException) -> NoReturn:
+    """Map client-controlled corrupt ZIP errors to a bounded 4xx."""
+    raise PublishError(
+        code=400,
+        error="invalid_file_format",
+        message="上传文件不是有效的 ZIP 格式，请检查文件是否损坏或格式是否正确",
+        error_code="SKILLHUB_PLUGIN_FILE_FORMAT_INVALID",
+        error_class="validation",
+    ) from exc
+
+
+def open_zip_bytes(content: bytes) -> zipfile.ZipFile:
+    """Open a ZIP from bytes; truncated/malformed archives become PublishError 400."""
+    try:
+        return zipfile.ZipFile(io.BytesIO(content))
+    except _ZIP_CORRUPT_ERRORS as exc:
+        raise_corrupt_zip(exc)
+
+
+def _zip_info_path_names(info: zipfile.ZipInfo) -> list[str]:
+    """Return decoded names, including orig_filename before zipfile strips NUL."""
+    names: list[str] = []
+    for value in (info.filename, getattr(info, "orig_filename", None)):
+        if isinstance(value, bytes):
+            value = value.decode("latin-1")
+        if isinstance(value, str) and value not in names:
+            names.append(value)
+    return names
+
 
 def _validate_zip_entry_path(name: str) -> None:
     """Raise PublishError if the zip entry name is dangerous."""
@@ -131,7 +174,8 @@ def validate_zip_safety(zf: zipfile.ZipFile) -> None:
 
     total_declared = 0
     for info in infos:
-        _validate_zip_entry_path(info.filename)
+        for path_name in _zip_info_path_names(info):
+            _validate_zip_entry_path(path_name)
 
         if _is_symlink(info):
             raise PublishError(
@@ -188,14 +232,25 @@ def safe_read_zip_member(
     decompressed member into memory in one shot.
     """
     chunks: list[bytes] = []
-    with zf.open(path) as fh:
-        while True:
-            chunk = fh.read(_CHUNK)
-            if not chunk:
-                break
-            counter.add(len(chunk))
-            chunks.append(chunk)
-    return b"".join(chunks)
+    try:
+        info = zf.getinfo(path)
+        with zf.open(path) as fh:
+            while True:
+                chunk = fh.read(_CHUNK)
+                if not chunk:
+                    break
+                counter.add(len(chunk))
+                chunks.append(chunk)
+        data = b"".join(chunks)
+        if int(info.file_size) != len(data):
+            raise zipfile.BadZipFile(
+                f"zip member size mismatch: declared {info.file_size}, read {len(data)}"
+            )
+        return data
+    except PublishError:
+        raise
+    except _ZIP_CORRUPT_ERRORS as exc:
+        raise_corrupt_zip(exc)
 
 
 def iter_zip_members(
@@ -252,3 +307,6 @@ def validate_png_icon_bytes(data: bytes, *, path: str = "icon.png") -> None:
             error="invalid_plugin_structure",
             message=f"{path} 不是有效的 PNG 文件（文件头魔数不匹配）",
         )
+    from plugins_market.validation.icon_png_optimize import assert_png_decodable
+
+    assert_png_decodable(data, path=path)

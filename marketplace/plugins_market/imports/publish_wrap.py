@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import io
 import json
 import shutil
 import tempfile
@@ -40,7 +39,7 @@ from plugins_market.validation.plugin_yaml import (
     validate_plugin_yaml_bytes,
     validate_plugin_yaml_public,
 )
-from plugins_market.validation.zip_utils import DecompressCounter, safe_read_zip_member
+from plugins_market.validation.zip_utils import DecompressCounter, open_zip_bytes, safe_read_zip_member
 
 
 _PUBLISH_VERSION_FALLBACK = "0.0.1"
@@ -83,12 +82,12 @@ def _overrides_entry_map(overrides: PublishMetadataOverrides) -> dict[str, Any]:
 
 
 def _zip_has_market_plugin_yaml(content: bytes) -> bool:
-    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+    with open_zip_bytes(content) as zf:
         return _find_plugin_yaml_path(zf) is not None
 
 
 def _read_wrapped_plugin_yaml_fields(content: bytes) -> dict[str, Any]:
-    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+    with open_zip_bytes(content) as zf:
         yaml_path = _find_plugin_yaml_path(zf)
         if not yaml_path:
             return {}
@@ -155,7 +154,7 @@ def _mkdir_parents_replace_file_placeholders(path: Path, *, root: Path) -> None:
 
 
 def _extract_wrapped_native_entry(content: bytes, dest: Path) -> None:
-    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+    with open_zip_bytes(content) as zf:
         yaml_path = _find_plugin_yaml_path(zf)
         if not yaml_path:
             raise PublishError(

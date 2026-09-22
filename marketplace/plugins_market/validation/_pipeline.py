@@ -7,12 +7,12 @@ Called by services/plugin.py::publish().
 
 from __future__ import annotations
 
-import io
 import zipfile
 from typing import Any
 
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
+    MARKET_ASSET_DETAIL_DESC_MAX_BYTES,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_GROUP,
@@ -30,6 +30,7 @@ from plugins_market.validation.plugin_yaml import (
 )
 from plugins_market.validation.zip_utils import (
     DecompressCounter,
+    open_zip_bytes,
     safe_read_zip_member,
     validate_zip_safety,
 )
@@ -115,14 +116,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # Open zip (magic bytes already verified before this call)
     # ------------------------------------------------------------------
-    try:
-        zf_obj = zipfile.ZipFile(io.BytesIO(content))
-    except zipfile.BadZipFile as exc:
-        raise PublishError(
-            code=400,
-            error="invalid_plugin_config",
-            message="上传文件不是有效的 ZIP 格式，请检查文件是否损坏或格式是否正确",
-        ) from exc
+    zf_obj = open_zip_bytes(content)
 
     with zf_obj as zf:
         # ----------------------------------------------------------------
@@ -182,7 +176,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
 
             # Read SKILL.md and validate frontmatter
             skill_md_raw = safe_read_zip_member(zf, layout["skill_md_path"], counter)
-            fm, _ = parse_skill_frontmatter(skill_md_raw)
+            fm, body = parse_skill_frontmatter(skill_md_raw)
             validate_skill_frontmatter(
                 fm, dir_name=public.name, yaml_name=public.name
             )
@@ -192,7 +186,8 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             if kind_norm in ("team-skill", "swarm-skill"):
                 derived_plugin_type = "swarmskill"
 
-            detail_desc = skill_md_raw.decode("utf-8")
+            # 全文含超大 frontmatter 会超过 MySQL TEXT；详情只持久化正文
+            detail_desc = body
 
             icon_bytes = layout["icon_bytes"]
 
@@ -259,6 +254,20 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
                 error="invalid_plugin_config",
                 message=f"不支持的 runtime.type: {rt!r}",
             )
+
+        if isinstance(detail_desc, str):
+            detail_bytes = len(detail_desc.encode("utf-8"))
+            if detail_bytes > MARKET_ASSET_DETAIL_DESC_MAX_BYTES:
+                raise PublishError(
+                    code=400,
+                    error="invalid_plugin_config",
+                    message=(
+                        "详情描述超过数据库字段上限"
+                        f"（最大 {MARKET_ASSET_DETAIL_DESC_MAX_BYTES} 字节）"
+                    ),
+                    error_code="SKILLHUB_PLUGIN_CONFIG_INVALID",
+                    error_class="validation",
+                )
 
     result = {
         "name": public.name,

@@ -652,7 +652,8 @@ async def publish_plugin(
         _log_operation_started("plugin publish", filename=form.file.filename)
         try:
             content = await form.file.read()
-            result = plugin_publish(
+            result = await asyncio.to_thread(
+                plugin_publish,
                 user_id=acting_user_id or "",
                 content=content,
                 filename=form.file.filename,
