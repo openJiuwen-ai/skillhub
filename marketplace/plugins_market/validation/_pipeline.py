@@ -7,7 +7,6 @@ Called by services/plugin.py::publish().
 
 from __future__ import annotations
 
-import io
 import zipfile
 from typing import Any
 
@@ -31,6 +30,7 @@ from plugins_market.validation.plugin_yaml import (
 )
 from plugins_market.validation.zip_utils import (
     DecompressCounter,
+    open_zip_bytes,
     safe_read_zip_member,
     validate_zip_safety,
 )
@@ -116,14 +116,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # Open zip (magic bytes already verified before this call)
     # ------------------------------------------------------------------
-    try:
-        zf_obj = zipfile.ZipFile(io.BytesIO(content))
-    except zipfile.BadZipFile as exc:
-        raise PublishError(
-            code=400,
-            error="invalid_plugin_config",
-            message="上传文件不是有效的 ZIP 格式，请检查文件是否损坏或格式是否正确",
-        ) from exc
+    zf_obj = open_zip_bytes(content)
 
     with zf_obj as zf:
         # ----------------------------------------------------------------
