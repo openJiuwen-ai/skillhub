@@ -624,12 +624,50 @@ async def lifespan(app: FastAPI):
         if settings.rec_rebuild_on_startup:
             logger.info("recommender: REBUILD_ON_STARTUP=true, scheduling immediate offline jobs")
 
+            async def _startup_rec_redis_sync() -> None:
+                await _rec_job("redis_sync(startup)", run_rec_redis_sync)
+
+            app.state.startup_rec_redis_sync_task = asyncio.create_task(_startup_rec_redis_sync())
+
             async def _startup_rec_rebuild() -> None:
                 # Redis first (fast cold-start fallback), then Milvus full (creates collection).
-                await _rec_job("redis_sync(startup)", run_rec_redis_sync)
+                await app.state.startup_rec_redis_sync_task
                 await _rec_job("milvus_full(startup)", run_rec_milvus_full)
 
             app.state.startup_rec_rebuild_task = asyncio.create_task(_startup_rec_rebuild())
+
+        async def _await_startup_task(task, label: str) -> None:
+            if task is None:
+                return
+            try:
+                await task
+            except Exception as exc:
+                logger.warning("recommender online warm-start wait %s failed: %s", label, exc)
+
+        async def _warm_recommend_online() -> None:
+            from plugins_market.recommender.service import warm_recommend_online
+
+            # Avoid overlapping DB/Redis with hot_score recompute and redis_sync.
+            # Do not wait for milvus_full — it can run for tens of minutes.
+            await _await_startup_task(
+                getattr(app.state, "startup_hot_score_task", None),
+                "hot_score",
+            )
+            await _await_startup_task(
+                getattr(app.state, "startup_rec_redis_sync_task", None),
+                "redis_sync",
+            )
+            started = time.monotonic()
+            try:
+                await asyncio.to_thread(warm_recommend_online)
+                logger.info(
+                    "recommender online warm-start done elapsed=%.1fs",
+                    time.monotonic() - started,
+                )
+            except Exception as exc:
+                logger.warning("recommender online warm-start failed: %s", exc)
+
+        app.state.rec_online_warmup_task = asyncio.create_task(_warm_recommend_online())
 
     # ── yield (app runs) ───────────────────────────────────────────────────
     yield
@@ -647,6 +685,9 @@ async def lifespan(app: FastAPI):
     _warmup_task = getattr(app.state, "warmup_task", None)
     if _warmup_task is not None:
         _warmup_task.cancel()
+    _rec_online_warmup = getattr(app.state, "rec_online_warmup_task", None)
+    if _rec_online_warmup is not None:
+        _rec_online_warmup.cancel()
     _redis = getattr(app.state, "retrieval_redis", None)
     if _redis is not None:
         try:

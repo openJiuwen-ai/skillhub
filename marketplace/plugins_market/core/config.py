@@ -696,6 +696,13 @@ class Settings(BaseSettings):
         le=2000,
         validation_alias=AliasChoices("MARKET_REC_LIST_TOP_K", "REC_LIST_TOP_K"),
     )
+    # POST /recommend 公开页进程内缓存条数；Swarm 首页 top_k 更小时切前缀。改后需重启。
+    rec_plaza_cache_top_k: int = Field(
+        default=30,
+        ge=1,
+        le=500,
+        validation_alias=AliasChoices("MARKET_REC_PLAZA_CACHE_TOP_K", "REC_PLAZA_CACHE_TOP_K"),
+    )
     milvus_host: str = Field(
         default="127.0.0.1",
         validation_alias=AliasChoices("MARKET_MILVUS_HOST", "MILVUS_HOST"),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any
 
 from recommender.offline.redis_sync.client import create_redis_client
@@ -22,12 +23,94 @@ logger = logging.getLogger(__name__)
 
 _KIND_ORDER = (KIND_DOWNLOAD, KIND_LIKE, KIND_STAR)
 
+_client_lock = threading.Lock()
+_clients: dict[tuple, Any] = {}
+
+
+def _client_key(cfg: RedisConfig) -> tuple:
+    return (cfg.host, int(cfg.port), int(cfg.db), bool(cfg.ssl), cfg.password or "")
+
+
+def reset_redis_clients() -> None:
+    with _client_lock:
+        clients = list(_clients.values())
+        _clients.clear()
+    for client in clients:
+        close = getattr(client, "close", None)
+        if close is None:
+            continue
+        try:
+            close()
+        except Exception as exc:
+            logger.warning("failed to close redis client: %s", exc)
+
+
+def _forget_client(cfg: RedisConfig, client: Any | None = None) -> None:
+    key = _client_key(cfg)
+    with _client_lock:
+        cached = _clients.get(key)
+        if client is not None and cached is not client:
+            stale = client
+        else:
+            stale = _clients.pop(key, None)
+    if stale is None:
+        return
+    close = getattr(stale, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception as exc:
+        logger.warning("failed to close stale redis client: %s", exc)
+
 
 def _redis(cfg: RedisConfig | None = None):
     cfg = cfg or load_config().redis
-    client = create_redis_client(cfg)
-    client.ping()
-    return client, cfg
+    key = _client_key(cfg)
+    with _client_lock:
+        client = _clients.get(key)
+    if client is not None:
+        return client, cfg
+    created = create_redis_client(cfg)
+    try:
+        created.ping()
+    except Exception:
+        close = getattr(created, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception as exc:
+                logger.warning("failed to close failed redis client: %s", exc)
+        raise
+    with _client_lock:
+        existing = _clients.get(key)
+        if existing is not None:
+            close = getattr(created, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as exc:
+                    logger.warning("failed to close duplicated redis client: %s", exc)
+            return existing, cfg
+        _clients[key] = created
+    return created, cfg
+
+
+def get_redis_client(cfg: RedisConfig | None = None):
+    """Return a (client, cfg) pair, reusing cached clients for the same config."""
+    return _redis(cfg)
+
+
+def _execute_redis(cfg: RedisConfig | None, op):
+    cfg = cfg or load_config().redis
+    client, cfg = _redis(cfg)
+    try:
+        return op(client, cfg)
+    except Exception as exc:
+        logger.warning("redis client failed, reconnecting: %s", exc)
+        _forget_client(cfg, client)
+        client, cfg = _redis(cfg)
+        return op(client, cfg)
 
 
 def load_user_seed_ids(
@@ -40,35 +123,36 @@ def load_user_seed_ids(
     if not uid:
         return []
 
-    client, cfg = _redis(redis_cfg)
-    prefix = cfg.user_seq.key_prefix.rstrip(":")
-    if not client.sismember(user_seq_index_key(prefix), uid):
-        return []
+    def _load(client: Any, cfg: RedisConfig) -> list[str]:
+        prefix = cfg.user_seq.key_prefix.rstrip(":")
+        if not client.sismember(user_seq_index_key(prefix), uid):
+            return []
 
-    seen: set[str] = set()
-    out: list[str] = []
+        seen: set[str] = set()
+        out: list[str] = []
 
-    for kind in _KIND_ORDER:
-        raw = client.get(user_seq_key(prefix, uid, kind))
-        if not raw:
-            continue
-        try:
-            seq = json.loads(raw)
-        except Exception:
-            logger.warning("invalid user seq json key=%s", user_seq_key(prefix, uid, kind))
-            continue
-        if not isinstance(seq, list):
-            continue
-        for aid in reversed(seq):
-            s = str(aid).strip()
-            if not s or s in seen:
+        for kind in _KIND_ORDER:
+            raw = client.get(user_seq_key(prefix, uid, kind))
+            if not raw:
                 continue
-            seen.add(s)
-            out.append(s)
-            if len(out) >= max_seeds:
-                return out
+            try:
+                seq = json.loads(raw)
+            except Exception:
+                logger.warning("invalid user seq json key=%s", user_seq_key(prefix, uid, kind))
+                continue
+            if not isinstance(seq, list):
+                continue
+            for aid in reversed(seq):
+                s = str(aid).strip()
+                if not s or s in seen:
+                    continue
+                seen.add(s)
+                out.append(s)
+                if len(out) >= max_seeds:
+                    return out
+        return out
 
-    return out
+    return _execute_redis(redis_cfg, _load)
 
 
 def load_topk_install_items(
@@ -89,9 +173,11 @@ def load_topk_install_items(
     exclude = exclude_ids or set()
     cid = (category_id or "").strip()
     plugin_types = parse_plugin_types(plugin_type)
-    client, cfg = _redis(redis_cfg)
-    key = cfg.topk_install.key
-    raw = client.get(key)
+
+    def _load(client: Any, cfg: RedisConfig):
+        return client.get(cfg.topk_install.key), cfg.topk_install.key
+
+    raw, key = _execute_redis(redis_cfg, _load)
     if not raw:
         logger.warning("topk_install key missing: %s", key)
         return []

@@ -73,3 +73,30 @@ def test_post_recommend_by_ids_returns_200_empty_when_disabled():
     resp = _client().post("/api/v1/recommend/by_ids", json={"asset_ids": ["a1"], "top_k": 5})
     assert resp.status_code == 200
     assert resp.json()["data"]["items"] == []
+
+
+def test_post_recommend_skillpack_skips_db_when_disabled(monkeypatch):
+    called = {"n": 0}
+
+    def _should_not_list(**_kwargs):
+        called["n"] += 1
+        raise AssertionError("skillpack must not hydrate when recommender is disabled")
+
+    monkeypatch.setattr(
+        "plugins_market.routers.recommender_disabled.list_plugins_by_install_count",
+        _should_not_list,
+    )
+    monkeypatch.setattr(
+        "plugins_market.routers.recommender_disabled.SessionLocal",
+        lambda: (_ for _ in ()).throw(AssertionError("skillpack must not open SessionLocal")),
+    )
+    resp = _client().post(
+        "/api/v1/recommend",
+        json={"plugin_type": "skillpack", "top_k": 6, "user_id": "", "request_id": "warmup"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["items"] == []
+    assert body["data"]["source"] == "install_count"
+    assert body["data"]["plugin_type"] == "skillpack"
+    assert called["n"] == 0
