@@ -307,3 +307,6 @@ def validate_png_icon_bytes(data: bytes, *, path: str = "icon.png") -> None:
             error="invalid_plugin_structure",
             message=f"{path} 不是有效的 PNG 文件（文件头魔数不匹配）",
         )
+    from plugins_market.validation.icon_png_optimize import assert_png_decodable
+
+    assert_png_decodable(data, path=path)
