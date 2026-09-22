@@ -674,6 +674,7 @@
     "agentErrorMissingVersion": "Enter a version (required for bare connector packages)",
     "agentErrorInvalidManifest": "manifest.json could not be parsed",
     "agentErrorUnrecognizedLayout": "Unrecognized package layout; upload a native or market-wrapped zip",
+    "agentErrorCorruptZip": "Upload a complete zip file. Empty files, corrupted archives, or a folder renamed to .zip cannot be parsed.",
     "fieldPluginIdSwarmSkill": "Link to existing Swarm Skill (optional)",
     "fieldPluginIdHelpSwarmSkill": "Choose “New Swarm Skill” for a first publish. Pick a listed item to publish a new version.",
     "pluginIdNewOptionSwarmSkill": "New Swarm Skill (first publish)",

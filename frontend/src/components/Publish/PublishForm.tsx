@@ -17,6 +17,7 @@ import {
   type DetectedPublishPluginType,
 } from '@/utils/buildSkillPublishZip'
 import { inspectAgentPublishZip } from '@/utils/detectAgentPublishZip'
+import { isJszipCorruptMessage } from '@/utils/publishZip'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
 import { isAgentAssetPluginType, MARKET_TAB_PLUGIN_TYPES } from '@/utils/pluginType'
 import { resolvePublishFormFieldLabels, resolvePublishTypeLabel } from '@/utils/publishFieldLabels'
@@ -52,6 +53,7 @@ const SKILL_ZIP_ERROR_KEYS: Record<string, string> = {
   AGENT_ZIP_MISSING_VERSION: 'publish.agentErrorMissingVersion',
   AGENT_ZIP_INVALID_MANIFEST: 'publish.agentErrorInvalidManifest',
   AGENT_ZIP_UNRECOGNIZED_LAYOUT: 'publish.agentErrorUnrecognizedLayout',
+  AGENT_ZIP_CORRUPT: 'publish.agentErrorCorruptZip',
 }
 
 const ZIP_ERROR_TO_FIELD: Record<string, PublishFieldKey> = {
@@ -359,6 +361,10 @@ export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: Publish
       return
     }
     const msg = code || fallbackMsg
+    if (isJszipCorruptMessage(msg)) {
+      setGeneralError(t('publish.agentErrorCorruptZip'))
+      return
+    }
     const heuristicField = detectFieldByKeyword(msg)
     if (heuristicField) setFieldErrors(prev => ({ ...prev, [heuristicField]: msg }))
     else setGeneralError(msg)
