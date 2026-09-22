@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from common.security.security_utils import SecurityUtils
 from .config import settings
+from .db_pool import sqlalchemy_pool_kwargs
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -65,8 +66,7 @@ DATABASE_URL = _get_effective_database_url()
 
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=3600,
+    **sqlalchemy_pool_kwargs(),
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

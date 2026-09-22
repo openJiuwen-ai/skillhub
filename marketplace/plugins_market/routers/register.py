@@ -26,8 +26,11 @@ def router_register(app: FastAPI) -> None:
     app.include_router(oauth_provider.router, prefix="/api/v1/auth", tags=["auth"])
     if settings.recommender_enabled:
         from plugins_market.routers.recommender import router as recommender_router
+    else:
+        # 关闭时仍注册路径并按 install_count 出卡片；否则 Swarm 预热 POST /recommend 会 404。
+        from plugins_market.routers.recommender_disabled import router as recommender_router
 
-        app.include_router(recommender_router, prefix="/api/v1")
+    app.include_router(recommender_router, prefix="/api/v1")
     app.include_router(github_watch.router, prefix="/api/v1")
     if settings.clawhub_compat_enabled:
         app.include_router(clawhub_router, prefix="/api/v1")
