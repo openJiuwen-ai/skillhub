@@ -1578,6 +1578,33 @@ def _use_featured_search_allowlist(
     return not category_id and enabled
 
 
+def list_plugins_by_install_count(
+    *,
+    top_k: int,
+    category_id: str = "",
+    plugin_type: str = "",
+    db: Session,
+    storage: S3StorageClient,
+    viewer: ViewerContext,
+) -> List[PluginListItem]:
+    """POST /recommend 在个性化关闭时与列表默认排序对齐：install_count。"""
+    page_size = min(max(int(top_k), 1), 200)
+    query = PluginListQuery(
+        page=1,
+        page_size=page_size,
+        category_id=(category_id or "").strip() or None,
+        plugin_type=(plugin_type or "").strip() or None,
+        order_by="install_count",
+    )
+    return list_plugins_service(
+        query,
+        db,
+        storage,
+        viewer=viewer,
+        use_retrieval_search=False,
+    ).items
+
+
 def list_plugins_service(
     query: PluginListQuery,
     db: Session,
