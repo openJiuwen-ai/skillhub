@@ -4,16 +4,19 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
 
 from plugins_market.core.auth import resolve_viewer_context
 from plugins_market.core.config import settings
-from plugins_market.core.database import get_db
+from plugins_market.core.database import SessionLocal
 from plugins_market.core.errors import auth_error_payload, http_error_payload
 from plugins_market.core.logging import get_logger
 from plugins_market.core.s3_storage_client import get_storage_client
-from plugins_market.core.viewer_context import ViewerContext
+from plugins_market.core.viewer_context import ANONYMOUS_VIEWER, ViewerContext
+from plugins_market.recommender import anon_card_cache
+from plugins_market.recommender.plaza_gate import empty_recommend_data, plugin_type_on_market
 from plugins_market.recommender.schemas import (
     ByIdsRequest,
     ByQueriesRequest,
@@ -35,6 +38,8 @@ from plugins_market.services.plugin import filter_recommend_ranked_ids, hydrate_
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/recommend", tags=["recommend"])
+
+_plugin_type_on_market = plugin_type_on_market
 
 
 def _ensure_enabled() -> None:
@@ -93,6 +98,16 @@ def _resolve_recommend_user_id(body: RecommendRequest, viewer: ViewerContext) ->
     return ""
 
 
+def _anon_recommend_cacheable(_viewer: ViewerContext, user_id: str) -> bool:
+    """Public plaza cards: resolved user_id empty (anon or system-token cold-start).
+
+    Swarm plaza sends X-System-Token with empty body.user_id. That is still the
+    same public ranking; hydrate with ANONYMOUS_VIEWER so admin visibility
+    never enters the shared cache. Personalized body.user_id is not cached.
+    """
+    return not (user_id or "").strip()
+
+
 def _dedupe_ranked_ids(asset_ids: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -105,50 +120,83 @@ def _dedupe_ranked_ids(asset_ids: list[str]) -> list[str]:
     return out
 
 
-@router.post("", response_model=ResponseModel[RecommendData])
-def recommend(
-    body: RecommendRequest,
-    viewer: ViewerContext = Depends(resolve_viewer_context),
-    db: Session = Depends(get_db),
-    storage=Depends(get_storage_client),
+def _recommend_data(
+    *,
+    request_id: str,
+    user_id: str,
+    source: str,
+    category_id: str,
+    plugin_type: str,
+    items: list[RecommendItemOut],
 ) -> ResponseModel[RecommendData]:
-    """Personalized recommend, then market filter + card hydrate (same as list recommend)."""
-    _ensure_enabled()
-    user_id = _resolve_recommend_user_id(body, viewer)
-    plugin_type = (body.plugin_type or "").strip()
-    top_k = int(body.top_k)
+    return ResponseModel(
+        code=status.HTTP_200_OK,
+        message="ok",
+        data=RecommendData(
+            request_id=request_id,
+            user_id=user_id,
+            source=source,
+            category_id=category_id,
+            plugin_type=plugin_type,
+            items=items,
+        ),
+    )
+
+
+def _recall_and_hydrate_cards(
+    *,
+    user_id: str,
+    plugin_type: str,
+    category_id: str,
+    top_k: int,
+    request_id: str,
+    timestamp: int | float | None,
+    storage,
+    hydrate_viewer: ViewerContext,
+) -> tuple[str, list[RecommendItemOut]]:
     recall_k = min(500, max(top_k * 2, top_k))
+    started = time.perf_counter()
     try:
         items, source = run_recommend_for_user(
             user_id=user_id,
             top_k=recall_k,
-            request_id=body.request_id,
-            timestamp=body.timestamp,
-            category_id=body.category_id,
+            request_id=request_id,
+            timestamp=timestamp,
+            category_id=category_id,
             plugin_type=plugin_type,
         )
+        recall_ms = int((time.perf_counter() - started) * 1000)
         scores = {str(x.asset_id): float(x.score) for x in items if str(x.asset_id or "").strip()}
         ranked_ids = _dedupe_ranked_ids([x.asset_id for x in items])
-        visible_ids = filter_recommend_ranked_ids(
-            ranked_ids,
-            plugin_type=plugin_type,
-            db=db,
-            viewer=viewer,
-        )[:top_k]
-        cards = hydrate_plugin_list_items(
-            visible_ids,
-            db=db,
-            storage=storage,
-            viewer=viewer,
-            market_public_scoped=True,
-        )
+        hydrate_started = time.perf_counter()
+        db = SessionLocal()
+        try:
+            visible_ids = filter_recommend_ranked_ids(
+                ranked_ids,
+                plugin_type=plugin_type,
+                db=db,
+                viewer=hydrate_viewer,
+            )[:top_k]
+            cards = hydrate_plugin_list_items(
+                visible_ids,
+                db=db,
+                storage=storage,
+                viewer=hydrate_viewer,
+                market_public_scoped=True,
+            )
+        finally:
+            db.close()
+        hydrate_ms = int((time.perf_counter() - hydrate_started) * 1000)
         logger.info(
-            "recommend hydrate: source=%s user_id=%s ranked=%d visible=%d top_k=%s",
+            "recommend hydrate: source=%s user_id=%s ranked=%d visible=%d top_k=%s "
+            "recall_ms=%s hydrate_ms=%s",
             source,
             user_id,
             len(ranked_ids),
             len(cards),
             top_k,
+            recall_ms,
+            hydrate_ms,
         )
         out_items = [
             RecommendItemOut.model_validate(
@@ -159,18 +207,123 @@ def recommend(
     except Exception as exc:
         logger.exception("recommend failed: %s", exc)
         raise _recommend_service_error() from exc
+    return source, out_items
 
-    return ResponseModel(
-        code=status.HTTP_200_OK,
-        message="ok",
-        data=RecommendData(
+
+@router.post("", response_model=ResponseModel[RecommendData])
+def recommend(
+    body: RecommendRequest,
+    viewer: ViewerContext = Depends(resolve_viewer_context),
+    storage=Depends(get_storage_client),
+) -> ResponseModel[RecommendData]:
+    """Personalized recommend, then market filter + card hydrate (same as list recommend)."""
+    _ensure_enabled()
+    user_id = _resolve_recommend_user_id(body, viewer)
+    plugin_type = (body.plugin_type or "").strip()
+    category_id = (body.category_id or "").strip()
+    top_k = int(body.top_k)
+    if not _plugin_type_on_market(plugin_type):
+        logger.info(
+            "recommend skip unknown plugin_type=%s (not on Hub catalog)",
+            plugin_type,
+        )
+        return empty_recommend_data(
+            request_id=body.request_id or "",
+            user_id=user_id,
+            category_id=category_id,
+            plugin_type=plugin_type,
+        )
+    cacheable = _anon_recommend_cacheable(viewer, user_id)
+    if cacheable:
+        plaza_key = anon_card_cache.cache_key(plugin_type, category_id)
+        plaza_page = anon_card_cache.plaza_cache_top_k()
+        if top_k <= plaza_page:
+            taken = anon_card_cache.take(plaza_key, top_k)
+            if taken is not None:
+                source, raw_items = taken
+                logger.info(
+                    "recommend cache hit: source=%s plugin_type=%s category_id=%s "
+                    "top_k=%s cached=%d items=%d",
+                    source,
+                    plugin_type,
+                    category_id,
+                    top_k,
+                    plaza_page,
+                    len(raw_items),
+                )
+            else:
+
+                def _fill_plaza() -> tuple[str, list[dict]]:
+                    hit = anon_card_cache.get(plaza_key)
+                    if hit is not None:
+                        return hit
+                    source, out_items = _recall_and_hydrate_cards(
+                        user_id="",
+                        plugin_type=plugin_type,
+                        category_id=category_id,
+                        top_k=plaza_page,
+                        request_id=body.request_id,
+                        timestamp=body.timestamp,
+                        storage=storage,
+                        hydrate_viewer=ANONYMOUS_VIEWER,
+                    )
+                    raw_items = [item.model_dump() for item in out_items]
+                    anon_card_cache.put(plaza_key, source, raw_items)
+                    return source, raw_items
+
+                try:
+                    source, cached_items = anon_card_cache.singleflight(plaza_key, _fill_plaza)
+                except TimeoutError as exc:
+                    logger.exception("recommend plaza singleflight timeout")
+                    raise _recommend_service_error() from exc
+                raw_items = cached_items[:top_k]
+        else:
+            source, out_items = _recall_and_hydrate_cards(
+                user_id="",
+                plugin_type=plugin_type,
+                category_id=category_id,
+                top_k=top_k,
+                request_id=body.request_id,
+                timestamp=body.timestamp,
+                storage=storage,
+                hydrate_viewer=ANONYMOUS_VIEWER,
+            )
+            raw_items = [item.model_dump() for item in out_items]
+            anon_card_cache.put(plaza_key, source, raw_items)
+            return _recommend_data(
+                request_id=body.request_id or "",
+                user_id=user_id,
+                source=source,
+                category_id=category_id,
+                plugin_type=plugin_type,
+                items=out_items,
+            )
+        return _recommend_data(
             request_id=body.request_id or "",
             user_id=user_id,
             source=source,
-            category_id=(body.category_id or "").strip(),
+            category_id=category_id,
             plugin_type=plugin_type,
-            items=out_items,
-        ),
+            items=[RecommendItemOut.model_validate(row) for row in raw_items],
+        )
+
+    source, out_items = _recall_and_hydrate_cards(
+        user_id=user_id,
+        plugin_type=plugin_type,
+        category_id=category_id,
+        top_k=top_k,
+        request_id=body.request_id,
+        timestamp=body.timestamp,
+        storage=storage,
+        hydrate_viewer=viewer,
+    )
+    return _recommend_data(
+        request_id=body.request_id or "",
+        user_id=user_id,
+        source=source,
+        category_id=category_id,
+        plugin_type=plugin_type,
+        items=out_items,
     )
 
 

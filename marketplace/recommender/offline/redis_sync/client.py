@@ -15,4 +15,7 @@ def create_redis_client(cfg: RedisConfig):
         password=cfg.password or None,
         ssl=cfg.ssl,
         decode_responses=True,
+        socket_connect_timeout=2.0,
+        socket_timeout=2.0,
+        health_check_interval=30,
     )
