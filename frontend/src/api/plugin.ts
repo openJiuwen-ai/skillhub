@@ -179,6 +179,44 @@ export async function getPluginTagOptions(
   return data.data
 }
 
+/** GET /plugins/category-totals 返回的分类计数聚合 */
+export interface PluginCategoryTotals {
+  /** category_id -> 可见资产数（未分类不计入） */
+  totals: Record<string, number>
+  /** 全部可见资产总数（含未分类），与不带 category_id 的列表 total 同口径 */
+  all: number
+}
+
+export interface PluginCategoryTotalsResponse {
+  code: number
+  message: string
+  data: PluginCategoryTotals
+}
+
+/** 拉取市场侧栏分类计数：一条聚合接口替代每分类一个 page_size=1 列表请求 */
+export async function getPluginCategoryTotals(
+  request: { asset_type?: string; plugin_type?: string } = {}
+): Promise<PluginCategoryTotals> {
+  const client = getApiClient()
+  const { data } = await client.get<PluginCategoryTotalsResponse>(
+    API_ENDPOINTS.PLUGINS.CATEGORY_TOTALS,
+    {
+      params: {
+        asset_type: request.asset_type || undefined,
+        plugin_type: request.plugin_type || undefined,
+        moderation_status: 'APPROVED',
+      },
+    }
+  )
+  if (data == null || typeof data !== 'object' || data.data == null) {
+    throw new MarketplaceApiError('分类计数响应无效')
+  }
+  if (data.code !== 200) {
+    throw new MarketplaceApiError(data.message || '分类计数拉取失败', data.code)
+  }
+  return data.data
+}
+
 /** GET /api/v1/artifacts/{id} 响应 data */
 export interface PluginDownloadData {
   download_url: string

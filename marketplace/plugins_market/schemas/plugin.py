@@ -439,6 +439,13 @@ class TagOption(BaseModel):
     count: int = Field(..., ge=0, description="使用该标签的可见资产数")
 
 
+class CategoryTotalsData(BaseModel):
+    """GET /plugins/category-totals 返回的分类计数聚合。"""
+
+    totals: Dict[str, int] = Field(default_factory=dict, description="category_id -> 可见资产数（未分类不计入）")
+    all: int = Field(0, ge=0, description="全部可见资产总数（含未分类），与不带 category_id 的列表 total 同口径")
+
+
 class SkillModerationRequest(BaseModel):
     """POST /plugins/{asset_id}/moderation 请求体。"""
 

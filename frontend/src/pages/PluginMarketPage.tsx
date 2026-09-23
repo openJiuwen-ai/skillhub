@@ -46,7 +46,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
-import { useQueries, useQuery, useQueryClient } from 'react-query'
+import { useQuery, useQueryClient } from 'react-query'
 import { pluginCardTooltipProps, pluginDetailHeaderTooltipProps } from '@/components/Common/pluginCardTooltip'
 import { TAG_NEUTRAL, buildTagColorMap, TAG_MAX_VISIBLE, type TagColor } from '@/utils/tagColors'
 import { PluginMarkdown } from '@/components/Common/PluginMarkdown'
@@ -60,13 +60,14 @@ import axios from 'axios'
 import { pinyin } from 'pinyin-pro'
 import {
   getPluginArtifactDownload,
+  getPluginCategoryTotals,
   getPluginInteractionsBatch,
   getPluginTagOptions,
   getPluginVersionDetail,
   togglePluginInteract,
   type AssetInteractionState,
 } from '@/api/plugin'
-import { getPlugins, usePluginListQuery } from '@/api'
+import { usePluginListQuery } from '@/api'
 import { getSiteConfig } from '@/api/playground'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
@@ -897,14 +898,14 @@ export default function PluginMarketPage() {
       : undefined,
   })
 
-  const approvedSkillMarketTotalQuery = usePluginListQuery({
-    page: 1,
-    page_size: 1,
-    asset_type: activeAssetType,
-    plugin_type: activeType,
-    moderation_status: 'APPROVED',
-  })
-  const approvedSkillMarketTotal = approvedSkillMarketTotalQuery.data?.data?.total
+  // 侧栏分类计数：一条聚合接口（口径与列表 total 严格一致），替代每分类一个 page_size=1 请求。
+  const categoryTotalsQuery = useQuery(
+    ['plugins', 'category-totals', activeAssetType, activeType],
+    () => getPluginCategoryTotals({ asset_type: activeAssetType, plugin_type: activeType }),
+    { staleTime: 60_000, keepPreviousData: true },
+  )
+  const categoryTotals = categoryTotalsQuery.data?.totals
+  const approvedSkillMarketTotal = categoryTotalsQuery.data?.all
 
   // 标签筛选选项：热门自动推荐 + 运营配置优先展示
   const tagOptionsQuery = useQuery(
@@ -968,35 +969,6 @@ export default function PluginMarketPage() {
     setCurrentPage(1)
   }, [selectedTags.join(',')])
 
-  const categoryTotalsQueries = useQueries(
-    CONCRETE_CATEGORY_KEYS.map(categoryId => ({
-      queryKey: [
-        'plugins',
-        'skill-category-total',
-        activeType,
-        {
-          page: 1,
-          page_size: 1,
-          asset_type: activeAssetType,
-          plugin_type: activeType,
-          moderation_status: 'APPROVED',
-          category_id: categoryId,
-        },
-      ] as const,
-      queryFn: () =>
-        getPlugins({
-          page: 1,
-          page_size: 1,
-          asset_type: activeAssetType,
-          plugin_type: activeType,
-          moderation_status: 'APPROVED',
-          category_id: categoryId,
-        }),
-      keepPreviousData: true,
-    })),
-  )
-  const categoryTotalSignature = categoryTotalsQueries.map(q => q.data?.data?.total).join(',')
-
   const categorySkillCount = useMemo((): Partial<Record<CategoryKey, number>> => {
     const out: Partial<Record<CategoryKey, number>> = {}
     if (typeof approvedSkillMarketTotal === 'number') {
@@ -1011,13 +983,12 @@ export default function PluginMarketPage() {
     ) {
       out.featured = Math.min(approvedSkillMarketTotal, featuredListTopK)
     }
-    for (let i = 0; i < CONCRETE_CATEGORY_KEYS.length; i += 1) {
-      const key = CONCRETE_CATEGORY_KEYS[i]
-      const n = categoryTotalsQueries[i]?.data?.data?.total
-      if (key != null && typeof n === 'number') out[key] = n
+    for (const key of CONCRETE_CATEGORY_KEYS) {
+      const n = categoryTotals?.[key]
+      if (typeof n === 'number') out[key] = n
     }
     return out
-  }, [approvedSkillMarketTotal, categoryTotalSignature, featuredListTopK])
+  }, [approvedSkillMarketTotal, categoryTotals, featuredListTopK])
 
   const marketAssetIds = useMemo(() => marketPlugins.map(plugin => plugin.assetId).filter(Boolean), [marketPlugins])
   const interactionViewerKey = isAuthenticated ? `user:${user?.id ? String(user.id) : 'token'}` : 'guest'
@@ -1061,7 +1032,8 @@ export default function PluginMarketPage() {
           next.set('type', nextType)
           return next
         },
-        { replace: false },
+        // REPLACE：切类型只是刷新列表内容，PUSH 会让 ScrollRestoration 跳回顶部
+        { replace: true },
       )
     },
     [activeType, setSearchParams],

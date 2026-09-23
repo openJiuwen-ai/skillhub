@@ -304,13 +304,20 @@ def setup_logging(debug: bool = False):
         if (
             logger_name.startswith("plugins_market")
             or logger_name.startswith("common")
-            or logger_name.startswith("sqlalchemy")
         ):
             logger_obj.handlers.clear()
             logger_obj.filters.clear()
             logger_obj.addFilter(_GLOBAL_LOG_FILTER)
             logger_obj.propagate = True
             logger_obj.setLevel(level)
+            logger_obj.disabled = False
+        elif logger_name.startswith("sqlalchemy"):
+            # 提到 INFO 会绕过 echo=False 刷出全量 SQL，锁 WARNING 以上
+            logger_obj.handlers.clear()
+            logger_obj.filters.clear()
+            logger_obj.addFilter(_GLOBAL_LOG_FILTER)
+            logger_obj.propagate = True
+            logger_obj.setLevel(max(level, logging.WARNING))
             logger_obj.disabled = False
 
     from plugins_market.core.interface_log import setup_interface_logger
