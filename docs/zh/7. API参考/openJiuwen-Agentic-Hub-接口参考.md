@@ -23,6 +23,7 @@
 | **市场资产核心** | | | | |
 | GET | `/plugins` | Query：`page`、`page_size`、`asset_id`、`asset_type`、`publisher_id`、`publisher_name`、`category_id`、`plugin_type`、`plugin_type_exclude`、`search_keyword`、`moderation_status`、`tags`、`tags_match`、`order_by`、`desc` | 可选 Bearer 或 System Token | — |
 | GET | `/plugins/tags` | Query：`plugin_type`、`keyword`、`limit`（1–100，默认 20） | — | — |
+| GET | `/plugins/category-totals` | —（一次返回全部市场 tab 类型的 `{plugin_type: {totals, all}}`，服务端缓存 30s） | — | — |
 | GET | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version` | 可选 Bearer 或 System Token | — |
 | GET | `/plugins/{asset_id}/versions/{version}/files` | 路径：`asset_id`、`version`；Query：`with_content` | 可选 Bearer 或 System Token | — |
 | GET | `/artifacts/{id}` | 路径：`id`；Query：`version`、`is_cli_download` | 可选 Bearer 或 System Token | — |

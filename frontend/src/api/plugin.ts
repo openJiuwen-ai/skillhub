@@ -187,27 +187,19 @@ export interface PluginCategoryTotals {
   all: number
 }
 
+/** 一次返回所有市场 tab 类型的分类计数（key 为 tab 的 plugin_type） */
+export type PluginCategoryTotalsByType = Record<string, PluginCategoryTotals>
+
 export interface PluginCategoryTotalsResponse {
   code: number
   message: string
-  data: PluginCategoryTotals
+  data: PluginCategoryTotalsByType
 }
 
-/** 拉取市场侧栏分类计数：一条聚合接口替代每分类一个 page_size=1 列表请求 */
-export async function getPluginCategoryTotals(
-  request: { asset_type?: string; plugin_type?: string } = {}
-): Promise<PluginCategoryTotals> {
+/** 拉取市场侧栏分类计数：一次返回全部类型，切 tab 不再重新请求 */
+export async function getPluginCategoryTotals(): Promise<PluginCategoryTotalsByType> {
   const client = getApiClient()
-  const { data } = await client.get<PluginCategoryTotalsResponse>(
-    API_ENDPOINTS.PLUGINS.CATEGORY_TOTALS,
-    {
-      params: {
-        asset_type: request.asset_type || undefined,
-        plugin_type: request.plugin_type || undefined,
-        moderation_status: 'APPROVED',
-      },
-    }
-  )
+  const { data } = await client.get<PluginCategoryTotalsResponse>(API_ENDPOINTS.PLUGINS.CATEGORY_TOTALS)
   if (data == null || typeof data !== 'object' || data.data == null) {
     throw new MarketplaceApiError('分类计数响应无效')
   }

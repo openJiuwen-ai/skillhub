@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path as FsPath
-from typing import Annotated, Any, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import (
@@ -1312,17 +1312,11 @@ _CATEGORY_TOTALS_CACHE_TTL = 30
 
 @plugin_router.get(
     "/category-totals",
-    response_model=ResponseModel[CategoryTotalsData],
+    response_model=ResponseModel[Dict[str, CategoryTotalsData]],
 )
-async def get_category_totals(
-    db: Session = Depends(get_db),
-    asset_type: Optional[str] = Query(None, description="资产类型（精确匹配，与列表接口同语义）"),
-    plugin_type: Optional[str] = Query(None, description="插件类型（精确匹配，逗号分隔多个，与列表接口同语义）"),
-):
-    """侧栏分类计数聚合：一次返回所有分类的可见资产数与总数，口径与列表 total 一致。"""
-    at = (asset_type or "").strip() or None
-    pt = (plugin_type or "").strip() or None
-    cache_key = f"plugins:category-totals:v1:{at or '-'}:{pt or '-'}"
+async def get_category_totals(db: Session = Depends(get_db)):
+    """侧栏分类计数聚合：一次返回所有市场 tab 类型的分类计数，口径与列表 total 一致。"""
+    cache_key = "plugins:category-totals:v2"
     hit = cache_get(cache_key)
     if hit is not None:
         try:
@@ -1330,18 +1324,19 @@ async def get_category_totals(
             return ResponseModel(
                 code=status.HTTP_200_OK,
                 message="ok",
-                data=CategoryTotalsData(totals=payload["totals"], all=payload["all"]),
+                data={t: CategoryTotalsData(totals=v["totals"], all=v["all"]) for t, v in payload.items()},
             )
         except Exception:
             pass  # 缓存值损坏（反序列化失败）-> 回源重算，不阻断请求
 
-    totals, total_all = MarketAssetRepository(db).category_totals(asset_type=at, plugin_type=pt)
-    cache_set(cache_key, json.dumps({"totals": totals, "all": total_all}), _CATEGORY_TOTALS_CACHE_TTL)
-    return ResponseModel(
-        code=status.HTTP_200_OK,
-        message="ok",
-        data=CategoryTotalsData(totals=totals, all=total_all),
+    by_type = MarketAssetRepository(db).category_totals_by_type()
+    data = {t: CategoryTotalsData(totals=totals, all=total_all) for t, (totals, total_all) in by_type.items()}
+    cache_set(
+        cache_key,
+        json.dumps({t: {"totals": d.totals, "all": d.all} for t, d in data.items()}),
+        _CATEGORY_TOTALS_CACHE_TTL,
     )
+    return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
 
 
 @plugin_router.get(

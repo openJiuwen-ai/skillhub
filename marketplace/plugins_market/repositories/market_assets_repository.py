@@ -19,6 +19,7 @@ from plugins_market.models.market_assets import (
 )
 from plugins_market.models.groups import MarketGroupDB, MarketGroupMemberDB, MarketGroupSkillGrantDB
 from plugins_market.core.moderation import (
+    AGENT_ASSET_PLUGIN_TYPES,
     MODERATED_MARKET_ASSET_TYPES,
     MODERATION_APPROVED,
     MODERATION_PENDING,
@@ -341,26 +342,14 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
         rows = self.db.execute(q).fetchall()
         return [(r.tag, int(r.cnt)) for r in rows]
 
-    def category_totals(
-        self,
-        *,
-        asset_type: str | None = None,
-        plugin_type: str | None = None,
-    ) -> Tuple[Dict[str, int], int]:
-        """按 category_id 聚合市场可见资产数，替代逐分类的 page_size=1 count。
+    def category_totals_by_type(self) -> Dict[str, Tuple[Dict[str, int], int]]:
+        """一次 GROUP BY (asset_type, plugin_type, category_id)，切片出每个市场 tab 类型的分类计数。
 
-        口径与 list_plugins 的 total 一致（匿名访客市场口径）；
-        市场页对所有登录态可见性相同，结果可共享缓存。
-        返回 ({category_id: count}，未分类不进 totals, 含未分类的总数)。
+        口径与 list_plugins 的 total 一致（匿名访客市场口径）；agent 四类与列表同样
+        要求 asset_type == plugin_type == tab，skill 两类只按 plugin_type。
+        返回 {tab_type: ({category_id: count}，未分类不进 totals, 含未分类的总数)}。
         """
         q = self.query().filter(MarketAssetDB.status != "OFFLINE")
-        if asset_type:
-            q = q.filter(MarketAssetDB.asset_type == asset_type)
-        pt_list = [p.strip() for p in (plugin_type or "").split(",") if p.strip()]
-        if len(pt_list) == 1:
-            q = q.filter(MarketAssetDB.plugin_type == pt_list[0])
-        elif pt_list:
-            q = q.filter(MarketAssetDB.plugin_type.in_(pt_list))
         mod_clause = skill_moderation_list_clause(_anonymous_viewer())
         if mod_clause is not None:
             q = q.filter(mod_clause)
@@ -372,17 +361,29 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
             )
         )
         rows = (
-            q.with_entities(MarketAssetDB.category_id, func.count(MarketAssetDB.asset_id))
-            .group_by(MarketAssetDB.category_id)
+            q.with_entities(
+                MarketAssetDB.asset_type,
+                MarketAssetDB.plugin_type,
+                MarketAssetDB.category_id,
+                func.count(MarketAssetDB.asset_id),
+            )
+            .group_by(MarketAssetDB.asset_type, MarketAssetDB.plugin_type, MarketAssetDB.category_id)
             .all()
         )
-        totals: Dict[str, int] = {}
-        total_all = 0
-        for category_id, cnt in rows:
-            total_all += int(cnt)
-            if category_id:
-                totals[str(category_id)] = int(cnt)
-        return totals, total_all
+        result: Dict[str, Tuple[Dict[str, int], int]] = {}
+        for tab in sorted(MODERATED_MARKET_ASSET_TYPES):
+            totals: Dict[str, int] = {}
+            total_all = 0
+            for asset_type, plugin_type, category_id, cnt in rows:
+                if plugin_type != tab:
+                    continue
+                if tab in AGENT_ASSET_PLUGIN_TYPES and asset_type != tab:
+                    continue
+                total_all += int(cnt)
+                if category_id:
+                    totals[str(category_id)] = int(cnt)
+            result[tab] = (totals, total_all)
+        return result
 
     @staticmethod
     def _is_publisher_scoped_list(params: PluginListQuery, viewer: "ViewerContext") -> bool:

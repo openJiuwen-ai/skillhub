@@ -898,14 +898,13 @@ export default function PluginMarketPage() {
       : undefined,
   })
 
-  // 侧栏分类计数：一条聚合接口（口径与列表 total 严格一致），替代每分类一个 page_size=1 请求。
-  const categoryTotalsQuery = useQuery(
-    ['plugins', 'category-totals', activeAssetType, activeType],
-    () => getPluginCategoryTotals({ asset_type: activeAssetType, plugin_type: activeType }),
-    { staleTime: 60_000, keepPreviousData: true },
-  )
-  const categoryTotals = categoryTotalsQuery.data?.totals
-  const approvedSkillMarketTotal = categoryTotalsQuery.data?.all
+  // 侧栏分类计数：一次拉全部 tab 类型，切类型走本地缓存不再发请求
+  const categoryTotalsQuery = useQuery(['plugins', 'category-totals'], () => getPluginCategoryTotals(), {
+    staleTime: 60_000,
+  })
+  const activeTypeTotals = categoryTotalsQuery.data?.[activeType]
+  const categoryTotals = activeTypeTotals?.totals
+  const approvedSkillMarketTotal = activeTypeTotals?.all
 
   // 标签筛选选项：热门自动推荐 + 运营配置优先展示
   const tagOptionsQuery = useQuery(
@@ -984,7 +983,8 @@ export default function PluginMarketPage() {
       out.featured = Math.min(approvedSkillMarketTotal, featuredListTopK)
     }
     for (const key of CONCRETE_CATEGORY_KEYS) {
-      const n = categoryTotals?.[key]
+      // 空分类显示 0（与旧请求行为一致）；未加载完成时不显示
+      const n = categoryTotals != null ? (categoryTotals[key] ?? 0) : undefined
       if (typeof n === 'number') out[key] = n
     }
     return out
