@@ -696,7 +696,7 @@ class Settings(BaseSettings):
         le=2000,
         validation_alias=AliasChoices("MARKET_REC_LIST_TOP_K", "REC_LIST_TOP_K"),
     )
-    # POST /recommend 公开页进程内缓存条数；Swarm 首页 top_k 更小时切前缀。改后需重启。
+    # POST /recommend 公开页缓存条数下限。实际页大小为 max(本值, rec_list_top_k)。改后需重启。
     rec_plaza_cache_top_k: int = Field(
         default=30,
         ge=1,

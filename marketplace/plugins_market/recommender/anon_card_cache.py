@@ -2,8 +2,8 @@
 
 """Process-local TTL cache for public POST /recommend cards.
 
-Stores a plaza-sized page (MARKET_REC_PLAZA_CACHE_TOP_K). Smaller Swarm
-home requests slice the prefix; larger pages skip this cache.
+Stores max(MARKET_REC_PLAZA_CACHE_TOP_K, MARKET_REC_LIST_TOP_K) cards.
+Smaller requests slice the prefix; larger pages skip this cache.
 """
 
 from __future__ import annotations
@@ -27,9 +27,14 @@ PlazaKey = tuple[str, str]
 
 
 def plaza_cache_top_k() -> int:
+    """Page size that still hits this cache.
+
+    Home requests use MARKET_REC_LIST_TOP_K (often 50). A smaller plaza
+    setting must not force those requests to skip the cache.
+    """
     from plugins_market.core.config import settings
 
-    return int(settings.rec_plaza_cache_top_k)
+    return max(int(settings.rec_plaza_cache_top_k), int(settings.rec_list_top_k))
 
 
 def cache_key(plugin_type: str, category_id: str) -> PlazaKey:

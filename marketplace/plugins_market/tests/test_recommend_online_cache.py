@@ -91,6 +91,17 @@ class AnonCardCacheTests(unittest.TestCase):
         anon_card_cache.put(key, "topk_install", [{"asset_id": "a1"}])
         self.assertIsNone(anon_card_cache.take(key, plaza_cache_top_k() + 1))
 
+    def test_page_covers_list_top_k_when_plaza_setting_is_smaller(self) -> None:
+        settings = SimpleNamespace(rec_plaza_cache_top_k=30, rec_list_top_k=50)
+        with patch("plugins_market.core.config.settings", settings):
+            self.assertEqual(plaza_cache_top_k(), 50)
+            key = _plaza_key()
+            rows = [{"asset_id": f"a{i}"} for i in range(50)]
+            self.assertTrue(anon_card_cache.put(key, "topk_install", rows))
+            taken = anon_card_cache.take(key, 50)
+        self.assertIsNotNone(taken)
+        self.assertEqual(len(taken[1]), 50)
+
     def test_put_skips_empty(self) -> None:
         key = _plaza_key()
         self.assertFalse(anon_card_cache.put(key, "topk_install", []))
@@ -130,6 +141,21 @@ class RedisClientReuseTests(unittest.TestCase):
         self.assertIs(second[0], client)
         self.assertEqual(create.call_count, 1)
         client.ping.assert_called_once()
+
+    def test_load_config_once_until_reset(self) -> None:
+        client = MagicMock()
+        cfg = _cfg()
+        with patch("recommender.online.redis_seeds.create_redis_client", return_value=client):
+            with patch(
+                "recommender.online.redis_seeds.load_config",
+                return_value=SimpleNamespace(redis=cfg),
+            ) as load:
+                redis_seeds.get_redis_client()
+                redis_seeds.load_topk_install_items(1)
+                self.assertEqual(load.call_count, 1)
+                redis_seeds.reset_redis_clients()
+                redis_seeds.get_redis_client()
+                self.assertEqual(load.call_count, 2)
 
     def test_get_failure_reconnects_once(self) -> None:
         dead = MagicMock()
