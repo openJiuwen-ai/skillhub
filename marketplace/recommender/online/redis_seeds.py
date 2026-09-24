@@ -25,6 +25,8 @@ _KIND_ORDER = (KIND_DOWNLOAD, KIND_LIKE, KIND_STAR)
 
 _client_lock = threading.Lock()
 _clients: dict[tuple, Any] = {}
+_cfg_lock = threading.Lock()
+_cached_cfg: RedisConfig | None = None
 
 
 def _client_key(cfg: RedisConfig) -> tuple:
@@ -32,9 +34,12 @@ def _client_key(cfg: RedisConfig) -> tuple:
 
 
 def reset_redis_clients() -> None:
+    global _cached_cfg
     with _client_lock:
         clients = list(_clients.values())
         _clients.clear()
+    with _cfg_lock:
+        _cached_cfg = None
     for client in clients:
         close = getattr(client, "close", None)
         if close is None:
@@ -64,8 +69,25 @@ def _forget_client(cfg: RedisConfig, client: Any | None = None) -> None:
         logger.warning("failed to close stale redis client: %s", exc)
 
 
+def _redis_cfg(cfg: RedisConfig | None = None) -> RedisConfig:
+    """Return an explicit config, or the process-cached one.
+
+    load_config() decrypts DB/Redis/S3 secrets. Online reads must not do that
+    on every request once a Redis client is already open.
+    """
+    global _cached_cfg
+    if cfg is not None:
+        return cfg
+    with _cfg_lock:
+        if _cached_cfg is not None:
+            return _cached_cfg
+        loaded = load_config().redis
+        _cached_cfg = loaded
+        return loaded
+
+
 def _redis(cfg: RedisConfig | None = None):
-    cfg = cfg or load_config().redis
+    cfg = _redis_cfg(cfg)
     key = _client_key(cfg)
     with _client_lock:
         client = _clients.get(key)
@@ -102,7 +124,7 @@ def get_redis_client(cfg: RedisConfig | None = None):
 
 
 def _execute_redis(cfg: RedisConfig | None, op):
-    cfg = cfg or load_config().redis
+    cfg = _redis_cfg(cfg)
     client, cfg = _redis(cfg)
     try:
         return op(client, cfg)
