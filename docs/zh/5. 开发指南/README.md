@@ -6,13 +6,8 @@
 
 | 文档 | 说明 |
 |---|---|
-| [插件包格式](./插件包格式.md) | 五类发布包的公共规则与分类型规范入口 |
-| [Tools 格式](./插件类型格式/Tools格式.md) | Python tools 插件的源码、Schema 和 wheel 发布包 |
-| [MCP Stdio 格式](./插件类型格式/MCP-Stdio格式.md) | MCP stdio 插件的启动配置和发布包 |
-| [RESTful API 格式](./插件类型格式/RESTful-API格式.md) | 远程 HTTP API 插件的接口契约和发布包 |
-| [Skill 与 SwarmSkill 规范](./Skill与SwarmSkill规范.md) | 两类资产的元数据和约束 |
-| [Skill 审核机制](./Skill审核机制.md) | 审查与审核、状态流转 |
-| [Agent 资产](./Agent资产.md) | 插件 / 连接器 / 专家 / 专家团 包格式、校验与发布 |
+| [市场资产](./Agent资产.md) | Skill、SwarmSkill、插件、连接器、专家、专家团的包格式与校验 |
+| [Agent 资产审核机制](./Agent资产审核机制.md) | 审查只覆盖 Skill / SwarmSkill；审核覆盖六类资产 |
 | [在线体验运行时](./在线体验运行时.md) | 在线体验会话编排和运行时架构 |
 | [检索系统](./检索系统/README.md) | Skill 检索、索引和 SDK 文档 |
 | [推荐系统](./推荐系统/README.md) | 个性化推荐链路、离线任务与模块边界（测试验收见运维指南同名文档） |

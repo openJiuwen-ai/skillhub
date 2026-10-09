@@ -159,7 +159,7 @@ MARKET_S3_REGION=cn-north-4
 需要通过 Web 页面登录、发布和审核 Skill 时，按 [OAuth 登录配置](../../6.%20运维指南/基础部署/OAuth登录配置.md) 完成准备（仅浏览公开内容可跳过本节）。完成后记录以下值，供第 5 节填写 `.env.docker`：
 
 - GitCode OAuth 应用的 Client ID 和 Client Secret（应用主页和回调地址使用 `http://skillhub.local:9002`）
-- 审核账号的 GitCode 登录名（需与发布账号不同，审核账号不能审核自己发布的 Skill）
+- 审核账号的 GitCode 登录名（需与发布账号不同，审核账号不能审核自己发布的资产）
 
 ## 5 配置环境变量
 
@@ -338,7 +338,7 @@ Windows PowerShell 5.1 中 `curl` 是 `Invoke-WebRequest` 的别名，输出格�
 | **审查** | 发布前自动检测安全风险 | 直接进入审核 |
 | **检索系统** | 语义搜索，比关键词匹配更准 | 搜索退化为关键词匹配 |
 | **分类标签** | 新发布 Skill 自动打分类标签，用于首页类别展示 | 首页无类别，Skill 无分类标签 |
-| **推荐系统** | 首页「推荐精选」个性化排序（上限 `MARKET_REC_LIST_TOP_K`） | 「全部」/分类按 `install_count` 等字段排序 |
+| **推荐系统** | 首页「推荐精选」个性化排序（上限 `MARKET_REC_LIST_TOP_K`） | 「推荐精选」与 `POST /recommend` 按下载量返回 200（`source=install_count`） |
 
 ### 9.1 审查
 
@@ -471,7 +471,7 @@ REDIS_USER_SEQ_KEY_PREFIX=skill_rec:user
 
 **推荐问题**
 
-- **`503 recommender is disabled`**：未设置 `MARKET_RECOMMENDER_ENABLED=true` 或未重启 Backend
+- **关闭推荐后 `POST /recommend` 仍按下载量排序**：这是预期。未设置 `MARKET_RECOMMENDER_ENABLED=true` 时返回 200 且 `source=install_count`。要个性化需打开开关并重启 Backend
 - **一直像下载量排序**：用户无 Redis 行为序列，或 `redis_sync` / Milvus 未就绪；见[运维指南 / 推荐系统](../../6.%20运维指南/可选能力/推荐系统/README.md)
 
 ## 11 本机 CLI
@@ -491,7 +491,7 @@ curl --location 'http://localhost:8100/api/v1/plugins'
 | 文档 | 说明 |
 |------|------|
 | [openJiuwen Agentic Hub 接口参考](../../7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) | **推荐** - 端点总览、curl 示例、可见性规则 |
-| [openJiuwen Agentic Hub API](../../7.%20API参考/openJiuwen-Agentic-Hub.md) | OpenAPI YAML 与错误码速查 |
+| [openJiuwen Agentic Hub API](../../7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md) | OpenAPI YAML 与错误码速查 |
 | [ClawHub 兼容层](../../7.%20API参考/ClawHub兼容层.md) | ClawHub CLI 协议适配 |
 | [OAuth 登录配置](../../6.%20运维指南/基础部署/OAuth登录配置.md) | GitCode / GitHub OAuth 完整配置 |
 | [故障排查](../../6.%20运维指南/基础部署/故障排查.md) | 更多部署问题排查 |

@@ -10,7 +10,7 @@
 
 - **做什么**：无搜索关键词时，按用户历史做相似召回并做多样性重排；没有历史则用下载量排序兜底。
 - **不做什么**：不替代检索。`search_keyword` 非空时列表仍走检索 / 关键词逻辑。
-- **开关**：`MARKET_RECOMMENDER_ENABLED=true` 才注册 `POST /api/v1/recommend*`、调度离线任务、列表「推荐精选」（`order_by=recommend` 且无 `category_id`）。关闭时该列表参数回退 `install_count`。「全部」和分类页签始终按下载量查表。
+- **开关**：`MARKET_RECOMMENDER_ENABLED=true` 才走个性化召回、离线调度和列表「推荐精选」（`order_by=recommend` 且无 `category_id`）。关闭时 `POST /api/v1/recommend*` 仍注册：`POST /recommend` 按 `install_count` 返回 200（`source=install_count`），目录外 `plugin_type` 返回空列表；`/by_ids`、`/by_queries`、`/rerank_mmr` 返回空 `items`。列表 `order_by=recommend` 回退 `install_count`。「全部」和分类页签始终按下载量查表。火爆值重算不看这个开关。
 - **依赖**：MySQL（资产与行为）、对象存储（Skill zip）、Redis（用户序列与 TopK 快照）、Milvus（向量）、独立 Embedding API（`MARKET_REC_EMBEDDING_*`，不要复用检索侧变量）。
 
 ## 模块结构
@@ -23,7 +23,8 @@
 | `recommender/online/` | 在线级联：历史种子 → Milvus → MMR → TopK 兜底 |
 | `recommender/shared/config.py` | 从 **进程环境变量** 读配置（`os.getenv`） |
 | `plugins_market/recommender/` | 与 marketplace Settings / 列表 / APScheduler 的桥接 |
-| `plugins_market/routers/recommender.py` | HTTP API |
+| `plugins_market/routers/recommender.py` | 推荐开启时的 HTTP API |
+| `plugins_market/routers/recommender_disabled.py` | 推荐关闭时仍挂同一路径，主接口按下载量出卡片 |
 | `plugins_market/services/plugin.py` | 列表 `order_by=recommend` 与 `POST /recommend` 共用的过滤 + 卡片 hydrate |
 
 两层配置：
@@ -211,7 +212,7 @@ flowchart TD
 4. **兜底**：Redis TopK 快照，条数取本次请求的 `top_k`（列表路径即 `MARKET_REC_LIST_TOP_K`，默认 50），再按类目过滤。不要把 `top_k=0` 传进列表路径（那会倒出整份快照）。score 由排名线性映射到 (0,1]。
 5. **Milvus 连接**：在线 `get_loaded_collection()` 连接超时约 **5 秒**（离线建库仍 30 秒）。连不上则记异常并走第 4 步，避免列表卡半分钟。
 
-响应 `source`：`user_history` 或 `topk_install`。
+响应 `source`：已启用时为 `user_history` 或 `topk_install`；未启用时为 `install_count`。
 
 ### 列表 vs 独立 API
 
@@ -220,7 +221,7 @@ flowchart TD
 | 调用 | 内部直接 `run_recommend_for_user`（不走 HTTP 鉴权） | 可选鉴权：有效 Bearer / System Token 才个性化；否则空 `user_id` 冷启动 |
 | `top_k` | `MARKET_REC_LIST_TOP_K`（默认 50），再按 page 切片 hydrate；失败兜底也截断到该上限 | 请求体 `top_k`（1–500）；服务端适量超召再滤，可见条数可能更少 |
 | 返回 | 完整插件列表项（当前页才查详情）；`total` 为 hydrate 后条数（≤ top_k） | 与列表项相同的卡片字段 + `score`；不可见 id 已过滤 |
-| 失败 | 记日志后回退 `install_count` | `503` 未启用 / `500` 内部错误 |
+| 失败 | 记日志后回退 `install_count` | 已启用且内部错误时 `500`；未启用时 200，`source=install_count` |
 | `category_id` | 有值则**不走推荐**，按下载量查表 | 可选；过滤 Milvus / TopK |
 
 「全部」与分类页签不走上表左侧路径，直接 MySQL `install_count`。列表与 POST 的 hydrate 共用：过滤 `OFFLINE`、plugin_type、审核 / ACL；置顶 `pin_order` 插到未置顶前面。

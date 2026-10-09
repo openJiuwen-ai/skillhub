@@ -1,21 +1,8 @@
 # openJiuwen Agentic Hub API（OpenAPI）
 
-> **推荐阅读：[openJiuwen Agentic Hub 接口参考](./openJiuwen-Agentic-Hub-接口参考.md)** — 按模块组织的对外 API 说明，含端点总览、curl 示例、可见性/审核状态表。
-> 本文档保留 **错误码速查** 与 **OpenAPI 3.1 YAML**（Swagger / codegen）。
+> 端点说明、curl 示例和字段表见 [接口参考](./openJiuwen-Agentic-Hub-接口参考.md)。本文只保留错误响应约定和文末 OpenAPI 3.1 YAML。
 
-## 范围说明
-
-| 类别 | 路径前缀 | 关键业务价值 |
-|------|----------|-------------|
-| 核心资源 | `/api/v1/plugins`、`/api/v1/artifacts` 等 | **管理 Skill 生命周期**<br>• 决定用户在市场看到的内容<br>• 高频调用（发布/列表/下载） |
-| 审核管理 | `/api/v1/plugins/{asset_id}/moderation`、`/api/v1/plugins/audit/skill-moderation` | **内容合规**<br>• Skill 审核通过/驳回<br>• 审核员操作历史追溯<br>• 仅审核管理员可调用 |
-| 用户互动 | `/api/v1/plugins/my/stars`、`/api/v1/plugins/{asset_id}/interact` 等 | **提升用户粘性**<br>• 收藏/点赞影响推荐排序<br>• 每页面加载触发 3-5 次 |
-| 通知中心 | `/api/v1/notifications` | **消息触达**<br>• 审核结果、版本更新等关键事件推送<br>• 驱动用户回访 |
-| 站点元数据 | `/api/v1/site` | **合规与透明**<br>• 隐私声明等法定披露信息<br>• 功能开关（playground / 标星）<br>• 无需鉴权，公开可访问 |
-| 认证授权 | `/api/v1/auth` | **身份基石**<br>• 所有需鉴权接口的前置依赖<br>• 供客户端（Web / CLI 等）统一使用 |
-| GitHub 标星 | `/api/v1/github` | **社区推广**<br>• 一键标星 openjiuwen-ai 核心开源仓库（固定 10 个）<br>• 标星状态按用户隔离存 Redis，跨设备同步<br>• 需 GitHub OAuth 登录（scope: public_repo） |
-
-### 全局约束
+## 全局约束
 
 - **核心资源**（发布/删除/模板）：鉴权 `Bearer`（OAuth 用户令牌）**或** `X-System-Token`（系统令牌，二选一）；文件上传必须携带 `X-Checksum-SHA256` 头
 - **审核管理**（审核/审计）：需 `Bearer` 鉴权且当前用户为审核管理员；批量导入仅 `X-System-Token`
@@ -28,87 +15,9 @@
 
 ### OAuth Provider
 
-当前支持 `gitcode`、`github` 两个提供商（路径参数 `{provider}`）。提供商列表可通过代码配置扩展，无需变更接口结构。
+当前支持 `gitcode`、`github` 两个提供商（路径参数 `{provider}`）。
 
-
----
-
-## 接口规范文档
-
-**详细接口参考（按模块、含请求示例）** → [openJiuwen-Agentic-Hub-接口参考.md](./openJiuwen-Agentic-Hub-接口参考.md)
-
-下面保留 **模块速览表** 便于检索；字段级定义与 codegen 仍以文末 **OpenAPI YAML** 为准。
-
-### 模块速览
-
-#### 市场资产管理（原生，`ResponseModel`）
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| POST | `/api/v1/plugins` | Bearer **`或`** `X-System-Token`（必须且仅能一种）；Skill / SwarmSkill / 四类 Agent 均支持；请求头 **`X-Checksum-SHA256`** | 发布市场资产（multipart zip） [#核心资源] |
-| GET | `/api/v1/plugins` | **无需**（可选 Bearer 或 X-System-Token 用于个性化展示） | 市场资产分页列表；支持 `asset_type` / `plugin_type` 与标签过滤 [#核心资源] |
-| GET | `/api/v1/plugins/tags` | **无需** | 按 `plugin_type` 聚合市场资产标签 `(tag, count)` [#核心资源] |
-| GET | `/api/v1/plugins/category-totals` | **无需** | 一次返回全部市场 tab 类型的分类计数 `{plugin_type: {totals, all}}`，口径与列表 total 一致；服务端缓存 30s [#核心资源] |
-| GET | `/api/v1/plugins/publish-template` | Bearer **`或`** `X-System-Token` | 发布页 Skill 模板 zip 预签名 GET [#核心资源] |
-| GET | `/api/v1/plugins/{asset_id}/versions/{version}` | **无需**（可选 Bearer 或 X-System-Token） | 指定版本详情 [#核心资源] |
-| GET | `/api/v1/plugins/{asset_id}/versions/{version}/files` | **无需**（可选 Bearer 或 X-System-Token） | 版本 zip 包内文件列表；`with_content=<path>` 可附带单个文本文件内容 [#核心资源] |
-| DELETE | `/api/v1/plugins/{asset_id}/versions/{version}` | Bearer **`或`** `X-System-Token` | 删除指定版本 ⚠️`version=all` 将**不可逆**删除该资产全部版本及对象存储物理文件 [#核心资源] |
-| GET | `/api/v1/artifacts/{id}` | **可选** Bearer 或 X-System-Token（用于识别拉取方；无效或冲突凭证按匿名） | 下载信息（预签名 URL 等，`version` 可选） [#核心资源] |
-| POST | `/api/v1/plugins/skill-import` | **仅** `X-System-Token`；请求头 **`X-Checksum-SHA256`** | 按原有语义批量导入 Skill（multipart zip 集合包） [#核心资源] |
-| POST | `/api/v1/plugins/asset-import` | **仅** `X-System-Token`；请求头 **`X-Checksum-SHA256`** | 批量导入 Skill 与四类 Agent 资产（multipart zip 集合包） [#核心资源] |
-
-#### Git 源管理（`ResponseModel`）
-
-> Git 源为「从公有 Git 仓库自动同步 Skill」的资源；创建/同步走**后台任务**，接口立即返回 `syncing`，客户端轮询列表查看进度。每条 Git 源按 `created_by_user_id` 归属当前用户。
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| GET | `/api/v1/plugins/git-sources` | Bearer **`或`** `X-System-Token` | 当前用户的 Git 源列表（含同步状态） [#核心资源] |
-| POST | `/api/v1/plugins/git-sources` | Bearer **`或`** `X-System-Token` | 创建 Git 源并触发首次后台同步 [#核心资源] |
-| POST | `/api/v1/plugins/git-sources/{source_id}/sync` | Bearer **`或`** `X-System-Token` | 再次触发该 Git 源后台同步（仅源属主） [#核心资源] |
-| DELETE | `/api/v1/plugins/git-sources/{source_id}` | Bearer **`或`** `X-System-Token` | 删除 Git 源注册并级联删除该源导入的 Skill（仅源属主） [#核心资源] |
-
-#### 审核管理（`ResponseModel`）
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| POST | `/api/v1/plugins/{asset_id}/moderation` | Bearer（审核管理员） | 审核通过/驳回 Skill [#审核管理] |
-| GET | `/api/v1/plugins/audit/skill-moderation` | Bearer（审核管理员） | 当前审核员操作历史 [#审核管理] |
-
-#### 用户互动（`ResponseModel`）
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| GET | `/api/v1/plugins/my/stars` | Bearer | 我收藏的 Skill 列表 [#用户互动] |
-| GET | `/api/v1/plugins/my/likes` | Bearer | 我点赞的 Skill 列表 [#用户互动] |
-| POST | `/api/v1/plugins/{asset_id}/view` | **无需** | 浏览量 +1 [#用户互动] |
-| POST | `/api/v1/plugins/{asset_id}/interact` | Bearer | 点赞/收藏切换（`like` / `star`） [#用户互动] |
-| GET | `/api/v1/plugins/interactions/batch` | **可选** Bearer | 批量查询互动状态（最多 50 个） [#用户互动] |
-| GET | `/api/v1/plugins/{asset_id}/interactions` | **可选** Bearer | 单个资产互动状态 [#用户互动] |
-
-#### 通知（`ResponseModel`）
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| GET | `/api/v1/notifications` | Bearer | 获取通知列表 [#通知中心] |
-| POST | `/api/v1/notifications/read-all` | Bearer | 全部标记已读 [#通知中心] |
-
-#### 站点公开信息
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| GET | `/api/v1/site/privacy-statement` | **无需** | 隐私声明（Markdown 纯文本） [#站点元数据] |
-
-#### 认证（`ResponseModel`）
-
-| 方法 | 路径 | 鉴权 | 摘要 |
-|------|------|------|------|
-| GET | `/api/v1/auth/oauth/{provider}/start` | **无需** | 浏览器重定向到厂商授权页 [#认证授权] |
-| GET | `/api/v1/auth/oauth/{provider}/callback` | **无需** | OAuth 回调，换取令牌后重定向前端 [#认证授权] |
-| POST | `/api/v1/auth/oauth/{provider}/session` | **无需** | 一次性兑换 OAuth session 获取 access_token 与用户信息 [#认证授权] |
-| GET | `/api/v1/auth/me` | Bearer | 校验当前 token 并返回用户信息 [#认证授权] |
-
-### 全局错误响应
+## 全局错误响应
 
 除 OAuth 回调失败场景外，所有错误响应的 HTTP body 均为 JSON，外层统一包裹在 `detail` 字段内。
 
@@ -631,10 +540,10 @@ paths:
         - name: order_by
           in: query
           required: false
-          description: "排序字段: install_count, like_count, view_count, create_time, update_time, review_count, recommend"
+          description: "排序字段: install_count, like_count, view_count, create_time, update_time, review_count, hot_score, recommend。recommend 仅无 category_id、无搜索词且 MARKET_RECOMMENDER_ENABLED=true 时走个性化，否则回退 install_count。hot_score 为离线重算的火爆值"
           schema:
             type: string
-            enum: [install_count, like_count, view_count, create_time, update_time, review_count, recommend]
+            enum: [install_count, like_count, view_count, create_time, update_time, review_count, hot_score, recommend]
             example: install_count
         - name: desc
           in: query
@@ -643,6 +552,13 @@ paths:
           schema:
             type: boolean
             example: true
+        - name: top_k
+          in: query
+          required: false
+          description: 只返回前 N 条，total 同步封顶。前端「热门」无搜索、无标签时传入，取值来自 GET /site/config 的 hot_list_top_k
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
           description: ok
@@ -1738,6 +1654,7 @@ paths:
       summary: 获取市场资产下载链接
       description: |
         根据市场资产 ID 获取下载链接，支持指定版本下载。不指定版本时返回最新可见版本。可选携带 Authorization Bearer 或 X-System-Token 识别下载方；无效或同时提供时按匿名访问。
+        下载量按来源按日去重：同一登录用户，或同一匿名指纹（IP + User-Agent），对同一资产在 UTC 当日只增加一次 install_count。重复请求仍返回下载信息。本次占用名额但下载失败时释放名额。Redis 不可用时改为照常计数。
         is_cli_download=true 返回完整市场包装 zip；false 返回 raw.zip：Skill 为 SKILL.md 所在目录内容，四类 Agent 资产为剥离外层 plugin.yaml 后的原生内层包。
         响应 data 返回 asset_type / plugin_type，供客户端识别实际资产类型。
       operationId: downloadSkill
@@ -1956,7 +1873,7 @@ paths:
       summary: 点赞/收藏切换
       description: |
         对指定资产执行点赞（like）或收藏（star）切换操作。已存在则取消，不存在则添加。
-        - 不能对自己的 Skill 执行互动操作。
+        - 不能对自己发布的 Skill / SwarmSkill 执行互动操作。插件、连接器、专家、专家团不受这条限制。
         - Skill 未通过审核时不可互动。
       operationId: postInteract
       tags:
@@ -2024,7 +1941,7 @@ paths:
         '401':
           description: 未授权 / token 无效
         '403':
-          description: 权限不足（不能对自己的 Skill 互动，或 Skill 未通过审核）
+          description: 权限不足（不能对自己发布的 Skill / SwarmSkill 互动，或资产未通过审核）
         '404':
           description: 资产不存在
 
@@ -2209,11 +2126,15 @@ paths:
                   rec_list_top_k:
                     type: integer
                     description: 推荐精选一次召回上限（MARKET_REC_LIST_TOP_K）
+                  hot_list_top_k:
+                    type: integer
+                    description: 「热门」无搜索、无标签时的条数上限（MARKET_HOT_LIST_TOP_K）
                 required:
                   - playground_enabled
                   - github_star_enabled
                   - agentos_oauth_enabled
                   - rec_list_top_k
+                  - hot_list_top_k
 
   /api/v1/github/watch:
     post:
@@ -2710,6 +2631,9 @@ components:
           type: string
         publisher_name:
           type: string
+        publisher_official:
+          type: boolean
+          description: 发布者 ID 是否为系统管理员账号。为 true 时前端显示官方徽标；publisher_name 仍为原名
         tags:
           type: array
           items:
@@ -2782,6 +2706,9 @@ components:
           type: integer
         average_rating:
           type: number
+        hot_score:
+          type: number
+          description: 火爆值。近 7 天下载、累计下载、浏览、点赞与收藏、评分加权后离线回写；与推荐开关无关
         create_time:
           type: integer
           nullable: true
@@ -2907,6 +2834,9 @@ components:
           type: string
         publisher_name:
           type: string
+        publisher_official:
+          type: boolean
+          description: 发布者 ID 是否为系统管理员账号。为 true 时前端显示官方徽标；publisher_name 仍为原名
         tags:
           type: array
           items:

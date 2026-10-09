@@ -41,6 +41,8 @@ tags:
 
 SwarmSkill 另须在 `SKILL.md` frontmatter 中设置 `kind: swarm-skill` 及 `roles` 列表（至少 2 个角色），详见发布表单校验提示。
 
+插件、连接器、专家、专家团改为上传 zip，步骤见 [Agent资产发布](./Agent资产发布.md)。
+
 ### 操作步骤
 
 1. 点击 **「+ 发布」** → 选择 **新 Skill**
@@ -188,8 +190,8 @@ A：检查 `TEAMSKILLS_HUB_URL` / CLI 配置文件中的 base URL；自建实例
 
 ### 互动
 
-**Q：无法点赞自己的 Skill？**
-A：产品设计如此，点赞/收藏仅用于他人作品。
+**Q：无法点赞自己的 Skill / SwarmSkill？**
+A：产品设计如此。Skill / SwarmSkill 不能给自己的作品点赞或收藏。插件、连接器、专家、专家团不受这条限制。
 
 ---
 
@@ -204,7 +206,7 @@ Web 发布失败时，响应体含 `detail.error_code`。常见码：
 | `permission_denied` | 无权限 | 确认登录账号或审核员身份 |
 | `http_403` | 鉴权失败 | Token 过期，重新登录 |
 
-完整错误模型见 [openJiuwen Agentic Hub API — 全局错误响应](../7.%20API参考/openJiuwen-Agentic-Hub.md#全局错误响应)。
+完整错误模型见 [openJiuwen Agentic Hub API — 全局错误响应](../7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md#全局错误响应)。
 
 ---
 

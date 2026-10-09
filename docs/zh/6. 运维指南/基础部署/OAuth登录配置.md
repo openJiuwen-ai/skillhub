@@ -109,7 +109,7 @@ MARKET_OAUTH_FRONTEND_ORIGIN=http://skillhub.local:9002
 MARKET_REVIEW_ADMIN_USERNAMES=reviewer_login
 ```
 
-审核账号不能审核自己发布的 Skill。修改配置后须重启 marketplace，并重新登录；个人中心出现“待审核”菜单即表示权限生效。
+审核账号不能审核自己发布的资产。修改配置后须重启 marketplace，并重新登录；个人中心出现“待审核”菜单即表示权限生效。
 
 ## 验证与排查
 
