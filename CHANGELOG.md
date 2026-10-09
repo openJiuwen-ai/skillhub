@@ -15,6 +15,7 @@
 
 ### Changed
 
+- CLI 合并为单一发行包 `openjiuwen-agentichub`，命令为 `agentichub`。`init --type` 改为六类 Agent 资产：`skill`、`swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`。不再提供 `openjiuwen-plugin`、`jiuwen-teamskills`，也不再脚手架 `tools` / `mcp-stdio` / `restful-api`
 - `MARKET_RECOMMENDER_ENABLED=false` 时仍注册 `POST /api/v1/recommend*`：`POST /recommend` 按 `install_count` 返回 200（`source=install_count`），Hub 目录外的 `plugin_type` 返回空列表；不再因关闭推荐返回 503
 - 下载计量按来源按日去重：同一登录用户或同一匿名指纹（IP + User-Agent）对同一资产在 UTC 当日只计一次 `install_count`；重复下载仍返回文件。失败的首次下载会释放当天名额
 - Agent 四类资产（插件 / 连接器 / 专家 / 专家团）发布：manifest 声明的 `skills`、`tools`、`persona` 等缺失文件不再拒发；Hub 只做包结构、路径安全与危险内容扫描，运行时齐套留给 JiuwenSwarm

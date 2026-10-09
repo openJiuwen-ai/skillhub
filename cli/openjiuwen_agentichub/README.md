@@ -1,8 +1,8 @@
-﻿# openjiuwen-plugin（插件命令行工具）
+﻿# agentichub（Agentic Hub 命令行工具）
 
-面向 openJiuwen 插件市场的命令行工具：在本地生成与校验插件工程、打包上传、检索与安装。**PyPI 发行名与安装后的入口命令为 `openjiuwen-plugin`**（`pip install openjiuwen-plugin`）。本仓库内源码与 Python 包目录名为 **`openjiuwen_plugin/`**（下划线），与发行名中的连字符不同，属刻意约定。
+面向 openJiuwen Agentic Hub 的命令行工具：在本地生成与校验插件、Skill、SwarmSkill 工程，打包上传、检索与安装。**PyPI 发行名为 `openjiuwen-agentichub`，安装后的命令为 `agentichub`**（`pip install openjiuwen-agentichub`）。本仓库内 Python 包目录名为 **`openjiuwen_agentichub/`**。
 
-> **分发说明**：CLI **尚未发布到 PyPI**。请从本仓库 **`skillhub/cli/openjiuwen_plugin/`** 目录以可编辑方式安装（见下文）。后续发布 PyPI 后，可直接 `pip install openjiuwen-plugin` 使用。
+> **分发说明**：CLI **尚未发布到 PyPI**。请从本仓库 **`skillhub/cli/openjiuwen_agentichub/`** 目录以可编辑方式安装（见下文）。后续发布 PyPI 后，可直接 `pip install openjiuwen-agentichub` 使用。
 
 ---
 
@@ -18,21 +18,21 @@
 
 ## 2. 安装
 
-在克隆后的仓库中进入 **`skillhub/cli/openjiuwen_plugin`** 目录执行：
+在克隆后的仓库中进入 **`skillhub/cli/openjiuwen_agentichub`** 目录执行：
 
 ```bash
-cd skillhub/cli/openjiuwen_plugin
+cd skillhub/cli/openjiuwen_agentichub
 pip install -e .
 ```
 
 - **`-e`（可编辑）**：修改源码后立即生效，适合开发与联调。
-- 安装成功后，终端中应可使用命令 **`openjiuwen-plugin`**。建议执行 **`openjiuwen-plugin -h`** 确认子命令列表。
+- 安装成功后，终端中应可使用命令 **`agentichub`**。建议执行 **`agentichub -h`** 确认子命令列表。
 
-若安装成功但提示 **`openjiuwen-plugin` 不是内部或外部命令**（常见于 Windows 用户级安装路径未加入 PATH），可使用模块方式调用（效果相同；模块路径仍为包名 `openjiuwen_plugin`）：
+若安装成功但提示 **`agentichub` 不是内部或外部命令**（常见于 Windows 用户级安装路径未加入 PATH），可使用模块方式调用（效果相同；模块路径仍为包名 `openjiuwen_agentichub`）：
 
 ```bash
-cd skillhub/cli/openjiuwen_plugin
-python -m openjiuwen_plugin.main --help
+cd skillhub/cli/openjiuwen_agentichub
+python -m openjiuwen_agentichub.main --help
 ```
 
 ---
@@ -42,27 +42,22 @@ python -m openjiuwen_plugin.main --help
 以下命令仅需本地文件系统，**无需**访问市场服务。
 
 ```bash
-# 1）生成 tools 类型脚手架（默认）
-openjiuwen-plugin init demo-weather --path .
+# 默认生成 Skill
+agentichub init my-skill --path .
 
-# 其他类型示例
-openjiuwen-plugin init demo-mcp --path . --type mcp-stdio
-openjiuwen-plugin init demo-api --path . --type restful-api
-openjiuwen-plugin init my-skill --path . --type skill
+# 六类资产
+agentichub init my-swarm --path . --type swarmskill
+agentichub init my-plugin --path . --type agent-plugin
+agentichub init my-connector --path . --type agent-mcp
+agentichub init my-expert --path . --type agent-template
+agentichub init my-group --path . --type agent-group
 
-# 2）校验插件目录
-openjiuwen-plugin validate ./demo-weather
-
-# 3）打包（默认输出到插件目录下的 out/）
-openjiuwen-plugin pack ./demo-weather
-# 或指定输出目录
-openjiuwen-plugin pack ./demo-weather -o ./dist-zips
+agentichub validate ./my-plugin
+agentichub pack ./my-plugin
+agentichub pack ./my-plugin -o ./dist-zips
 ```
 
-说明：
-
-- **`tools`** 类型打包前会执行 `pip wheel`，请保证当前环境可访问 PyPI 或已配置 wheel 构建所需依赖。
-- **`skill`** 类型默认**不生成**根目录 `README.md`；若自行添加，`pack` 会将其一并打入 zip。
+`--type` 取 `skill`（默认）、`swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`。Skill / SwarmSkill 以 `SKILL.md` 为入口；后四类生成外层 `plugin.yaml` 和内层 `manifest.json`。
 
 ---
 
@@ -101,7 +96,7 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 
 **版本号约定**：发布参数 **`--plugin-version`** 必须为 **`x.y.z`** 三位非负整数段（如 `1.0.0`），**不支持** `1.0.0-rc1` 等预发布后缀。允许前缀 **`v`/`V`**，规范化后上传。`skill` 默认可不在 `SKILL.md` 写 `version`。
 
-**帮助**：`openjiuwen-plugin -h` 列出子命令；`openjiuwen-plugin <子命令> -h` 与下表一致，以程序输出为准。
+**帮助**：`agentichub -h` 列出子命令；`agentichub <子命令> -h` 与下表一致，以程序输出为准。
 
 **各子命令的全部参数**见第 **6** 节。
 
@@ -127,18 +122,14 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 |------|------|------|
 | `name` | 是 | 插件名，如 `weather-plugin`（须满足 `^[a-z][a-z0-9-]*$`；`skill` 另有 Agent Skills 风格限制） |
 | `--path` | 否 | 在哪个**父目录**下创建 `name/` 子目录，默认当前目录 `.` |
-| `--type` | 否 | `tools`（默认）\| `mcp-stdio` \| `restful-api` \| `skill` |
+| `--type` | 否 | `skill`（默认）\| `swarmskill` \| `agent-plugin` \| `agent-mcp` \| `agent-template` \| `agent-group` |
 | `--force` | 否 | 目标 `name` 目录已存在且非空时仍覆盖初始化 |
 
 ### 6.2 `validate` — 校验插件目录
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `path` | 是 | 插件**根目录**（`tools/mcp/restful` 常见为 `plugin.yaml` 布局；`skill/swarmskill` 为 `SKILL.md` 布局） |
-
-- **`tools`** 类型下 **`validate` 默认**要求根目录 **`pyproject.toml`**、**`src/`**、`schemas/tools.json` 等，并在存在 **`src/.../plugin.py`** 时校验其与 **`schemas/tools.json`** 中工具名一致。
-
-- **`mcp-stdio` / `restful-api` / `skill`** 不把根目录 **`pyproject.toml`** 作为通过结构校验的硬性条件。
+| `path` | 是 | 资产根目录。Skill / SwarmSkill 看 `SKILL.md`；插件、连接器、专家、专家团看外层 `plugin.yaml` 与内层 `<name>/manifest.json` |
 
 ### 6.3 `pack` — 打包为 zip
 
@@ -147,7 +138,7 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 | `path` | 是 | 插件根目录 |
 | `-o` / `--output` | 否 | zip 输出目录，默认 `out`。若为**相对路径**，则相对于**插件根目录** `path` 解析；**绝对路径**则直接使用 |
 
-打包前会先执行与 `validate` 相同的校验。`tools` 会执行 `pip wheel`（需网络或本地构建环境），产物 zip **不写** `src/`，只带 **`dist/*.whl`** 与上述元数据文件。
+打包前会先执行与 `validate` 相同的校验。Skill / SwarmSkill 打入技能目录；插件、连接器、专家、专家团打入外层 `plugin.yaml` 和内层目录。
 
 ### 6.4 `publish` — 上传市场
 
@@ -185,7 +176,7 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 |------|------|------|
 | `query` | 否 | 搜索关键词；可省略，表示空关键词 |
 | `--market-url` | 条件 | 市场根 URL |
-| `--type` | 否 | `plugin_type` 精确匹配：`tools` / `mcp-stdio` / `restful-api` / `skill` / `swarmskill` |
+| `--type` | 否 | `plugin_type` 精确匹配：`skill` / `swarmskill` / `agent-plugin` / `agent-mcp` / `agent-template` / `agent-group` |
 | `--author` | 否 | 发布者展示名（模糊） |
 | `--asset-id` | 否 | 资产 ID |
 | `--asset-type` | 否 | 资产类型（**精确匹配**；当前列表以 **`plugin`** 为主，其它取值以后端为准，如后续扩展 `workflow` 等） |
@@ -220,11 +211,7 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 **说明**
 
 - **父目录**：`-o` 指向的目录；省略则为当前工作目录。
-- **包目录**：`<父目录>/<zip 顶层目录>/`（即内含 `plugin.yaml` 的那一层；`tools` / `mcp-stdio` / `restful-api` 同此约定）。
-
-- **`tools`**：解压后按 **`dist/*.whl`** 用当前解释器执行 **`pip install`**；wheel 一般仍留在包内 `dist/`。`-o` 只影响包目录的父路径；**建议 venv**；系统 Python 易权限失败。
-
-- **`mcp-stdio` / `restful-api`**：只解压到包目录，**不**跑 `pip`；依赖在包目录内自行 **`pip install .`**；不自动起服务。
+- **包目录**：`<父目录>/<资产名>/`。Skill / SwarmSkill 落到技能目录；插件、连接器、专家、专家团解压带 `plugin.yaml` 的目录，不执行 `pip`。
 
 - **`skill` / `swarmskill`**：安装结果统一为 **`<父目录>/<slug>/`**，其中 `slug` 优先取 `plugin.yaml name`（若存在），否则取 `SKILL.md` frontmatter `name`；**不**跑 `pip`。
 
@@ -248,8 +235,8 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 export OPENJIUWEN_MARKET_URL=http://127.0.0.1:8100
 export OPENJIUWEN_SYSTEM_TOKEN="<系统管理员 Token>"
 
-openjiuwen-plugin skill-import ./my-skills-bundle-dir
-openjiuwen-plugin skill-import ./bundle.zip --fail-fast
+agentichub skill-import ./my-skills-bundle-dir
+agentichub skill-import ./bundle.zip --fail-fast
 ```
 
 ### 6.10 市场相关命令示例
@@ -257,14 +244,14 @@ openjiuwen-plugin skill-import ./bundle.zip --fail-fast
 ```bash
 BASE=http://127.0.0.1:8100   # 占位；或已 export OPENJIUWEN_MARKET_URL
 
-openjiuwen-plugin publish ./demo-weather --token <TOKEN> --market-url $BASE
-openjiuwen-plugin publish -f ./out/demo-weather-0.0.1.zip --token <TOKEN> --market-url $BASE
-openjiuwen-plugin info <asset_id> -v 1.0.0 --market-url $BASE
-openjiuwen-plugin search weather --type tools --page-size 20 --order-by create_time --market-url $BASE
-openjiuwen-plugin install <asset_id> --market-url $BASE
-openjiuwen-plugin install <asset_id> -v 1.0.0 --market-url $BASE
-openjiuwen-plugin install <asset_id> -o ./plugins --market-url $BASE
-openjiuwen-plugin delete <asset_id> --token <TOKEN> --market-url $BASE
+agentichub publish ./demo-weather --token <TOKEN> --market-url $BASE
+agentichub publish -f ./out/demo-weather-0.0.1.zip --token <TOKEN> --market-url $BASE
+agentichub info <asset_id> -v 1.0.0 --market-url $BASE
+agentichub search weather --type agent-plugin --page-size 20 --order-by create_time --market-url $BASE
+agentichub install <asset_id> --market-url $BASE
+agentichub install <asset_id> -v 1.0.0 --market-url $BASE
+agentichub install <asset_id> -o ./plugins --market-url $BASE
+agentichub delete <asset_id> --token <TOKEN> --market-url $BASE
 ```
 
 （Windows PowerShell 可将 `$BASE` 换为变量或字面 URL。）
@@ -273,12 +260,12 @@ openjiuwen-plugin delete <asset_id> --token <TOKEN> --market-url $BASE
 
 ## 7. 代码结构（维护与二次开发）
 
-本发行物源码位于 **`skillhub/cli/openjiuwen_plugin/`**（目录名 `openjiuwen_plugin/`）；PyPI / 命令行为 **`openjiuwen-plugin`**。与 **`jiuwen-swarmskill`**（源码目录 **`skillhub/cli/jiuwen_swarmskill/`**）共用的实现见仓库 **`skillhub/cli/cli_core/`**（随本 wheel 一并打包）。
+本发行物源码位于 **`skillhub/cli/openjiuwen_agentichub/`**；PyPI 发行名为 **`openjiuwen-agentichub`**，命令为 **`agentichub`**。共享实现在 **`skillhub/cli/cli_core/`**（随 wheel 一并打包）。
 
 | 位置 | 职责 |
 |------|------|
-| `openjiuwen_plugin/main.py` | 入口：日志初始化、解析参数、分发子命令 |
-| `openjiuwen_plugin/parsers.py` | 各子命令 `argparse` 定义 |
+| `openjiuwen_agentichub/main.py` | 入口：日志初始化、解析参数、分发子命令 |
+| `openjiuwen_agentichub/parsers.py` | 各子命令 `argparse` 定义 |
 | `cli_core/handlers.py` | 子命令业务编排、日志输出、进程退出码 |
 | `cli_core/plugin.py` | `init` / `validate` / `pack` / `publish` / `install` 落盘与 pip 等 |
 | `cli_core/market.py` | 对市场 HTTP API 的调用与响应解析 |
@@ -293,56 +280,9 @@ openjiuwen-plugin delete <asset_id> --token <TOKEN> --market-url $BASE
 
 ## 8. 脚手架类型与目录结构
 
-`init --type` 支持 **`tools`**（默认）、**`mcp-stdio`**、**`restful-api`**、**`skill`**。下图为各类型生成后的典型布局（包目录名由插件名将 `-` 换为 `_` 得到，如 `demo-mcp` → `demo_mcp`）。
+`init --type` 支持六类 Agent 资产。默认 `skill`。
 
-### `tools`
-
-```text
-plugin-name/
-  plugin.yaml
-  README.md
-  icon.png
-  pyproject.toml
-  schemas/tools.json
-  src/plugin_name/
-    __init__.py
-    plugin.py
-```
-
-### `mcp-stdio`
-
-```text
-demo-mcp/
-  plugin.yaml
-  README.md
-  icon.png
-  pyproject.toml
-  schemas/tools.json
-  src/demo_mcp/
-    __init__.py
-    mcp_server.py
-```
-
-`mcp_server.py` 为 FastMCP 模板；依赖见生成的 `pyproject.toml`。
-
-### `restful-api`
-
-```text
-demo-api/
-  plugin.yaml
-  README.md
-  icon.png
-  pyproject.toml
-  schemas/tools.json
-  src/demo_api/
-    __init__.py
-    rest_api.py
-```
-
-`rest_api.py` 为**可选占位**（便于本地写客户端或示例）；**服务已独立部署时**，宿主一般只需 **`plugin.yaml` 中的 `api.base_url`** 与 **`schemas/tools.json`** 即可知道如何调用，可不依赖 `rest_api.py`。  
-**建议**在 `schemas/tools.json` 中维护完整的 REST tool contract；当前 **`validate` 会对 `restful-api` 校验该文件**，包括 `tools[]`、`name`、`description`、`path`、`method`、`input_schema`、`output_schema`、`tools[].headers` 与请求映射元数据。
-
-### `skill`
+### `skill` / `swarmskill`
 
 ```text
 my-skill/
@@ -352,61 +292,46 @@ my-skill/
   assets/
 ```
 
-### 关于 `schemas/tools.json`
+SwarmSkill 的 `SKILL.md` 含 `kind: swarm-skill` 和至少两个 `roles`。
 
-**`tools`、`mcp-stdio`、`restful-api`** 脚手架都会生成 **`schemas/tools.json`**（模板内容）。**`validate` 会在不同 runtime.type 下按不同规则校验该文件**：
-- **`tools`**：校验结构，以及与 `src/.../plugin.py` 中 `@tool(name=...)` 名称一致
-- **`restful-api`**：校验 REST tool contract，包括 `path` / `method` / `input_schema` / `output_schema`、`tools[].headers` 及请求映射元数据
-- **`mcp-stdio`**：当前不对该文件做额外强校验
+### `agent-plugin` / `agent-mcp` / `agent-template` / `agent-group`
+
+```text
+my-plugin/
+  plugin.yaml                 # runtime.type = 对应的 agent-* 类型
+  README.md                   # 只留在本地，打包时不放进市场 zip
+  my-plugin/
+    manifest.json             # package_type = plugin | mcp | agent_template | agent_group
+    README.md
+```
+
+市场上的外层只接受 `plugin.yaml`、可选 `icon.png`，以及与 `plugin.yaml.name` 同名的唯一内层目录。
+
+插件脚手架带 `tools/example.py`。连接器带 `mcp.json`，内容是 `mcpServers` 对象，首个 server 的 `url` 对应 `integration.type=remote-mcp`。专家带 `persona/persona.md`。专家团的 `manifest.agents` 为 `leader` 与 `analyst`。
 
 ---
 
 ## 9. `plugin.yaml` 与校验摘要（MVP）
 
-说明：`tools` / `mcp-stdio` / `restful-api` 通常使用 `plugin.yaml`。`skill` 支持仅 `SKILL.md` 的轻量布局；若同时提供 `plugin.yaml`，其 `name` 需与 skill slug 保持一致。
+说明：Skill / SwarmSkill 可以只有 `SKILL.md`。插件、连接器、专家、专家团使用外层 `plugin.yaml` 加内层 `manifest.json`，两边的名字和版本必须一致。
 
 | 字段 / 规则 | 说明 |
 |-------------|------|
 | `name` | 正则 `^[a-z][a-z0-9-]*$` |
 | `version` | 与市场约定一致：**仅** `x.y.z` 三位数字段（如 `1.0.0`），无预发布/构建后缀 |
 | `display_name`、`description` | 非空字符串 |
-| `runtime.type` | `tools` \| `mcp-stdio` \| `restful-api` \| `skill` |
+| `runtime.type` | `skill` \| `swarmskill` \| `agent-plugin` \| `agent-mcp` \| `agent-template` \| `agent-group` |
 | `metadata.author`、`metadata.tags` | 必填；`tags` 为非空字符串数组 |
-| `compatibility.python` | **非 skill-like 必填**；PEP 440 版本说明符（如 `>=3.11, <3.14`） |
-| `tools` 类型 | `tools_schema` 路径须为 `schemas/tools.json` 且文件存在 |
-| `mcp-stdio` | `mcp.transport` 为 `stdio`，`mcp.command` 为非空字符串数组 |
-| `restful-api` | 须含非空 `api.base_url`（见下节 **`api` 标准字段**） |
-| `skill` | 主入口识别优先 `root/SKILL.md`（flat）；若不存在，则要求 `root` 下恰好一个非隐藏子目录含 `SKILL.md`（single nested）。该规则用于定位主入口，不限制更深层目录文档数量；frontmatter `name`/`description` 等规则与 Agent Skills 一致 |
-
-### `restful-api`：`api` 标准字段与运行方式
-
-**契约重心（已部署的 HTTP 服务）**：**`api.base_url`** + **`schemas/tools.json`**。前者给出服务根地址，后者用 `tools[]` 描述每个可调能力（名称、说明、`input_schema` / `output_schema` 等），宿主即可编排请求路径、方法与参数，**不必**使用 `rest_api.py`。
-
-**`api` 对象约定**（当前 CLI **`validate` 强制校验** `base_url`；其余字段为推荐扩展，宿主可自行约定解析方式）：
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| **`base_url`** | **是** | 服务根 URL（不含具体 path 时可只写到版本前缀，与 `tools.json` 内约定一致即可） |
-| `openapi_url` | 否 | OpenAPI 文档地址（JSON/YAML）；与 `tools.json` 可二选一或并存，由宿主决定优先级 |
-| `auth` | 否 | 鉴权说明，建议为对象，例如：`type: none \| bearer \| api_key`；`api_key` 时可含 `header`、`in`（`header` / `query`）等 |
-| `default_headers` | 否 | 默认 HTTP 头（如 `Accept: application/json`），map 结构 |
-| `timeout_seconds` | 否 | 建议超时秒数（数字），供宿主参考 |
-
-**`rest_api.py`**：脚手架中的占位文件，**可保留**；需要本地封装调用逻辑时再实现，**不是**「仅远程服务」场景的必需项。
-
-### `schemas/tools.json`（校验范围）
-
-当 **`runtime.type` 为 `tools`** 时：`tools` 数组非空；每项含 `name`、`description`、`input_schema`、`output_schema`，且 schema 根类型为 `object`；`src/.../plugin.py` 中 `@tool(name="...")` 与 JSON 中工具名须一一对应。
-
-当 **`runtime.type` 为 `restful-api`** 时：`tools` 数组也必须非空；每项必须包含合法的 `name`、非空 `description`、非空 `path`、受支持的 HTTP `method`，以及 canonical 的 `input_schema` / `output_schema`；其中 `input_schema` 根类型必须为 `object`，参数发送位置通过 `input_schema.properties.<field>.send_method` 指定为 `None` / `Header` / `Query` / `Body` / `Path`。CLI 还会校验 `tools[].headers` 的基础结构：字段必须为数组，元素必须为对象，且 `name` 为非空字符串、`value` 为字符串。插件级默认请求头可通过 `plugin.yaml -> api.default_headers` 提供，工具级静态请求头可通过 `tools[].headers` 提供。
-
-当 **`runtime.type` 为 `mcp-stdio`** 时：当前不对该文件做额外强校验。
+| `skill` / `swarmskill` | 入口是根目录或唯一子目录里的 `SKILL.md`。`name` 与目录名一致，`description` 非空。SwarmSkill 还要 `kind: swarm-skill` 和至少两个不重复的 `roles[].id` |
+| 插件 / 连接器 / 专家 / 专家团 | 内层 `manifest.package_type` 分别为 `plugin`、`mcp`、`agent_template`、`agent_group`。`manifest.version` 与 `plugin.yaml.version` 相同。插件和连接器用 `manifest.id`，专家和专家团用 `manifest.name`，都要等于 `plugin.yaml.name` |
+| 插件 | 根 manifest 不能写 `persona`、`agent_card`、`model`、`subagents`、`memories`、`rubrics` |
+| 连接器 | `integration.type` 为 `stdio-mcp`、`remote-mcp`、`cli` 或 `skill-only`。除 `skill-only` 外，`integration.file` 指向的文件必须在内层目录里。`stdio-mcp` / `remote-mcp` 的 `mcp.json` 必须有非空 `mcpServers`，首个 server 的 `command` 或 `url` 要和 `integration.type` 一致 |
 
 ---
 
 ## 10. 开发与测试
 
-在 **`cli`** 目录下：
+在 **`skillhub/cli/openjiuwen_agentichub`** 目录下：
 
 ```bash
 pip install -e .
@@ -414,20 +339,12 @@ pip install pytest
 python -m pytest -q
 ```
 
-未做可编辑安装时，可临时设置 `PYTHONPATH`：
-
-```powershell
-cd cli
-$env:PYTHONPATH = "."
-python -m pytest -q
-```
-
 ---
 
 ## 11. 常见问题
 
-**Q：`openjiuwen-plugin` 命令找不到？**  
-A：使用 `python -m openjiuwen_plugin.main`，或检查 Python 的 `Scripts` 目录是否已加入 PATH。
+**Q：`agentichub` 命令找不到？**  
+A：使用 `python -m openjiuwen_agentichub.main`，或检查 Python 的 `Scripts` 目录是否已加入 PATH。
 
 **Q：提示连不上市场？**  
 A：确认 `OPENJIUWEN_MARKET_URL` 为**根地址**（不要带 `/api/v1`），且该 URL 在本机或网络内可访问。
@@ -436,13 +353,13 @@ A：确认 `OPENJIUWEN_MARKET_URL` 为**根地址**（不要带 `/api/v1`），�
 A：使用 `x.y.z` 三位数字版本；不要使用 `1.0.0-rc1` 等形式。
 
 **Q：路径含空格报错？**  
-A：在 shell 中为路径加引号，例如 `openjiuwen-plugin validate "D:\My Plugins\demo"`。
+A：在 shell 中为路径加引号，例如 `agentichub validate "D:\My Plugins\demo"`。
 
-**Q：只执行 `openjiuwen-plugin` 不带子命令会怎样？**  
-A：会打印总帮助并退出（退出码非 0）；查看子命令请用 `openjiuwen-plugin -h` 或 `openjiuwen-plugin <子命令> -h`。
+**Q：只执行 `agentichub` 不带子命令会怎样？**  
+A：会打印总帮助并退出（退出码非 0）；查看子命令请用 `agentichub -h` 或 `agentichub <子命令> -h`。
 
 **Q：`search` 里关键词含 `*`、`#`、`(` 等异常？**  
-A：多数由 **Shell 先解释** 导致：`*` 会展开为文件名、`#` 起注释、`(` 在 bash 中有语法含义。请对关键词**加引号**，例如 `openjiuwen-plugin search '*'`、`openjiuwen-plugin search '#'`（PowerShell 同理用引号包裹）。
+A：多数由 **Shell 先解释** 导致：`*` 会展开为文件名、`#` 起注释、`(` 在 bash 中有语法含义。请对关键词**加引号**，例如 `agentichub search '*'`、`agentichub search '#'`（PowerShell 同理用引号包裹）。
 
 **Q：`publish` 失败时打印一大段 JSON？**  
 A：已改为尽量解析服务端 `message` 并输出**单行可读文案**（如 `Invalid X-System-Token`、版本冲突说明等）。若仍为长文本，请直接查看市场接口返回或本地复现请求排查。

@@ -59,11 +59,11 @@ roles:
 `roles[].id` 不能重复。也可以用 CLI：
 
 ```bash
-jiuwen-teamskills init my-swarm-skill --type swarmskill
-jiuwen-teamskills validate my-swarm-skill
-jiuwen-teamskills pack my-swarm-skill --output out
-jiuwen-teamskills publish my-swarm-skill \
-  --version 1.0.0 \
+agentichub init my-swarm-skill --type swarmskill
+agentichub validate my-swarm-skill
+agentichub pack my-swarm-skill --output out
+agentichub publish my-swarm-skill \
+  --plugin-version 1.0.0 \
   --market-url http://localhost:8100 \
   --token <token>
 ```

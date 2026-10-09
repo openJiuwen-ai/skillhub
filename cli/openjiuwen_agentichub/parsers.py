@@ -8,16 +8,16 @@ from cli_core.cli_args import _parse_bool_flag
 
 
 def _add_init_parser(plugin_subparsers) -> None:
-    init_parser = plugin_subparsers.add_parser("init", help="Create a plugin scaffold")
-    init_parser.add_argument("name", help="Plugin name")
+    init_parser = plugin_subparsers.add_parser("init", help="Create an Agent asset scaffold")
+    init_parser.add_argument("name", help="Asset name")
     init_parser.add_argument("--path", default=".", help="Parent directory (default: .)")
     init_parser.add_argument("--force", action="store_true", help="Overwrite non-empty target")
     init_parser.add_argument(
         "--type",
         dest="plugin_type",
-        default="tools",
-        choices=("tools", "mcp-stdio", "restful-api", "skill", "swarmskill"),
-        help="Plugin type",
+        default="skill",
+        choices=("skill", "swarmskill", "agent-plugin", "agent-mcp", "agent-template", "agent-group"),
+        help="Asset type (default: skill)",
     )
 
 
@@ -107,7 +107,7 @@ def _add_search_parser(plugin_subparsers) -> None:
         dest="plugin_type",
         default=None,
         metavar="STR",
-        help="Filter by plugin type",
+        help="Filter by asset type (skill, swarmskill, agent-plugin, agent-mcp, agent-template, agent-group)",
     )
     search_parser.add_argument(
         "--author",
@@ -252,7 +252,7 @@ def _add_skill_import_parser(plugin_subparsers) -> None:
     )
 
 
-def build_plugin_parser(prog_name: str = "openjiuwen-plugin") -> argparse.ArgumentParser:
+def build_parser(prog_name: str = "agentichub") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog_name, allow_abbrev=False)
     plugin_subparsers = parser.add_subparsers(dest="plugin_command")
     _add_init_parser(plugin_subparsers)

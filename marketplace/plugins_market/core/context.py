@@ -86,7 +86,7 @@ SOURCE_CHANNEL_BACKGROUND = "background"
 
 # UA 模式匹配：浏览器关键词 / CLI 前缀
 WEB_UA_MARKERS = ("mozilla", "chrome", "safari", "edge", "firefox")
-CLI_UA_PREFIXES = ("openjiuwen-plugin", "jiuwen-teamskills")
+CLI_UA_PREFIXES = ("openjiuwen-agentichub", "openjiuwen-plugin", "jiuwen-teamskills")
 
 
 def set_source_channel(channel: Optional[str]) -> None:

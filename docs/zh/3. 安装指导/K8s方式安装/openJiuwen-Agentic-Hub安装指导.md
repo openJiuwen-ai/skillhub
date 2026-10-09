@@ -213,7 +213,7 @@ Backend 日志中应无持续报错。
 kubectl -n skillhub-system port-forward svc/skillhub-frontend 9002:9002
 ```
 
-CLI 需要直连 backend 时，另开终端再转发一条：
+`agentichub` 需要直连 backend 时，另开终端再转发一条，并把 `OPENJIUWEN_MARKET_URL` 或 `--market-url` 设为 `http://127.0.0.1:8100`：
 
 ```bash
 kubectl -n skillhub-system port-forward svc/skillhub-backend 8100:8100

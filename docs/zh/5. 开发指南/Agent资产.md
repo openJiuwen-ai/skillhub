@@ -55,12 +55,10 @@ description: Describe when and how an Agent should use this Skill.
 工作区可以没有 `plugin.yaml`。CLI 发布时会按 `SKILL.md` 生成市场元数据，服务端包里的 `runtime.type` 为 `skill`。Skill 与 SwarmSkill 的差别仍看 `kind` 和 `roles`。
 
 ```bash
-jiuwen-teamskills init example-skill --type skill
-jiuwen-teamskills validate example-skill
-jiuwen-teamskills pack example-skill --output out
+agentichub init example-skill --type skill
+agentichub validate example-skill
+agentichub pack example-skill --output out
 ```
-
-`openjiuwen-plugin init --type skill` 与上面共用同一套校验。
 
 ## SwarmSkill
 
@@ -84,8 +82,8 @@ roles:
 - 每个角色是对象，`id` 为非空字符串且不得重复。
 
 ```bash
-jiuwen-teamskills init example-swarm --type swarmskill
-jiuwen-teamskills validate example-swarm
+agentichub init example-swarm --type swarmskill
+agentichub validate example-swarm
 ```
 
 ## 插件、连接器、专家、专家团的公共包装

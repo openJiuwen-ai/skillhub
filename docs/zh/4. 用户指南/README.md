@@ -3,7 +3,7 @@
 本目录面向 **终端用户、创作者与审核管理员**，说明如何在浏览器中使用 openJiuwen Agentic Hub，以及如何发布 Skill、SwarmSkill、插件、连接器、专家和专家团。
 
 若你负责 **部署与运维**，请参阅 [安装指导](../3.%20安装指导/本地安装/openJiuwen-Agentic-Hub安装指导.md) 与 [Docker 方式安装](../3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导.md)。
-若你负责 **接口集成或二次开发**，请参阅 [openJiuwen Agentic Hub 接口参考](../7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md)、[OpenAPI YAML](../7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md) 与 [CLI 说明](../../../cli/README.md)。
+若你负责 **接口集成或二次开发**，请参阅 [openJiuwen Agentic Hub 接口参考](../7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md)、[OpenAPI YAML](../7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md) 与 [agentichub 命令说明](../../../cli/openjiuwen_agentichub/README.md)。
 
 ## 文档索引
 
