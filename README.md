@@ -4,9 +4,9 @@
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11.4-blue.svg)](marketplace/pyproject.toml)
 [![Node](https://img.shields.io/badge/node-18%20%7C%2020%20LTS-green.svg)](frontend/package.json)
 
-**Chinese**: [README_zh.md](README_zh.md)
+**Chinese**: [README_zh.md](https://github.com/openJiuwen-ai/skillhub/blob/main/README_zh.md)
 
-**openJiuwen Agentic Hub** is an open-source **Skill hosting and distribution** implementation in the openJiuwen ecosystem, intended for self-hosted team deployments.
+**openJiuwen Agentic Hub** is an open-source marketplace for **Agent assets** (Skill, SwarmSkill, plugin, connector, expert, and expert group) in the openJiuwen ecosystem, intended for self-hosted team deployments.
 
 **ClawHub compatibility** can be enabled so existing ClawHub-oriented CLIs and tools can integrate (exact routes and semantics follow this codebase).
 
@@ -23,11 +23,11 @@
 
 ## Features
 
-- **Marketplace service**: publish and version Skills, list/detail, presigned downloads; optional **ClawHub-compatible** API surface.
+- **Marketplace**: publish and version the six Agent asset types (Skill, SwarmSkill, plugin, connector, expert, expert group); list, detail, and presigned download. The **Hot** tab ranks by `hot_score`. Assets published by the system admin account show an official badge. Optional **ClawHub-compatible** API.
 - **CLI**: search, resolve, and download — [`cli/README.md`](cli/README.md).
-- **Web UI**: browser-based flows — see the [install docs](docs/zh/3.%20安装指导/README.md).
+- **Web UI**: browse, publish, and review in the browser — see the [install docs](docs/zh/3.%20安装指导/README.md).
 
-**Hosted offering**: **[swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)**. Use this repository when you need on-premises data, isolation, or internal integration.
+**Hosted offering**: **[agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)**. Use this repository when you need on-premises data, isolation, or internal integration.
 
 ## Architecture
 
@@ -69,7 +69,7 @@ Never commit secrets; copy `.env.example` to `.env` locally.
 
 ### Hosted
 
-Use **[swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)**.
+Use **[agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)** to browse Agent assets.
 
 ### Docker Compose (one command)
 
@@ -119,7 +119,7 @@ See [Docker install (Windows, Chinese)](docs/zh/3.%20安装指导/Docker方式�
 
 ### API & CLI
 
-- **HTTP API**: [openJiuwen Agentic Hub API reference (Chinese)](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) · [OpenAPI YAML](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub.md)
+- **HTTP API**: [openJiuwen Agentic Hub API reference (Chinese)](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) · [OpenAPI YAML](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md)
 - **CLI**: [`cli/README.md`](cli/README.md)
 
 ### Ecosystem
@@ -145,8 +145,8 @@ See [Docker install (Windows, Chinese)](docs/zh/3.%20安装指导/Docker方式�
 |--------|------|
 | Local install (Windows-focused) | [Installation guide](docs/zh/3.%20安装指导/本地安装/openJiuwen-Agentic-Hub安装指导.md) |
 | Docker install | [Docker installation guide](docs/zh/3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导.md) |
-| API (OpenAPI) | [openJiuwen-Agentic-Hub.md](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub.md) |
-| API reference (detailed) | [Detailed API reference](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) |
+| API reference | [Detailed API reference](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) |
+| OpenAPI and error codes | [openJiuwen-Agentic-Hub-OpenAPI.md](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md) |
 | CLI | [cli/README.md](cli/README.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

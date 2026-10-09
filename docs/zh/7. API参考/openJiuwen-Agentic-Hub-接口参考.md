@@ -2,7 +2,7 @@
 
 面向 **Web / CLI / 服务端集成** 的 HTTP API 说明。文首 **端点速查表** 汇总方法、路径、主要参数与鉴权；下文按模块展开请求示例与错误规则。
 
-> **OpenAPI YAML**（Swagger / codegen）：见 [openJiuwen-Agentic-Hub.md](./openJiuwen-Agentic-Hub.md) 文末。
+> **OpenAPI YAML**（Swagger / codegen）：见 [openJiuwen-Agentic-Hub-OpenAPI.md](./openJiuwen-Agentic-Hub-OpenAPI.md) 文末。
 > **ClawHub 兼容层**详述见 [ClawHub兼容层.md](./ClawHub兼容层.md)。
 
 ---
@@ -31,7 +31,7 @@
 | GET | `/plugins/publish-template` | Query：`kind`（`plugin` \| `skill` \| `swarmskill`） | Bearer **或** System Token | 登录用户 / 系统 |
 | DELETE | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version`（`all`=删全部） | Bearer **或** System Token | 发布者 / 系统 |
 | POST | `/plugins/skill-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（仅保持原 Skill 集合包语义） | 仅 System Token | 系统 |
-| POST | `/plugins/asset-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（支持 Skill 与四类 Agent 资产混合集合包） | 仅 System Token | 系统 |
+| POST | `/plugins/asset-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（支持六类 Agent 资产混合集合包） | 仅 System Token | 系统 |
 | **Git 源** | | | | |
 | GET | `/plugins/git-sources` | — | Bearer **或** System Token | 登录用户 / 系统 |
 | POST | `/plugins/git-sources` | Body：`repo_url`✱、`ref`、`skills_subpath`、`name` | Bearer **或** System Token | 登录用户 / 系统 |
@@ -109,7 +109,7 @@
 | 环境 | 示例 |
 |------|------|
 | 本地开发 | `http://127.0.0.1:8100` |
-| 官方托管 | `https://swarmskills.openjiuwen.com` |
+| 官方托管 | `https://agentichub.openjiuwen.com` |
 | 自建 | 由运维提供；须与前端反代目标（`BACKEND_URL` / `BACKEND_PORT`）一致 |
 
 所有路径均相对于 `{base}/api/v1`。
@@ -126,7 +126,7 @@
 }
 ```
 
-错误响应见 [openJiuwen-Agentic-Hub.md — 全局错误响应](./openJiuwen-Agentic-Hub.md#全局错误响应)。
+错误响应见 [openJiuwen-Agentic-Hub-OpenAPI.md — 全局错误响应](./openJiuwen-Agentic-Hub-OpenAPI.md#全局错误响应)。
 
 ### 鉴权请求头
 
@@ -139,12 +139,14 @@
 
 ---
 
-## Skill 可见性速查
+## Agent 资产可见性速查
+
+适用于六类 Agent 资产：Skill、SwarmSkill、插件、连接器、专家、专家团。
 
 | 调用者 | 公开市场列表 | 下载已通过版本 | 查看待审/驳回版本 | 审核 |
 |--------|:------------:|:--------------:|:-----------------:|:--------:|
 | 匿名 / 普通用户 | 仅已通过且存在对外版本 | ✓ | ✗（404） | ✗ |
-| 发布者本人 | 个人中心可见全部自己的 Skill | 含待审版本 | ✓ | ✗ |
+| 发布者本人 | 个人中心可见全部自己的资产 | 含待审版本 | ✓ | ✗ |
 | 审核管理员 | 待办可见 PENDING/REJECTED | ✓ | ✓ | ✓ |
 | System Token | 按 API 权限 | ✓ | ✓ | ✓ |
 
@@ -181,10 +183,10 @@
 
 ```bash
 # 浏览器访问（网页版默认流程）
-open "https://swarmskills.openjiuwen.com/api/v1/auth/oauth/gitcode/start"
+open "https://agentichub.openjiuwen.com/api/v1/auth/oauth/gitcode/start"
 
 # 本地客户端（redirect_to 须整体 URL 编码：值自带 query 时嵌套的 ?、& 会被截断）
-open "https://swarmskills.openjiuwen.com/api/v1/auth/oauth/gitcode/start?redirect_to=http%3A%2F%2F127.0.0.1%3A3000%2Fcallback%3Fclient_state%3Dxyz"
+open "https://agentichub.openjiuwen.com/api/v1/auth/oauth/gitcode/start?redirect_to=http%3A%2F%2F127.0.0.1%3A3000%2Fcallback%3Fclient_state%3Dxyz"
 ```
 
 ---
@@ -201,7 +203,7 @@ OAuth 厂商回调。用 `code` 换取 token，拉取用户信息，写入一次
 | `state` | ✓ | 与 start 时一致 |
 | `error` | | 用户拒绝授权等 |
 
-**失败时** 不返回 JSON，而是 302 到回跳目标（`redirect_to` 或默认前端登录页）并在 query 中附带 `oauth_error`、`oauth_error_code` 等，详见 [OAuth 回调错误](./openJiuwen-Agentic-Hub.md#oauth-回调重定向错误)。
+**失败时** 不返回 JSON，而是 302 到回跳目标（`redirect_to` 或默认前端登录页）并在 query 中附带 `oauth_error`、`oauth_error_code` 等，详见 [OAuth 回调错误](./openJiuwen-Agentic-Hub-OpenAPI.md#oauth-回调重定向错误)。
 
 ---
 
@@ -266,7 +268,7 @@ X-OAuth-Provider: gitcode
 
 ### `GET /plugins`
 
-返回市场资产分页列表。未指定 `asset_type` / `plugin_type` 时保持原行为，仅返回 Skill / Swarm Skill；显式指定四类 Agent 类型时返回对应资产。`search_keyword` 对 Skill / Swarm Skill 走语义检索，对 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp` 固定走数据库关键词匹配。未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 时即使 `order_by=recommend` 也按 `install_count` 查表。市场前端侧边栏精选数量不调用本参数，用已上架数与 `GET /site/config` 的 `rec_list_top_k` 的较小值。可选 Bearer 或 X-System-Token 用于发布者/管理员个性化字段；无效凭证或同时提供两种凭证时按匿名访问。
+返回 Agent 资产分页列表。未指定 `asset_type` / `plugin_type` 时仅返回 Skill / SwarmSkill；查插件、连接器、专家、专家团须显式传入对应类型。`search_keyword` 对 Skill / SwarmSkill 走语义检索，对 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp` 固定走数据库关键词匹配。未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 或未启用推荐时，`order_by=recommend` 按 `install_count` 查表。`order_by=hot_score` 按火爆值排序；前端「热门」在无搜索、无标签时另传 `top_k`（取 `GET /site/config` 的 `hot_list_top_k`），`total` 同步封顶。市场前端侧边栏精选数量不调用推荐参数，用已上架数与 `rec_list_top_k` 的较小值。可选 Bearer 或 X-System-Token 用于发布者/管理员个性化字段；无效凭证或同时提供两种凭证时按匿名访问。列表项含 `publisher_official`（发布者 ID 为系统管理员时为 true，名称字段仍为原名）和 `hot_score`。
 
 **Query 参数**
 
@@ -281,30 +283,31 @@ X-OAuth-Provider: gitcode
 | `plugin_type` | string | — | `skill`、`swarmskill`、`agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`；可逗号多值。不传且不带 `plugin_type_exclude`/`asset_type` 时默认 `skill,swarmskill` |
 | `plugin_type_exclude` | string | — | 排除某类型 |
 | `asset_type` | string | — | 资产大类过滤；取值为 `plugin` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp`（Agent 资产与 `plugin_type` 同值） |
-| `search_keyword` | string | — | 语义搜索关键词（仅 skill/swarmskill 走语义检索；Agent 资产固定走数据库关键词匹配，详见「Agent 资产」一节） |
+| `search_keyword` | string | — | 关键词。Skill / SwarmSkill 走语义检索；插件、连接器、专家、专家团走数据库关键词匹配 |
 | `moderation_status` | string | — | `PENDING` \| `APPROVED` \| `REJECTED` |
 | `tags` | string | - | 按标签过滤，逗号分隔（如 `python,cli`）；标签内不能含逗号（发布校验同口径）。长度上限 512 字符（超出 422），超过 20 个标签静默截断 |
 | `tags_match` | string | `all` | 标签匹配模式：`all`=同时包含全部标签（子集）；`any`=包含任一标签（交集） |
-| `order_by` | string | `install_count` | 排序字段；`recommend` 仅无 `category_id`、无搜索词且 `MARKET_RECOMMENDER_ENABLED=true` 时生效，否则回退 `install_count` |
+| `order_by` | string | `install_count` | `install_count`、`like_count`、`view_count`、`create_time`、`update_time`、`review_count`、`hot_score`、`recommend`。`recommend` 仅无 `category_id`、无搜索词且 `MARKET_RECOMMENDER_ENABLED=true` 时走个性化，否则回退 `install_count`。`hot_score` 为离线重算的火爆值 |
 | `desc` | bool | `true` | 是否降序 |
+| `top_k` | int | — | 只返回前 N 条，`total` 同步封顶。前端「热门」无搜索、无标签时传入 |
 
 **示例 — 公开市场**
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/plugins?plugin_type=skill,swarmskill&page=1&page_size=20"
+curl "https://agentichub.openjiuwen.com/api/v1/plugins?plugin_type=skill,swarmskill&page=1&page_size=20"
 ```
 
 **示例 — 我的 Skills**
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/plugins?publisher_id=YOUR_USER_ID&plugin_type=skill" \
+curl "https://agentichub.openjiuwen.com/api/v1/plugins?publisher_id=YOUR_USER_ID&plugin_type=skill" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 **示例 - 按标签过滤（同时含 python 和 cli）**
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/plugins?plugin_type=skill&tags=python,cli&tags_match=all"
+curl "https://agentichub.openjiuwen.com/api/v1/plugins?plugin_type=skill&tags=python,cli&tags_match=all"
 ```
 
 **响应 `200` — `data` 结构**
@@ -325,9 +328,11 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins?plugin_type=skill&tags=p
       "latest_version": "1.1.0",
       "public_latest_version": "1.0.0",
       "view_count": 42,
+      "publisher_official": false,
       "install_count": 10,
       "like_count": 3,
-      "star_count": 1
+      "star_count": 1,
+      "hot_score": 12.5
     }
   ]
 }
@@ -354,7 +359,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins?plugin_type=skill&tags=p
 **示例**
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&limit=20"
+curl "https://agentichub.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&limit=20"
 ```
 
 **响应 `200` - `data` 结构**
@@ -370,7 +375,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&l
 
 ### `GET /plugins/{asset_id}/versions/{version}`
 
-返回指定市场资产版本的元数据、changelog、审查摘要（若启用）等。响应 `data` 始终包含 `asset_type`，并通过 `plugin_type` 给出具体运行类型；四类 Agent 资产的这两个字段同值。
+返回指定 Agent 资产版本的元数据、changelog、审查摘要（若启用）等。响应 `data` 始终包含 `asset_type`，并通过 `plugin_type` 给出具体运行类型；插件、连接器、专家、专家团的这两个字段同值。
 
 | 项 | 说明 |
 |----|------|
@@ -378,7 +383,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&l
 | **路径参数** | `asset_id`：资产 ID；`version`：如 `1.0.0` |
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0"
+curl "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0"
 ```
 
 #### 特殊可见性规则
@@ -409,17 +414,19 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.
 
 返回下载信息：预签名 URL、checksum、文件大小等。可选 Bearer 或 X-System-Token 用于识别下载方（无效凭证或同时提供两种凭证时按匿名，仍可下载公开资产）。
 
+下载量按来源按日去重：同一登录用户，或同一匿名指纹（客户端 IP + User-Agent），对同一资产在 UTC 当日只增加一次 `install_count`。重复请求仍返回下载信息。本次占用名额但下载失败时会释放，避免失败请求吃掉当天计数。Redis 不可用时改为照常计数。火爆值里的近 7 天下载使用同一套流水，因此也是不同来源数。
+
 | Query | 默认 | 说明 |
 |-------|------|------|
 | `version` | 最新对外版本 | 如 `1.0.0` |
 | `is_cli_download` | `false` | `true` 时返回 CLI 原始 zip |
 
-`is_cli_download=false` 时返回 `*.raw.zip`：Skill 为首个 `SKILL.md` 所在目录的内容；Agent 资产为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。
+`is_cli_download=false` 时返回 `*.raw.zip`：Skill / SwarmSkill 为首个 `SKILL.md` 所在目录的内容；插件、连接器、专家、专家团为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。
 
 响应 `data` 关键字段：`download_url`、`version`、`checksum_sha256`、`file_size`、`name`、`asset_type`、`plugin_type`。
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0.0"
+curl "https://agentichub.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0.0"
 ```
 
 | 条件 | 状态码 | 说明 |
@@ -430,9 +437,9 @@ curl "https://swarmskills.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0
 
 ### `POST /plugins`
 
-发布市场资产（multipart zip）。Skill / Swarm Skill / 四类 Agent 均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过审核。须携带 `X-Checksum-SHA256`。
+发布 Agent 资产（multipart zip）。六类均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过审核。须携带 `X-Checksum-SHA256`。
 
-> Agent 资产支持**裸原生包**（含 `manifest.json`）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「Agent 资产」一节。
+> 插件、连接器、专家、专家团支持**裸原生包**（含 `manifest.json`）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「Agent 资产」一节。
 
 **请求头**
 
@@ -446,12 +453,12 @@ Content-Type: multipart/form-data
 
 | 字段 | 必填 | 说明 |
 |------|:----:|------|
-| `file` | ✓ | `.zip` 市场资产包（Skill 须含外层 `plugin.yaml`；Agent 可为裸包或包装包） |
+| `file` | ✓ | `.zip` Agent 资产包。Skill / SwarmSkill 以 `SKILL.md` 为入口；插件、连接器、专家、专家团可为裸包或包装包 |
 | `plugin_id` | | 已有资产发新版时填 `asset_id`；首次发布不传 |
 | `plugin_version` | | 如 `1.0.0`（不含 `v` 前缀）或 7 位小写 git commit；缺省从包内 `plugin.yaml` / manifest 读取 |
 | `version_desc` | | 版本更新说明 |
 | `force` | | `true` 强制覆盖同版本 |
-| `visibility` | | `public`（默认）或 `private`；对 Skill 和四类 Agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
+| `visibility` | | `public`（默认）或 `private`；对六类 Agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
 | `asset_name` | | 市场外层 `plugin.yaml.name`；Agent 裸包/包装包均可覆盖，并同步 patch 内层 `manifest.id`（须与包内路径一致） |
 | `display_name` | | 展示名；表单优先于包内 |
 | `description` | | 简短描述；表单优先于包内 |
@@ -460,7 +467,7 @@ Content-Type: multipart/form-data
 **示例**
 
 ```bash
-curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins" \
+curl -X POST "https://agentichub.openjiuwen.com/api/v1/plugins" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "X-Checksum-SHA256: $(sha256sum skill.zip | awk '{print $1}')" \
   -F "file=@skill.zip" \
@@ -486,7 +493,7 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins" \
 }
 ```
 
-`publish_result` 典型流转：`reviewing`（审查中）→ `pending_moderation`（审核中）→ `publish_success` / `publish_failed`。四类 Agent 资产发布成功时，`asset_type` 与 `plugin_type` 返回对应的 `agent-*` 值。
+`publish_result` 典型流转：`reviewing`（审查中，仅审查开启时的 Skill / SwarmSkill）→ `pending_moderation`（审核中）→ `publish_success` / `publish_failed`。插件、连接器、专家、专家团发布成功时，`asset_type` 与 `plugin_type` 返回对应的 `agent-*` 值。
 
 **常见错误**
 
@@ -521,10 +528,10 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins" \
 
 ⚠️ `version=all` 将 **不可逆** 删除该资产全部版本及对象存储文件。
 
-对四类 Agent 资产，响应 `data` 会额外返回精确的 `asset_type`；原 Skill / 普通插件的删除响应结构保持不变。
+删除插件、连接器、专家、专家团时，响应 `data` 会额外返回精确的 `asset_type`；Skill / SwarmSkill 与历史插件类型的删除响应结构保持不变。
 
 ```bash
-curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0" \
+curl -X DELETE "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
@@ -578,7 +585,7 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 ## Agent 资产
 
-除 Skill / SwarmSkill 外，市场支持四类 JiuwenSwarm Agent 资产，复用 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}` 等接口，通过 `plugin_type` / `asset_type` 区分。
+Agent 资产共六类，都走 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}`。Skill、SwarmSkill 以 `SKILL.md` 为入口，包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。下面是插件、连接器、专家、专家团多出来的包装和画像字段。
 
 | 资产 | `plugin_type` | 内层入口 |
 |------|---------------|----------|
@@ -589,15 +596,30 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/ver
 
 **包结构：** 外层 `plugin.yaml` + 内层 `<name>/manifest.json`；可上传裸原生包由服务端自动包装。连接器包 **必须**含 manifest，**拒绝**无 manifest 旧包。
 
-**检索：** 须显式传 `plugin_type`；默认列表不含 Agent 资产。`search_keyword` 走 DB 关键词匹配。
+**检索：** 这四类须显式传 `plugin_type`；默认列表只有 Skill、SwarmSkill。`search_keyword` 走 DB 关键词匹配。
 
 **下载：** `is_cli_download=false` 返回 `raw.zip`（仅内层原生包，根目录为 `manifest.json`）；`true` 返回完整市场包装。
 
-详细规则见 [Agent 资产](../5.%20开发指南/Agent资产.md)、[Agent 资产列表与下载接口](./Agent资产列表与下载接口.md)。
+版本详情里的 `agent_package_profile` 来自内层 `manifest.json`，只读：
+
+| 字段 | 插件 | 专家 | 专家团 | 连接器 |
+|------|:----:|:----:|:------:|:------:|
+| `package_type` | `plugin` | `agent_template` | `agent_group` | `mcp` |
+| `category` / `source` | ✓ | ✓ | ✓ | ✓ |
+| `integration_type` | — | — | — | ✓ |
+| `credentials_type` | — | — | — | ✓ |
+| `persona_markdown` | — | ✓ | ✓（`instruction`） | — |
+| `quick_inputs` | ✓ | ✓ | ✓ | ✓（来自 `examples`） |
+| `capabilities[]` | skill/tool/rail/mcp/subagent | 同左 | agent/skill | skill/integration |
+| `manifest_tags` | ✓ | ✓ | ✓ | ✓ |
+
+`capabilities[]` 每项为 `kind`、`id`、`name`、`description`。`detail_desc` 取内层 `README.md`，没有则为空。`icon_uri`：专家、专家团和插件用 `manifest.avatar` 或外层 `icon.png`；连接器用 `manifest.icon`。
+
+包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。
 
 ### 发布（`POST /plugins`）
 
-四类 Agent 与 Skill / SwarmSkill 相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入审核；系统管理员可跳过。可上传裸原生包或通过表单覆盖元数据。
+六类 Agent 资产相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入审核；系统管理员可跳过。插件、连接器、专家、专家团可上传裸原生包，或通过表单覆盖元数据。
 
 Agent 包装包：`plugin_version` 须与内层 `manifest.version` 一致，否则 `400 invalid_version`。
 
@@ -1053,7 +1075,7 @@ Agent 包装包：`plugin_version` 须与内层 `manifest.version` 一致，否�
 撤回/移除 Skill 授权。群主、Skill 发布者、特权用户任一即可操作。记录标记为 `revoked`（不删除）。接入操作日志。
 
 ```bash
-curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/groups/grp_abc123/grants/482becff..." \
+curl -X DELETE "https://agentichub.openjiuwen.com/api/v1/groups/grp_abc123/grants/482becff..." \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
@@ -1106,7 +1128,7 @@ curl -X DELETE "https://swarmskills.openjiuwen.com/api/v1/groups/grp_abc123/gran
 **示例 — 驳回**
 
 ```bash
-curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/moderation" \
+curl -X POST "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/moderation" \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"action":"reject","version":"1.0.0","reason":"描述不清晰，请补充使用示例"}'
@@ -1164,7 +1186,7 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/moder
 
 | 条件 | 状态码 | error |
 |------|--------|-------|
-| 对自己的 Skill | `403` | `self_interaction_forbidden` |
+| 对自己发布的 Skill / SwarmSkill | `403` | `self_interaction_forbidden` |
 | Skill 未通过审核 | `400` | `skill_not_approved` |
 | 资产不存在或不可见 | `404` | `not_found` |
 
@@ -1186,7 +1208,7 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/plugins/{asset_id}/moder
 批量查询多个资产的互动状态。登录后可返回当前用户是否已点赞/收藏。
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/plugins/interactions/batch?asset_ids=id1&asset_ids=id2"
+curl "https://agentichub.openjiuwen.com/api/v1/plugins/interactions/batch?asset_ids=id1&asset_ids=id2"
 ```
 
 最多 **50** 个 `asset_id`；超出返回 `400`（`too_many_ids`）。
@@ -1270,7 +1292,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/plugins/interactions/batch?asset
 返回前端运行时功能开关，无需鉴权。前端据此控制功能按钮的显示/隐藏，无需重新构建。
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/site/config"
+curl "https://agentichub.openjiuwen.com/api/v1/site/config"
 ```
 
 **响应示例：**
@@ -1282,7 +1304,8 @@ curl "https://swarmskills.openjiuwen.com/api/v1/site/config"
   "gitcode_oauth_enabled": false,
   "github_oauth_enabled": false,
   "agentos_oauth_enabled": false,
-  "rec_list_top_k": 50
+  "rec_list_top_k": 50,
+  "hot_list_top_k": 100
 }
 ```
 
@@ -1294,6 +1317,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/site/config"
 | `github_oauth_enabled` | boolean | GitHub 登录开关（`MARKET_GITHUB_OAUTH_ENABLED`，默认 `false`） |
 | `agentos_oauth_enabled` | boolean | AgentOS 登录开关（`MARKET_AGENTOS_OAUTH_ENABLED`，默认 `false`） |
 | `rec_list_top_k` | int | 「推荐精选」一次召回上限（`MARKET_REC_LIST_TOP_K`） |
+| `hot_list_top_k` | int | 「热门」无搜索、无标签时的条数上限（`MARKET_HOT_LIST_TOP_K`，默认 100） |
 
 ---
 
@@ -1302,7 +1326,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/site/config"
 返回隐私声明 **Markdown 纯文本**（非 JSON）。无需鉴权。
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/site/privacy-statement"
+curl "https://agentichub.openjiuwen.com/api/v1/site/privacy-statement"
 ```
 
 ---
@@ -1358,13 +1382,13 @@ curl "https://swarmskills.openjiuwen.com/api/v1/site/privacy-statement"
 
 ```bash
 # 一键标星核心仓库
-curl -X POST "https://swarmskills.openjiuwen.com/api/v1/github/watch" \
+curl -X POST "https://agentichub.openjiuwen.com/api/v1/github/watch" \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{"repos":[]}'
 
 # 标星指定仓库
-curl -X POST "https://swarmskills.openjiuwen.com/api/v1/github/watch" \
+curl -X POST "https://agentichub.openjiuwen.com/api/v1/github/watch" \
   -H "Authorization: Bearer {token}" \
   -H "Content-Type: application/json" \
   -d '{"repos":[{"owner":"openJiuwen-ai","repo":"skillhub"}]}'
@@ -1419,7 +1443,7 @@ curl -X POST "https://swarmskills.openjiuwen.com/api/v1/github/watch" \
 | `X-OAuth-Provider` | 否 | token 归属厂商（`github`/`gitcode`）；缺失时按 `github` 处理 |
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/github/watch/status" \
+curl "https://agentichub.openjiuwen.com/api/v1/github/watch/status" \
   -H "Authorization: Bearer {token}"
 ```
 
@@ -1464,7 +1488,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/github/watch/status" \
 | **鉴权** | 无需 |
 
 ```bash
-curl "https://swarmskills.openjiuwen.com/api/v1/skills/{asset_id}"
+curl "https://agentichub.openjiuwen.com/api/v1/skills/{asset_id}"
 ```
 
 #### 特殊可见性规则
@@ -1499,7 +1523,7 @@ curl "https://swarmskills.openjiuwen.com/api/v1/skills/{asset_id}"
 
 ## 相关文档
 
-- [openJiuwen-Agentic-Hub.md — 错误码与 OpenAPI YAML](./openJiuwen-Agentic-Hub.md)
+- [openJiuwen-Agentic-Hub-OpenAPI.md — 错误码与 OpenAPI YAML](./openJiuwen-Agentic-Hub-OpenAPI.md)
 - [ClawHub 兼容层](./ClawHub兼容层.md)
 - [角色与权限（用户视角）](../4.%20用户指南/角色与权限.md)
 

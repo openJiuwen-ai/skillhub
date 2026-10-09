@@ -1,13 +1,14 @@
 # 推荐系统 API
 
-对外仅暴露 **个性化推荐** 接口。
+对外主接口是 `POST /api/v1/recommend`。推荐开启时做个性化召回；关闭时同一路径按下载量返回。
 
 - 路径：`POST /api/v1/recommend`
-- 开关：需 `MARKET_RECOMMENDER_ENABLED=true`，否则 `503`
-- 鉴权：**可选**（与 `GET /plugins` 相同，走 `resolve_viewer_context`）
+- 开关：`MARKET_RECOMMENDER_ENABLED=true` 时走个性化召回。为 `false` 时路由仍在：按 `install_count` 返回 **200**（`source=install_count`，`score` 为 0）；Hub 目录外的 `plugin_type` 返回空 `items`。关闭推荐不再返回 `503`
+- 鉴权：**可选**（与 `GET /plugins` 相同，走 `resolve_viewer_context`）。关闭推荐时身份只用于列表可见性，不改变排序
+
   - 有效 `Authorization: Bearer <OAuth access token>`（可选 `X-OAuth-Provider: gitcode|github`）
   - 或有效 `X-System-Token: <SYSTEM_ADMIN_TOKEN>`（受信任服务代调）
-  - 缺头、Bearer 无效/过期、System Token 无效、两种凭证同时传：视为匿名，走 Redis 下载量 TopK 兜底（`source=topk_install`），**不 401**
+  - 缺头、Bearer 无效/过期、System Token 无效、两种凭证同时传：视为匿名，**不 401**。推荐已启用时走 Redis 下载量 TopK（`source=topk_install`）；未启用时与已登录一样按 MySQL 下载量返回（`source=install_count`）
 
 市场 Web 列表侧的「推荐精选」（`GET /api/v1/plugins?order_by=recommend`，不带 `category_id`）见 [openJiuwen Agentic Hub 接口参考](./openJiuwen-Agentic-Hub-接口参考.md)。列表与 POST 共用同一套召回引擎；POST 在召回后走与列表相同的市场过滤与卡片补全。POST 为可选鉴权。
 
@@ -52,6 +53,7 @@
 | `timestamp` | number \| null | 否 | `null` | 仅写日志，不参与召回 |
 | `top_k` | int | 否 | `10` | 过滤后最多返回条数，范围 1–500。服务端会适量超召再滤，可见条数可能少于 `top_k` |
 | `category_id` | string | 否 | `""` | 根类目 ID；空=不限 |
+| `plugin_type` | string | 否 | `""` | 资产类型过滤。空=不限。Hub 目录外的类型（如 `skillpack`）直接返回空列表 |
 
 ### 响应 `data`
 
@@ -59,7 +61,7 @@
 |------|------|------|
 | `request_id` | string | 回显 |
 | `user_id` | string | **实际用于召回**的用户 ID |
-| `source` | string | `user_history` / `topk_install` |
+| `source` | string | 已启用：`user_history` / `topk_install`。未启用：`install_count` |
 | `category_id` | string | 请求类目回显 |
 | `items` | array | 过滤后的可见卡片。每条含召回 `score`，以及与 `GET /plugins` 列表项相同的字段（`name` / `display_name` / `short_desc` / `plugin_type` / `latest_version` / `tags` / `update_time` 等）。下架、未过审、不可见的 id 不会出现。顺序为召回序（置顶 `pin_order` 仍优先） |
 
@@ -69,8 +71,9 @@
 |------|------------------------|------|
 | `403` | `recommend_user_mismatch` / `SKILLHUB_RECOMMEND_USER_MISMATCH` | 有效 Bearer 下 `body.user_id` 与登录用户不一致 |
 | `422` | 校验失败 | 请求体校验失败 |
-| `503` | `recommender_disabled` / `SKILLHUB_RECOMMENDER_DISABLED` | 推荐未启用 |
-| `500` | `recommend_failed` / `SKILLHUB_RECOMMEND_FAILED` | 服务内部错误（详情仅服务端日志） |
+| `500` | `recommend_failed` / `SKILLHUB_RECOMMEND_FAILED` | 推荐已启用时的服务内部错误（详情仅服务端日志）。未启用时本接口返回 200，不走这条错误 |
+
+同前缀的 `POST /recommend/by_ids`、`/by_queries`、`/rerank_mmr` 在推荐关闭时返回 200 且 `items` 为空。
 
 ---
 

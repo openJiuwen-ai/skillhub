@@ -8,14 +8,20 @@
 ### Added
 
 - 第四类 Agent 资产 **专家团**（`plugin_type` / `runtime.type` = `agent-group`，内层 `package_type` = `agent_group`；对象存储 `agent-groups/`）
+- **火爆值**（`hot_score`）：近 7 天下载、累计下载、浏览、点赞与收藏、评分加权后定时回写；市场「热门」按该分排序，条数上限 `MARKET_HOT_LIST_TOP_K`（`GET /site/config` 的 `hot_list_top_k`）。与推荐开关无关
+- 列表与详情返回 `publisher_official`：发布者 ID 为系统管理员账号时，前端显示官方徽标；`publisher_name` 仍为原名
 - 用户文档体系：新用户入门、前端操作手册、角色与权限、场景化指引与 FAQ、环境配置说明（使用者）
 - 根目录 `CHANGELOG.md` 持续记录版本变更
 
 ### Changed
 
+- `MARKET_RECOMMENDER_ENABLED=false` 时仍注册 `POST /api/v1/recommend*`：`POST /recommend` 按 `install_count` 返回 200（`source=install_count`），Hub 目录外的 `plugin_type` 返回空列表；不再因关闭推荐返回 503
+- 下载计量按来源按日去重：同一登录用户或同一匿名指纹（IP + User-Agent）对同一资产在 UTC 当日只计一次 `install_count`；重复下载仍返回文件。失败的首次下载会释放当天名额
 - Agent 四类资产（插件 / 连接器 / 专家 / 专家团）发布：manifest 声明的 `skills`、`tools`、`persona` 等缺失文件不再拒发；Hub 只做包结构、路径安全与危险内容扫描，运行时齐套留给 JiuwenSwarm
 - 产品展示名与文档由 SwarmSkillsHub / SkillHub / TeamSkillsHub 统一为 **openJiuwen Agentic Hub**（仓库目录、Docker/K8s 内部名、`swarmskill` 类型与官方域名暂不改）
-- 官方托管域名由 `teamskills.openjiuwen.com` 更名为 `swarmskills.openjiuwen.com`（文档与默认市场地址已同步）
+- 官方托管站点为 [agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)
+- Skill、SwarmSkill、插件、连接器、专家、专家团统一称为 Agent 资产，开发指南收成 `Agent资产.md`；用户指南的六篇发布说明合成 `Agent资产发布.md`
+- API 阅读入口只保留接口参考；`openJiuwen-Agentic-Hub-OpenAPI.md` 只留错误码和 OpenAPI YAML
 - 市场与发布展示名：`agent-plugin` 为**插件**、`agent-mcp` 为**连接器**、`agent-template` 为**专家**、`agent-group` 为**专家团**（Tab / 发布类型顺序：插件、连接器、专家、专家团）；发布成功提示按所选类型显示
 - **Git 源接入**
   - 同一仓库不同 `skills_subpath` 可由不同用户分别注册（路径归一化）
@@ -72,7 +78,7 @@
 ### 兼容性
 
 - **数据库**：升级时 marketplace 启动会自动迁移 schema；建议在维护窗口操作
-- **API**：客户端请优先使用 `detail.error_code` 解析错误；OpenAPI 见 `docs/zh/7. API参考/openJiuwen-Agentic-Hub.md`
+- **API**：客户端请优先使用 `detail.error_code` 解析错误；OpenAPI 见 `docs/zh/7. API参考/openJiuwen-Agentic-Hub-OpenAPI.md`
 - **CLI**：与市场 API 版本保持一致部署，避免跨大版本混用
 
 ---
