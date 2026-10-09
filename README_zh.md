@@ -4,9 +4,9 @@
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11.4-blue.svg)](marketplace/pyproject.toml)
 [![Node](https://img.shields.io/badge/node-18%20%7C%2020%20LTS-green.svg)](frontend/package.json)
 
-**English**: [README.md](README.md)
+**English**: [README.md](https://gitcode.com/openJiuwen/skillhub/blob/main/README.md)
 
-**openJiuwen Agentic Hub**（本仓库）是 openJiuwen 生态中的 **Skill 托管与分发** 开源实现，供团队在自有环境中部署使用。  
+**openJiuwen Agentic Hub**（本仓库）是 openJiuwen 生态中 **Agent 资产**（Skill、SwarmSkill、插件、连接器、专家、专家团）的托管与分发开源实现，供团队在自有环境中部署使用。  
 **ClawHub 兼容协议**：可选启用，便于与既有 **ClawHub** 生态下的 CLI 与工具链对接（路径与语义以实现为准）。
 
 ## 目录
@@ -22,13 +22,13 @@
 
 ## 核心能力
 
-- **市场服务（marketplace）**：Skill 发布与版本治理、列表与详情、预签名下载；可按需启用 **ClawHub 兼容协议**，便于对接既有 CLI 与生态工具。
+- **市场服务（marketplace）**：发布与版本治理覆盖六类 Agent 资产（Skill、SwarmSkill、插件、连接器、专家、专家团）；列表、详情与预签名下载。「热门」按火爆值排序；系统管理员账号发布的资产显示官方标识。可按需启用 **ClawHub 兼容协议**。
 - **命令行工具（CLI）**：检索、解析与下载（详见 [`cli/README.md`](cli/README.md)）。
-- **Web 前端（frontend）**：浏览器中检索、解析与下载（详见 [安装指导](docs/zh/3.%20安装指导/README.md)）。
+- **Web 前端（frontend）**：浏览器中浏览、发布与审核（详见 [安装指导](docs/zh/3.%20安装指导/README.md)）。
 
 面向需要在团队或产品内集中管理 **Skill** 的开发者与平台运维，本仓库提供 **开源代码与自建方案**。
 
-**官方托管**：openJiuwen 产品侧已提供 **[swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)**，可在浏览器中直接使用。  
+**官方托管**：openJiuwen 产品侧已提供 **[agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)**，可在浏览器中直接使用。  
 若需数据驻留、网络隔离或与内部系统对接，可在本机或自有环境按下文部署本仓库。
 
 ## 架构一览
@@ -71,9 +71,23 @@ flowchart LR
 
 ### 1. 官方托管（零部署）
 
-访问 **[swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)** 进行 Skill 检索、解析与下载。
+访问 **[agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)** 浏览 Agent 资产。
 
-### 2. 自建：最短路径（本地开发）
+### 2. 自建：Docker Compose（一条命令）
+
+一条命令拉起 MySQL、Redis、MinIO、Backend、Frontend，不必在本机单独安装这些依赖。完整步骤见 [Docker 一键部署](docs/zh/3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导-一键部署.md)。
+
+```powershell
+# 仓库根目录
+Copy-Item .env.example .env
+# 按需编辑 .env（默认值可直接启动）
+docker compose -f docker/docker-compose.yml --env-file .env up -d --build
+```
+
+- 前端：`http://localhost:9002`
+- 后端健康检查：`http://localhost:8100/api/health`
+
+### 3. 自建：本地开发
 
 前置条件：已准备好 **MySQL**（须预先建库）、**S3 兼容存储**（如 MinIO）、**鉴权服务**可达。详见 [本地安装指导](docs/zh/3.%20安装指导/本地安装/openJiuwen-Agentic-Hub安装指导.md)。
 
@@ -101,16 +115,16 @@ npm run dev
 
 - 开发服默认 **9002**（以终端输出为准）；`BACKEND_PORT` 应对应后端的 `STORE_PORT`；`BACKEND_URL` 须填写前端进程可访问的后端地址（本机开发通常为 `127.0.0.1`），不要照抄后端监听地址 `STORE_HOST`（尤其是 `0.0.0.0` 这类通配地址）。详细说明见 [本地安装指导 §6](docs/zh/3.%20安装指导/本地安装/openJiuwen-Agentic-Hub安装指导.md)。
 
-### 3. 自建：Docker
+### 4. 自建：Docker
 
 参阅 [Docker 方式安装（Windows）](docs/zh/3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导.md)（含后端与前端镜像构建）。
 
-### 4. API 与 CLI
+### 5. API 与 CLI
 
-- **HTTP API**：[openJiuwen Agentic Hub 接口参考](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md)（推荐）· [OpenAPI YAML](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub.md)
+- **HTTP API**：[openJiuwen Agentic Hub 接口参考](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md)（推荐）· [OpenAPI YAML](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md)
 - **CLI**：[`cli/README.md`](cli/README.md)
 
-### 5. 生态与全栈实践
+### 6. 生态与全栈实践
 
 参阅 [GitCode · openJiuwen](https://gitcode.com/openJiuwen) 官方文档与实践。
 
@@ -133,8 +147,8 @@ npm run dev
 |------|------|
 | 本地安装（Windows 为主） | [安装指导](docs/zh/3.%20安装指导/本地安装/openJiuwen-Agentic-Hub安装指导.md) |
 | Docker 安装（Windows） | [Docker 方式安装](docs/zh/3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导.md) |
-| 市场 API（OpenAPI） | [openJiuwen-Agentic-Hub.md](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub.md) |
-| 市场 API 接口参考（推荐） | [openJiuwen-Agentic-Hub-接口参考.md](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) |
+| 市场 API 接口参考 | [openJiuwen-Agentic-Hub-接口参考.md](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md) |
+| OpenAPI 与错误码 | [openJiuwen-Agentic-Hub-OpenAPI.md](docs/zh/7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md) |
 | CLI | [cli/README.md](cli/README.md) |
 | 贡献说明 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

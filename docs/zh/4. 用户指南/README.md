@@ -1,15 +1,16 @@
 # openJiuwen Agentic Hub 用户指南
 
-本目录面向 **终端用户、创作者与审核管理员**，说明如何在浏览器中使用 openJiuwen Agentic Hub，以及如何完成 Skill 发布、审核与日常维护。
+本目录面向 **终端用户、创作者与审核管理员**，说明如何在浏览器中使用 openJiuwen Agentic Hub，以及如何发布 Skill、SwarmSkill、插件、连接器、专家和专家团。
 
 若你负责 **部署与运维**，请参阅 [安装指导](../3.%20安装指导/本地安装/openJiuwen-Agentic-Hub安装指导.md) 与 [Docker 方式安装](../3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导.md)。
-若你负责 **接口集成或二次开发**，请参阅 [openJiuwen Agentic Hub 接口参考](../7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md)、[OpenAPI YAML](../7.%20API参考/openJiuwen-Agentic-Hub.md) 与 [CLI 说明](../../../cli/README.md)。
+若你负责 **接口集成或二次开发**，请参阅 [openJiuwen Agentic Hub 接口参考](../7.%20API参考/openJiuwen-Agentic-Hub-接口参考.md)、[OpenAPI YAML](../7.%20API参考/openJiuwen-Agentic-Hub-OpenAPI.md) 与 [CLI 说明](../../../cli/README.md)。
 
 ## 文档索引
 
 | 文档 | 适用读者 | 说明 |
 |------|----------|------|
 | [快速开始](../2.%20快速开始.md) | 所有新用户 | 产品定位、典型场景、5 分钟快速体验 |
+| [Agent资产发布](./Agent资产发布.md) | 创作者 | 发布 Skill、SwarmSkill、插件、连接器、专家、专家团 |
 | [角色与权限](./角色与权限.md) | 所有用户 | 普通用户、创作者、审核管理员、系统用户的权限与可见性规则 |
 | [群组管理](./群组管理.md) | 所有用户 | 创建群组、成员管理、Skill 授权与审批、组内 Skill 访问 |
 | [场景化指引与 FAQ](./场景化指引与FAQ.md) | 创作者、集成方 | 从零发布 Skill、版本维护、CLI 对接、常见报错 |
@@ -23,7 +24,7 @@
 
 | 方式 | 说明 |
 |------|------|
-| **官方托管** | 访问 [swarmskills.openjiuwen.com](https://swarmskills.openjiuwen.com)，OAuth 登录后即可使用，无需自行部署 |
+| **官方托管** | 访问 [agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)，OAuth 登录后即可使用，无需自行部署 |
 | **自建实例** | 由团队在本仓库基础上部署；功能与官方托管一致，但登录提供商、审核员名单等由实例管理员在 `.env` 中配置 |
 
 ## 获取帮助

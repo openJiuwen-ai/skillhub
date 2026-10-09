@@ -70,7 +70,7 @@ FLUSH PRIVILEGES;
 需要通过 Web 页面登录、发布和审核 Skill 时，按 [OAuth 登录配置](../../6.%20运维指南/基础部署/OAuth登录配置.md) 完成准备（仅浏览公开内容可跳过本节）。完成后记录以下值，供第 4 章配置使用：
 
 - GitCode OAuth 应用的 Client ID 和 Client Secret（本地验证时应用主页和回调地址使用 `http://skillhub.local:9002`，与 ConfigMap 默认值一致）
-- 审核账号的 GitCode 登录名（需与发布账号不同，审核账号不能审核自己发布的 Skill）
+- 审核账号的 GitCode 登录名（需与发布账号不同，审核账号不能审核自己发布的资产）
 
 通过域名对外提供服务时无需配置 hosts，OAuth 应用直接使用实际域名。
 
@@ -252,7 +252,7 @@ curl http://localhost:9002/api/health
 | **审查** | 发布前自动检测安全风险 | 直接进入审核 |
 | **检索系统** | 语义搜索，比关键词匹配更准 | 搜索退化为关键词匹配 |
 | **分类标签** | 新发布 Skill 自动打分类标签，用于首页类别展示 | 首页无类别，Skill 无分类标签 |
-| **推荐系统** | 首页「推荐精选」个性化排序（上限 `MARKET_REC_LIST_TOP_K`） | 「全部」/分类按 `install_count` 等字段排序 |
+| **推荐系统** | 首页「推荐精选」个性化排序（上限 `MARKET_REC_LIST_TOP_K`） | 「推荐精选」与 `POST /recommend` 按下载量返回 200（`source=install_count`） |
 | **在线体验** | 在页面上直接运行 Skill，每个会话一个独立沙箱 Pod | 页面无在线体验入口 |
 
 除在线体验（9.5 节，有独立的组件和配置文件）外，以下配置都写在 `docker/k8s/marketplace-config.yaml` 的 `data` 中，密钥类配置追加到 `skillhub-secrets` Secret。修改后需重新 apply 并重启 backend 生效（同第 4.3 节）。
@@ -472,7 +472,7 @@ kubectl delete -f docker/k8s/namespace.yaml
 
 **推荐问题**
 
-- **`503 recommender is disabled`**：ConfigMap 未设 `MARKET_RECOMMENDER_ENABLED=true`，或改完未重启 backend Deployment
+- **关闭推荐后 `POST /recommend` 仍按下载量排序**：这是预期。ConfigMap 未设 `MARKET_RECOMMENDER_ENABLED=true` 时返回 200 且 `source=install_count`。要个性化需打开开关并重启 backend Deployment
 - **一直像下载量排序**：用户无 Redis 行为序列，或 `redis_sync` / Milvus 未就绪；见[运维指南 / 推荐系统](../../6.%20运维指南/可选能力/推荐系统/README.md)
 - **Embedding / Milvus 报错**：确认 `MARKET_REC_EMBEDDING_*` 与 `MILVUS_*` 在 Pod 内可达，且与检索侧变量分开配置
 

@@ -12,7 +12,7 @@
 |------|------|
 | 已登录且 Redis 有该用户行为序列 | Milvus 向量召回 → MMR 多样性重排（`source=user_history`） |
 | 无历史 / 召回失败 | Redis `install_count` 快照兜底（`source=topk_install`），条数不超过本次 `top_k` |
-| `MARKET_RECOMMENDER_ENABLED=false` | 不走推荐；列表 `order_by=recommend` 自动回退为 `install_count` |
+| `MARKET_RECOMMENDER_ENABLED=false` | 不走个性化。列表 `order_by=recommend` 回退 `install_count`。`POST /recommend` 仍返回 200，按下载量出卡片（`source=install_count`）；目录外 `plugin_type` 为空列表 |
 | 有搜索关键词 | 不走推荐，仍走检索 / 关键词逻辑 |
 | 列表「全部」/ 分类页签 | 不走推荐，MySQL `install_count` 排序（老逻辑） |
 | 列表「推荐精选」（`order_by=recommend` 且无 `category_id`） | 个性化召回，条数上限 `MARKET_REC_LIST_TOP_K` |
@@ -25,7 +25,7 @@
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `MARKET_RECOMMENDER_ENABLED` | 是否启用推荐（路由 + 列表推荐路径 + 离线调度） | `false` |
+| `MARKET_RECOMMENDER_ENABLED` | 是否启用个性化召回、列表「推荐精选」与离线调度。关闭时 `POST /recommend*` 仍注册，主接口按下载量返回 | `false` |
 | `MARKET_REC_LIST_TOP_K` | 首页「推荐精选」一次召回上限，再按 page 切片；hydrate 后 `OFFLINE` 会再少几条。前端角标读 `GET /site/config` 的 `rec_list_top_k` | `50` |
 | `MARKET_REC_REBUILD_ON_STARTUP` | 启动时是否立即跑 `redis_sync` + `milvus_full` | `true`（`.env.example` 示例常为 `false`） |
 | `MARKET_REC_MMR_LAMBDA` | MMR 权重 λ∈[0,1]：越大越偏相关，越小越偏打散；`1.0`≈关闭多样性 | `0.5` |
@@ -50,7 +50,7 @@
 
 ## 启动时会不会自动跑一次？
 
-**不会把四条定时任务都立刻执行一遍。** 前提还得是 `MARKET_RECOMMENDER_ENABLED=true`，否则推荐路由、调度器、列表推荐路径全部不挂。
+**不会把四条定时任务都立刻执行一遍。** 个性化召回、离线调度和列表「推荐精选」要求 `MARKET_RECOMMENDER_ENABLED=true`。关闭时这些不挂，但 `POST /api/v1/recommend*` 仍注册：`POST /recommend` 按 `install_count` 返回 200（`source=install_count`），Hub 目录外的 `plugin_type` 返回空列表。不再因为关闭推荐返回 `503`。火爆值重算不走这套开关，见[环境配置说明](../../../4.%20用户指南/环境配置说明.md)。
 
 启动时实际发生的事：
 
@@ -93,7 +93,7 @@
   - 测试脚本 / 伙伴服务：`X-System-Token: <与 .env 里 SYSTEM_ADMIN_TOKEN 一致>`，可指定任意 `user_id`
   - 登录用户：`Authorization: Bearer <OAuth token>`，个性化绑定 token 用户
   - 无 token 或 Bearer 无效：不 401，按空 `user_id` 走 Redis 下载量 TopK（`source=topk_install`）；body 里的 `user_id` 会被忽略
-- 未开开关：该接口 `503`，`error=recommender_disabled`。列表 `order_by=recommend` 会静默改成按下载量排，**不是报错**。
+- 未开开关：`POST /recommend` 仍是 200，`source=install_count`（按 MySQL 下载量，`score` 为 0）。列表 `order_by=recommend` 同样改成按下载量排，**不是报错**。
 
 示例（把 token、user_id、端口换成你们环境）：
 
@@ -110,8 +110,9 @@ curl -sS -X POST "http://127.0.0.1:8100/api/v1/recommend" \
 
 | `data.source` | 含义 | 什么时候会出现 |
 |----------------|------|----------------|
-| `user_history` | 用该用户 Redis 里的下载/点赞/收藏当种子，去 Milvus 找相似 Skill，再 MMR 打散 | 这个 `user_id` 在 Redis 里**已有**行为序列，且 Milvus 召回非空 |
-| `topk_install` | **没走个性化**，返回 Redis 里按 `install_count` 排好的快照 | 用户 ID 为空；或该用户还没有行为；或 Milvus 挂了 / 召回空 |
+| `user_history` | 用该用户 Redis 里的下载/点赞/收藏当种子，去 Milvus 找相似 Skill，再 MMR 打散 | 推荐已启用，且这个 `user_id` 在 Redis 里**已有**行为序列，且 Milvus 召回非空 |
+| `topk_install` | **没走个性化**，返回 Redis 里按 `install_count` 排好的快照 | 推荐已启用，但用户 ID 为空；或该用户还没有行为；或 Milvus 挂了 / 召回空 |
+| `install_count` | 推荐关闭，直接按 MySQL 下载量出卡片，`score` 为 0 | `MARKET_RECOMMENDER_ENABLED=false`。这是预期，不是 503 |
 | `items` 为空且 `source=topk_install` | Redis 快照 key 还不存在或已过期没续上 | **还没成功跑过 `redis_sync`**，或 Redis 连错实例 |
 
 新号、从未下载/点赞/收藏的账号，**第一次调用就是 `topk_install`**，这是设计如此。要测 `user_history`：先用该账号下载（或点赞/收藏）几个 Skill → 等 `redis_sync` 跑完（或手动跑）→ 再调推荐。
