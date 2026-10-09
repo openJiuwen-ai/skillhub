@@ -17,7 +17,7 @@
     "@mui/x-date-pickers": "^8.27.2",
     "@noble/hashes": "^1.8.0",
     "@tailwindcss/typography": "^0.5.19",
-    "axios": "^1.15.2",
+    "axios": "^1.20.0",
     "classnames": "^2.5.1",
     "clsx": "^2.1.1",
     "dayjs": "^1.11.20",
