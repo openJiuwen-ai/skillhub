@@ -223,6 +223,7 @@ class BM25Finder:
         )
         excluded = {str(value) for value in exclude_payloads}
         scored: List[tuple[float, int, BM25Document]] = []
+        term_match_rejected_count = 0
         for index, document in enumerate(self._documents):
             if document.payload in excluded:
                 continue
@@ -230,6 +231,7 @@ class BM25Finder:
             if score <= 0.0:
                 continue
             if matched_terms < required_term_matches:
+                term_match_rejected_count += 1
                 continue
             scored.append((score, matched_terms, document))
         scored.sort(key=lambda item: (-item[0], -item[1], item[2].choice_id, item[2].payload))
@@ -263,6 +265,14 @@ class BM25Finder:
                 **decision.to_dict(),
                 "requested_top_k": resolved_top_k,
                 "required_query_term_matches": required_term_matches,
+                "query_terms": unique_query_terms,
+                "term_match_rejected_count": term_match_rejected_count,
+                # Only sample the highest-scoring rejects; BM25 may score the entire corpus.
+                "score_rejected_samples": [
+                    {"choice_id": doc.choice_id, "payload": doc.payload, "score": score}
+                    for score, _, doc in scored[len(truncated):len(truncated) + 10]
+                ],
+                "score_rejected_omitted_count": max(0, len(scored) - len(truncated) - 10),
             },
         )
 

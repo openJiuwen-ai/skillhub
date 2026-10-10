@@ -1,0 +1,17 @@
+# BuildKit: only include skill-runner source + worker entrypoint.
+# Build context is the skillhub repo root (D:\project\tools\skillhub\)。
+*
+*
+
+# skill-runner 源码
+!skill-runner
+skill-runner/.venv
+skill-runner/**/__pycache__
+skill-runner/**/*.pyc
+
+# worker entrypoint used by Dockerfile
+!docker
+docker/*
+!docker/skill-agent-worker
+docker/skill-agent-worker/*
+!docker/skill-agent-worker/entrypoint.sh

@@ -135,6 +135,10 @@ class ResourceType:
     SKILL = "skill"
     SWARMSKILL = "swarmskill"
     PLUGIN = "plugin"
+    AGENT_PLUGIN = "agent-plugin"
+    AGENT_TEMPLATE = "agent-template"
+    AGENT_GROUP = "agent-group"
+    AGENT_MCP = "agent-mcp"
     GIT_SOURCE = "git_source"
     SKILL_BUNDLE = "skill_bundle"
     AUDIT_LOG = "audit_log"
@@ -142,5 +146,13 @@ class ResourceType:
 
 # 指向 market_assets 的资源类型——用于审计列表/详情时 JOIN 补 display_name
 ASSET_LINKED_RESOURCE_TYPES: frozenset[str] = frozenset(
-    {ResourceType.SKILL, ResourceType.SWARMSKILL, ResourceType.PLUGIN}
+    {
+        ResourceType.SKILL,
+        ResourceType.SWARMSKILL,
+        ResourceType.PLUGIN,
+        ResourceType.AGENT_PLUGIN,
+        ResourceType.AGENT_TEMPLATE,
+        ResourceType.AGENT_GROUP,
+        ResourceType.AGENT_MCP,
+    }
 )

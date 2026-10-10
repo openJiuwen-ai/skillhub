@@ -18,7 +18,7 @@ import type { GitSourceItemDto } from '@/api/plugin'
 import { GitHostIcon } from '@/components/Common/GitHostIcon'
 import { formatGitHttpsCloneUrlDisplay } from '@/utils/gitSourceDisplay'
 import { isPublicGitCloneUrl } from '@/utils/gitUrlSafety'
-import { isValidGitSkillsSubpath } from '@/utils/gitSkillsSubpathSafety'
+import { isValidGitSkillsSubpath, normalizeGitSkillsSubpath } from '@/utils/gitSkillsSubpathSafety'
 
 const inputBase =
   'block h-10 w-full rounded-lg border border-[#E2E8F0] bg-white px-3 text-[13.5px] text-[#0F172A] placeholder:text-[#94A3B8] transition-colors hover:border-[#CBD5E1] focus:border-[#1E54F9] focus:outline-none focus:ring-2 focus:ring-[#DBE6FF] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#94A3B8]'
@@ -94,11 +94,16 @@ function formatSyncedAt(
 
 function resolveGitSourceDeleteError(
   e: unknown,
-  t: (k: string) => string,
+  t: (k: string, opts?: Record<string, string>) => string,
 ): string {
   if (e instanceof GitSourceDeleteError) {
-    if (e.reason === 'git_source_has_assets') return t('publish.gitSourceDeleteHasAssets')
     if (e.reason === 'git_source_sync_in_progress') return t('publish.gitSourceDeleteSyncing')
+    if (e.reason === 'git_source_cascade_delete_partial') {
+      return t('publish.gitSourceDeletePartial', {
+        deleted: String(e.deletedSkillCount ?? 0),
+        failed: String(e.failedSkillCount ?? 0),
+      })
+    }
   }
   return t('publish.gitSourceDeleteFailed')
 }
@@ -313,7 +318,7 @@ export function GitSourcesPanel({ userId }: GitSourcesPanelProps) {
       setGitBanner(t('publish.gitRepoUrlBlocked'))
       return
     }
-    const subpath = gitSkillsSubpath.trim()
+    const subpath = normalizeGitSkillsSubpath(gitSkillsSubpath)
     if (subpath && !isValidGitSkillsSubpath(subpath)) {
       setGitBanner(t('publish.gitSkillsSubpathInvalid'))
       return
@@ -329,7 +334,7 @@ export function GitSourcesPanel({ userId }: GitSourcesPanelProps) {
       const accepted = await createGitSourceAndSync({
         repo_url: url,
         ref: gitRef.trim() || 'main',
-        skills_subpath: gitSkillsSubpath.trim() || undefined,
+        skills_subpath: subpath || undefined,
       })
       pollStartedAtRef.current = Date.now()
       setActiveSyncSourceId(accepted.source_id)
@@ -378,6 +383,9 @@ export function GitSourcesPanel({ userId }: GitSourcesPanelProps) {
   const handleGitDelete = async (sourceId: string) => {
     const sid = sourceId.trim()
     if (!sid) return
+    if (!window.confirm(t('publish.gitSourceDeleteConfirm'))) {
+      return
+    }
     setDeletingId(sid)
     setDeleteErrorBySourceId(prev => {
       const next = { ...prev }
@@ -385,14 +393,21 @@ export function GitSourcesPanel({ userId }: GitSourcesPanelProps) {
       return next
     })
     try {
-      await deleteGitSource(sid)
-      setGitBanner(t('publish.gitSourceDeleted'))
+      const result = await deleteGitSource(sid)
+      const n = result?.deleted_skill_count ?? 0
+      setGitBanner(
+        n > 0
+          ? t('publish.gitSourceDeletedWithSkills', { count: n })
+          : t('publish.gitSourceDeleted'),
+      )
       afterSync()
     } catch (e) {
       setDeleteErrorBySourceId(prev => ({
         ...prev,
         [sid]: resolveGitSourceDeleteError(e, t),
       }))
+      // 部分 Skill 可能已删：刷新列表与「我的技能」
+      afterSync()
     } finally {
       setDeletingId(null)
     }

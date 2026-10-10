@@ -159,6 +159,7 @@ class SkillKnowledgeBuilder:
         )
         return self.build(traces)
 
+
     def add(self, trace: TraceRecord) -> None:
         """Record a successful query-skill mapping.
 
@@ -271,7 +272,7 @@ class SkillKnowledgeBuilder:
         skill_ids: list[str],
     ) -> ExperienceItem | None:
         """Check if an experience with similar pattern and same skills already exists.
-        If yes, increment its count. If no, create a new item.
+        If yes, skip (deduplication). If no, create a new item.
         """
         distiller = TraceDistiller(
             self._llm,

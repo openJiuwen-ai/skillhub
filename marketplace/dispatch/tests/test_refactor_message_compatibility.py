@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -335,11 +336,17 @@ class RefactorMessageCompatibilityTest(unittest.TestCase):
                     old_message_bytes = _capture_message_bytes(old_dispatch_root, scenario=scenario)
                     current_message_bytes = _capture_message_bytes(current_dispatch_root, scenario=scenario)
 
-                    messages_equal = current_message_bytes == old_message_bytes
+                    # Cache-busting [req:HEX] prefix injected into user content is intentional
+                    # (see commit 2c17930 for long-query no-return fix) and varies per call,
+                    # so strip it before byte-comparison with the pre-refactor snapshot.
+                    old_normalized = _strip_req_prefix(old_message_bytes)
+                    current_normalized = _strip_req_prefix(current_message_bytes)
+
+                    messages_equal = current_normalized == old_normalized
                     _log_message_compatibility_report(
                         scenario=scenario,
-                        old_message_bytes=old_message_bytes,
-                        current_message_bytes=current_message_bytes,
+                        old_message_bytes=old_normalized,
+                        current_message_bytes=current_normalized,
                         messages_equal=messages_equal,
                     )
 
@@ -347,8 +354,8 @@ class RefactorMessageCompatibilityTest(unittest.TestCase):
                         self.fail(
                             f"messages sent to LLM changed after refactor for scenario={scenario['name']}:\n"
                             + _format_json_bytes_diff(
-                                before=old_message_bytes,
-                                after=current_message_bytes,
+                                before=old_normalized,
+                                after=current_normalized,
                             )
                         )
 
@@ -381,6 +388,19 @@ def _extract_dispatch_snapshot(*, repo_root: Path, revision: str, tmpdir: Path) 
             tar.extractall(tmpdir)
 
     return tmpdir / "marketplace" / "dispatch"
+
+
+_REQ_PREFIX_RE = re.compile(rb"\[req:[0-9a-f]+\]")
+
+
+def _strip_req_prefix(message_bytes: bytes) -> bytes:
+    """Remove the cache-busting [req:HEX] prefix injected into user message content.
+
+    The prefix is a per-call uuid4-derived token added by build_disclosure_prompt_parts
+    (see commit 2c17930). It is intentional in production but defeats byte-equality with
+    the pre-refactor snapshot, so we normalize it out on both sides before comparison.
+    """
+    return _REQ_PREFIX_RE.sub(b"", message_bytes)
 
 
 def _capture_message_bytes(dispatch_root: Path, *, scenario: dict[str, object]) -> bytes:

@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import io
 import zipfile
 from typing import Any, Optional
@@ -18,8 +20,9 @@ from sqlalchemy.orm import Session
 
 from plugins_market.clawhub_compat import mappers
 from plugins_market.clawhub_compat.fingerprint import hash_skill_zip, sanitize_zip_path
+from plugins_market.core.cache import cache_delete, cache_set_nx
 from plugins_market.core.config import settings
-from plugins_market.core.rate_limit import check_clawhub_compat_rate_limit
+from plugins_market.core.rate_limit import check_clawhub_compat_rate_limit, client_ip_from_scope
 from plugins_market.core.database import get_db
 from plugins_market.core.errors import PublishError, http_error_payload
 from plugins_market.core.logging import get_logger
@@ -98,9 +101,9 @@ def _plugin_type_filter() -> Optional[str]:
 
 
 def _client_ip(request: Request) -> str:
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    # 与限流中间件同源（client_ip_from_scope）：nginx 前置时 peer 是代理 IP，
+    # 裸取会让所有用户共享同一个限流桶，集体触发 429。
+    return client_ip_from_scope(request.scope, trust_forwarded=settings.rate_limit_trust_forwarded)
 
 
 def _enforce_clawhub_rate_limit(request: Request) -> None:
@@ -369,6 +372,7 @@ async def clawhub_skill_version_detail(
             storage=storage,
             fetch_user_id=None,
             viewer=ANONYMOUS_VIEWER,
+            counted=False,  # 仅列文件元数据（拉 zip 算哈希），不是真实下载，不计量
         )
         zip_bytes = await asyncio.to_thread(_sync_fetch_bytes, dl.download_url)
         file_rows, _fp = hash_skill_zip(zip_bytes)
@@ -406,6 +410,7 @@ async def clawhub_skill_file(
             storage=context.storage,
             fetch_user_id=None,
             viewer=ANONYMOUS_VIEWER,
+            counted=False,  # 检查文件内容（IDE 查看源码用），不是真实下载，不计量
         )
         zip_bytes = await asyncio.to_thread(_sync_fetch_bytes, dl.download_url)
     except PublishError as e:
@@ -451,11 +456,23 @@ async def clawhub_skill_file(
 
 @router.get("/download")
 async def clawhub_download(
+    request: Request,
     slug: str = Query(..., min_length=1),
     version: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     storage: Any = Depends(get_storage_client),
 ):
+    # /api/v1/download* 在全局限流中间件里是 exempt，本端点是最重的流式下载路径，
+    # 需与同级 clawhub 端点一样走处理器级限流；限流拒绝发生在计量闸门之前，不消耗名额。
+    _enforce_clawhub_rate_limit(request)
+    # 与主站下载同口径的计量去重闸门：clawhub 兼容端点无登录态，一律匿名按 IP+UA 指纹，
+    # 同资产同天只计一次。失败（404 等）时释放闸门，避免失败的首日下载消耗当日名额。
+    _ip = client_ip_from_scope(request.scope, trust_forwarded=settings.rate_limit_trust_forwarded)
+    _ua = request.headers.get("user-agent", "")
+    source_fp = "ip:" + hashlib.sha256(f"{_ip}|{_ua}".encode()).hexdigest()[:16]
+    utc_today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    gate_key = f"dlcnt:{slug}:{source_fp}:{utc_today}"
+    counted_today = cache_set_nx(gate_key, 86400 * 8)
     try:
         info = get_download_info(
             asset_id=slug,
@@ -464,8 +481,11 @@ async def clawhub_download(
             storage=storage,
             fetch_user_id=None,
             viewer=ANONYMOUS_VIEWER,
+            counted=counted_today,
         )
     except PublishError as e:
+        if counted_today:
+            cache_delete(gate_key)
         raise _http_exception(
             e.status_code,
             _safe_error_detail("artifact lookup failed", e.detail),
@@ -532,6 +552,7 @@ async def clawhub_resolve(
                 storage=storage,
                 fetch_user_id=None,
                 viewer=ANONYMOUS_VIEWER,
+                counted=False,  # 逐版本拉 zip 算指纹做匹配，不是真实下载，不计量
             )
             zip_bytes = await asyncio.to_thread(_sync_fetch_bytes, dl.download_url)
             _files, fp = hash_skill_zip(zip_bytes)

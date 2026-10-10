@@ -30,6 +30,10 @@ export const API_ENDPOINTS = {
   },
   PLUGINS: {
     LIST: '/plugins',
+    /** GET /api/v1/plugins/tags - 标签筛选选项（热门自动推荐 + 运营配置优先） */
+    TAGS: '/plugins/tags',
+    /** GET /api/v1/plugins/category-totals - 侧栏分类计数聚合（一条 GROUP BY 替代逐分类 page_size=1） */
+    CATEGORY_TOTALS: '/plugins/category-totals',
     MY_STARS: '/plugins/my/stars',
     MY_LIKES: '/plugins/my/likes',
     interactionsBatch: '/plugins/interactions/batch',
@@ -53,5 +57,42 @@ export const API_ENDPOINTS = {
   ARTIFACTS: {
     /** GET /api/v1/artifacts/{asset_id} */
     download: (assetId: string) => `/artifacts/${encodeURIComponent(assetId)}`,
+  },
+  SITE: {
+    CONFIG: '/site/config',
+  },
+  PLAYGROUND: {
+    sessions: '/playground/sessions',
+    messages: (sid: string) => `/playground/sessions/${encodeURIComponent(sid)}/messages`,
+    stream: (sid: string) => `/playground/sessions/${encodeURIComponent(sid)}/stream`,
+    end: (sid: string) => `/playground/sessions/${encodeURIComponent(sid)}`,
+    beacon: (sid: string) => `/playground/sessions/${encodeURIComponent(sid)}/beacon`,
+    files: (sid: string) => `/playground/sessions/${encodeURIComponent(sid)}/files`,
+    quota: '/playground/quota',
+  },
+  GROUPS: {
+    ROOT: '/groups',
+    MY: '/groups/my',
+    MY_SKILLS: '/groups/my/skills',
+    DISCOVER: '/groups/discover',
+    GRANTABLE_SKILLS: '/groups/grantable-skills',
+    detail: (groupId: string) => `/groups/${encodeURIComponent(groupId)}`,
+    members: (groupId: string) => `/groups/${encodeURIComponent(groupId)}/members`,
+    member: (groupId: string, userId: string) =>
+      `/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
+    joinRequests: (groupId: string) => `/groups/${encodeURIComponent(groupId)}/join-requests`,
+    joinRequestDecision: (groupId: string, requestId: string) =>
+      `/groups/${encodeURIComponent(groupId)}/join-requests/${encodeURIComponent(requestId)}/decision`,
+    grants: (groupId: string) => `/groups/${encodeURIComponent(groupId)}/grants`,
+    grant: (groupId: string, assetId: string) =>
+      `/groups/${encodeURIComponent(groupId)}/grants/${encodeURIComponent(assetId)}`,
+    grantDecision: (groupId: string, assetId: string) =>
+      `/groups/${encodeURIComponent(groupId)}/grants/${encodeURIComponent(assetId)}/decision`,
+  },
+  GITHUB: {
+    /** POST /api/v1/github/watch - 批量标星选中仓库 */
+    WATCH: '/github/watch',
+    /** GET /api/v1/github/watch/status - 查询当前用户是否已标星 */
+    WATCH_STATUS: '/github/watch/status',
   },
 } as const

@@ -208,21 +208,27 @@ export default function MyPluginDetailPage() {
 
   const notFound = !summaryLoading && !summaryItem && !summaryErrMsg
 
+  const invalidateSkillCaches = async (assetId: string) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['my-published-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['my-group-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['plugins'] }),
+      queryClient.invalidateQueries({ queryKey: ['my-plugin-summary'] }),
+      queryClient.invalidateQueries({ queryKey: ['group'] }),
+      queryClient.invalidateQueries({ queryKey: ['group-grants'] }),
+      queryClient.invalidateQueries({ queryKey: ['group-grantable-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['group-grant-states'] }),
+      queryClient.invalidateQueries({ queryKey: ['asset-detail-raw', assetId] }),
+    ])
+  }
+
   const handleDeleteAll = async () => {
     if (!assetId || !user?.id) return
     setDeleting(true)
     try {
       await deletePluginAllVersions(assetId)
       setDeleteAllOpen(false)
-      // 清理当前插件的 summary/version 详情缓存，并让列表类缓存失效：
-      // - my-published-skills: 个人中心列表
-      // - plugins:             公开市场列表
-      // - my-plugin-summary:   详情页 summary
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['my-published-skills'] }),
-        queryClient.invalidateQueries({ queryKey: ['plugins'] }),
-        queryClient.invalidateQueries({ queryKey: ['my-plugin-summary'] }),
-      ])
+      await invalidateSkillCaches(assetId)
       queryClient.removeQueries({ queryKey: ['my-plugin-version', assetId] })
       navigate('/profile', { replace: true })
     } catch (e) {
@@ -246,12 +252,7 @@ export default function MyPluginDetailPage() {
 
       const rest = allVersions.filter(v => v !== deleted)
       if (rest.length === 0) {
-        // 最后一个版本被删 → 插件整体消失：让个人中心列表 / 公开市场 / summary 缓存全部失效。
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['my-published-skills'] }),
-          queryClient.invalidateQueries({ queryKey: ['plugins'] }),
-          queryClient.invalidateQueries({ queryKey: ['my-plugin-summary'] }),
-        ])
+        await invalidateSkillCaches(assetId)
         navigate('/profile', { replace: true })
         return
       }
@@ -266,11 +267,7 @@ export default function MyPluginDetailPage() {
         refetchSummary(),
         queryClient.refetchQueries({ queryKey: ['my-plugin-version', assetId, nextSel], exact: true }),
       ])
-      // latest_version / all_versions 在单版本删除后也会变，顺带刷新列表缓存。
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['my-published-skills'] }),
-        queryClient.invalidateQueries({ queryKey: ['plugins'] }),
-      ])
+      await invalidateSkillCaches(assetId)
 
       if (!sumResult.data?.data?.items?.[0]) {
         navigate('/profile', { replace: true })

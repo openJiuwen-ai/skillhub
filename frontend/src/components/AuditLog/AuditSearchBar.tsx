@@ -13,7 +13,7 @@ export interface DateRange {
   date_to_ms: number
 }
 
-/** Skill 类型筛选值：可能映射到后端 asset_plugin_type 或 resource_type */
+/** 市场资产类型筛选值：可能映射到后端 asset_plugin_type 或 resource_type */
 export type SkillTypeFilterValue =
   | { kind: 'all' }
   | { kind: 'asset_plugin_type'; value: string; label: string }
@@ -23,7 +23,11 @@ export const SKILL_TYPE_OPTIONS: SkillTypeFilterValue[] = [
   { kind: 'all' },
   { kind: 'asset_plugin_type', value: 'skill', label: 'Skill' },
   { kind: 'asset_plugin_type', value: 'swarmskill', label: 'SwarmSkill' },
-  { kind: 'resource_type', value: 'plugin', label: '插件' },
+  { kind: 'resource_type', value: 'plugin', label: '普通插件' },
+  { kind: 'resource_type', value: 'agent-plugin', label: '插件' },
+  { kind: 'resource_type', value: 'agent-mcp', label: '连接器' },
+  { kind: 'resource_type', value: 'agent-template', label: '专家' },
+  { kind: 'resource_type', value: 'agent-group', label: '专家团' },
   { kind: 'resource_type', value: 'git_source', label: 'Git 源' },
   { kind: 'resource_type', value: 'skill_bundle', label: '批量包' },
 ]
@@ -37,9 +41,9 @@ export const ACTION_OPTIONS = [
   { value: 'GIT_SYNC', label: 'Git 同步' },
   { value: 'GIT_SOURCE_DELETE', label: '删除 Git 源' },
   { value: 'IMPORT', label: '批量导入' },
-  { value: 'AUTO_REVIEW_PASS', label: '系统审查通过' },
-  { value: 'AUTO_REVIEW_FAIL', label: '系统审查未通过' },
-  { value: 'AUTO_REVIEW_SYS_FAIL', label: '系统审查异常' },
+  { value: 'AUTO_REVIEW_PASS', label: '审查通过' },
+  { value: 'AUTO_REVIEW_FAIL', label: '审查未通过' },
+  { value: 'AUTO_REVIEW_SYS_FAIL', label: '审查异常' },
   { value: 'PENDING_MOD_SET', label: '转入待审' },
   { value: 'EXPORT', label: '导出' },
 ] as const

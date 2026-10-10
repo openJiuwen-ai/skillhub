@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你对 SkillHub 的关注。欢迎通过 **Issue** 与 **Pull Request** 参与。
+感谢你对 openJiuwen Agentic Hub 的关注。欢迎通过 **Issue** 与 **Pull Request** 参与。
 
 ## 参与方式
 
@@ -16,7 +16,7 @@
 
 ## 本地校验（按需）
 
-- **CLI**：在 `cli/openjiuwen_plugin` 或 `cli/jiuwen_teamskills` 下可运行 `pytest`（详见 [`cli/README.md`](cli/README.md)）。
+- **CLI**：在 `cli/openjiuwen_agentichub` 下可运行 `pytest`（详见 [`cli/README.md`](cli/README.md)）。
 - **marketplace / frontend**：以各目录现有脚本与团队 CI 为准；提交前请至少保证改动路径可启动或自测通过。
 
 ## Pull Request

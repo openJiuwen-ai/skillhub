@@ -49,4 +49,5 @@ def assert_git_skills_subpath(skills_subpath: str | None) -> str | None:
             message="skills_subpath 必须位于克隆目录内",
         ) from e
 
-    return raw
+    # 归一化后再参与 dedup：统一正斜杠、去掉首尾斜杠，避免 skills/ 与 skills 被当成不同源
+    return rel

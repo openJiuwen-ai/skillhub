@@ -1,0 +1,46 @@
+# SkillHub skill-runner control-plane image.
+#
+# This image runs only the FastAPI control plane that creates/forwards to
+# worker Pods. It intentionally does NOT inherit from skill-agent-worker and
+# must not run user tools directly.
+
+FROM python:3.11-slim-bookworm
+
+# 依赖镜像源不内置默认值，构建时显式指定：
+#   --build-arg PIP_INDEX_URL=... --build-arg UV_INDEX_URL=...
+ARG PIP_INDEX_URL
+ARG UV_INDEX_URL
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/usr/local \
+    UV_HTTP_TIMEOUT=180 \
+    UV_INDEX_URL=${UV_INDEX_URL} \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN test -n "${PIP_INDEX_URL}" && test -n "${UV_INDEX_URL}" || \
+    (echo "ERROR: 请通过 --build-arg PIP_INDEX_URL=... UV_INDEX_URL=... 指定 PyPI 镜像源" && exit 1)
+
+# Install uv via pip（镜像源由构建参数 PIP_INDEX_URL 提供）
+RUN pip install --no-cache-dir uv==0.8.15
+
+# Copy only the runner package. The repository
+# .dockerignore excludes the local .venv, caches, and pyc files.
+COPY skill-runner /app/skill_runner
+
+WORKDIR /app/skill_runner
+# 非锁定构建：uv.lock 不入库，依赖按 pyproject.toml 现场解析（skill-runner 为
+# 可选组件，权衡见安全整改 PR 讨论）；如需可复现构建，提交 uv.lock 后加回 --frozen。
+RUN rm -rf .venv __pycache__ */__pycache__ \
+    && uv sync --no-dev --no-cache
+
+WORKDIR /app
+EXPOSE 8900
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=5 \
+    CMD python -c "import urllib.request as r; r.urlopen('http://127.0.0.1:8900/health', timeout=2).read()"
+
+CMD ["python", "-m", "uvicorn", "skill_runner.app:app", "--host", "127.0.0.1", "--port", "8900"]

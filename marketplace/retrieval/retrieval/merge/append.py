@@ -318,13 +318,22 @@ def _fuse_hybrid_candidate_records(
     record_sets: Sequence[Sequence[Dict[str, object]]],
     hybrid_config: HybridFusionConfig | None,
 ) -> List[Dict[str, object]]:
-    valid_record_sets = [list(records) for records in record_sets if records]
+    config = hybrid_config or HybridFusionConfig()
+    # Zero-weight sources must not contribute candidates, including the single-source shortcut.
+    weighted_record_sets = [
+        [
+            record
+            for record in records
+            if _hybrid_weight_for_source(str(record.get("source") or "unknown"), config) > 0.0
+        ]
+        for records in record_sets
+    ]
+    valid_record_sets = [records for records in weighted_record_sets if records]
     if not valid_record_sets:
         return []
     if len(valid_record_sets) == 1:
         return _merge_candidate_records(top_k=top_k, primary_records=valid_record_sets[0], secondary_record_sets=[])
 
-    config = hybrid_config or HybridFusionConfig()
     method = str(config.method or HybridFusionMethod.RRF.value).strip().lower()
     if method == HybridFusionMethod.RELATIVE_SCORE.value:
         return _relative_score_fusion(top_k=top_k, record_sets=valid_record_sets, config=config)

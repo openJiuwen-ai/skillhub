@@ -8,12 +8,10 @@ from typing import Any
 
 import httpx
 
-from plugins_market.core.config import settings
+from plugins_market.core.config import DEFAULT_AUTH_USER_API_URL, settings
 from plugins_market.core.logging import get_logger
 
 logger = get_logger(__name__)
-
-DEFAULT_AUTH_USER_API_URL = "https://gitcode.com/api/v5/user"
 
 
 async def fetch_gitcode_profile(access_token: str) -> dict[str, Any] | None:

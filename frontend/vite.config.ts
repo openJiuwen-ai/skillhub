@@ -52,6 +52,17 @@ export default defineConfig(({ mode }) => {
     }
   }
 
+  // 自定义 Host（如 /etc/hosts 配的 skillhub.local）放行：Vite 5+ 默认拦截未知
+  // Host 头以防 DNS rebinding。可用 VITE_ALLOWED_HOSTS=a.local,b.local 追加，或 'all' 全放行。
+  // dev server 与 preview 共用同一份白名单（preview 不继承 server.allowedHosts）。
+  const allowedHosts = ((): true | string[] => {
+    const raw = (env.VITE_ALLOWED_HOSTS || '').trim()
+    if (raw === 'all' || raw === '*') return true
+    const defaults = ['localhost', '127.0.0.1', 'skillhub.local']
+    const extra = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []
+    return Array.from(new Set([...defaults, ...extra]))
+  })()
+
   return {
     envDir,
     base: publicBase === '/' ? '/' : publicBase,
@@ -64,6 +75,15 @@ export default defineConfig(({ mode }) => {
     server: {
       port: parseInt(env.FRONTEND_PORT || '9002', 10),
       host: env.HOST || '0.0.0.0',
+      allowedHosts,
+      proxy,
+    },
+    // `vite preview`（预览生产构建）有独立的 allowedHosts，不继承 server 的，
+    // 自定义 Host 在 preview 下同样会被拦，必须单独放行。
+    preview: {
+      port: parseInt(env.FRONTEND_PREVIEW_PORT || env.FRONTEND_PORT || '9002', 10),
+      host: env.HOST || '0.0.0.0',
+      allowedHosts,
       proxy,
     },
   }

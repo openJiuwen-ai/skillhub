@@ -13,8 +13,8 @@ Current runtime code lives only in these canonical packages:
 - `training/`: dataset generation, training, and offline evaluation
 - `models/`: shared data contracts
 - `shared/`: shared infrastructure utilities
-- root [__init__.py](/home/doujzc/codes/Demo/__init__.py): SDK entrypoints for external imports
-- [demo/config.py](/home/doujzc/codes/Demo/demo/config.py): demo-only runtime configuration
+- root [__init__.py](./__init__.py): SDK entrypoints for external imports
+- `demo/config.py`: demo-only runtime configuration
 
 Repository support directories remain intentionally separate from the SDK:
 

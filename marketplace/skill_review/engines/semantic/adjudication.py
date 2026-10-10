@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from skill_review.domain.types import ReviewFindingDraft
+from skill_review.domain.types import Confidence, GateRecommendation, ReviewFindingDraft, Severity
 from skill_review.engines.semantic.candidate_groups import (
     SemanticCandidateGroupItem,
     build_semantic_candidate_review_alias_map,
@@ -105,31 +105,92 @@ def read_semantic_candidate_reviews(output: dict[str, Any] | None) -> list[dict[
 
 
 def should_suppress_finding(finding: ReviewFindingDraft, candidate_review: dict[str, Any]) -> bool:
-    return finding.source_type == "rule" and candidate_review.get("disposition") == "benign_example"
+    return (
+        finding.source_type == "rule"
+        and finding.metadata.get("allow_semantic_downgrade") is not False
+        and candidate_review.get("disposition") == "benign_example"
+    )
 
 
 def apply_semantic_candidate_review(
     finding: ReviewFindingDraft,
     candidate_review: dict[str, Any],
 ) -> ReviewFindingDraft:
+    final_severity = resolve_semantic_review_severity(finding, candidate_review)
+    final_gate = resolve_semantic_review_gate(finding, candidate_review)
     return replace(
         finding,
-        severity=candidate_review.get("final_severity", finding.severity),
-        confidence=candidate_review.get("confidence", finding.confidence),
-        gate_recommendation=candidate_review.get("final_gate_recommendation", finding.gate_recommendation),
-        description=build_reviewed_description(finding, candidate_review),
-        recommendation=build_reviewed_recommendation(finding, candidate_review),
+        severity=final_severity,
+        confidence=resolve_semantic_review_confidence(finding, candidate_review),
+        gate_recommendation=final_gate,
+        description=build_reviewed_description(finding, candidate_review, final_severity, final_gate),
+        recommendation=build_reviewed_recommendation(finding, candidate_review, final_severity, final_gate),
         evidence=[*finding.evidence, build_semantic_review_evidence(candidate_review)],
     )
 
 
-def build_reviewed_description(finding: ReviewFindingDraft, candidate_review: dict[str, Any]) -> str:
+SEVERITY_RANK: dict[str, int] = {"info": 0, "low": 1, "medium": 2, "high": 3}
+GATE_RANK: dict[str, int] = {"info": 0, "attention": 1, "block": 2}
+CONFIDENCE_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def resolve_semantic_review_severity(finding: ReviewFindingDraft, candidate_review: dict[str, Any]) -> Severity:
+    candidate = candidate_review.get("final_severity")
+    if candidate not in SEVERITY_RANK:
+        return finding.severity
+    if (
+        finding.metadata.get("allow_semantic_downgrade") is False
+        and SEVERITY_RANK[candidate] < SEVERITY_RANK[finding.severity]
+    ):
+        return finding.severity
+    return candidate
+
+
+def resolve_semantic_review_gate(finding: ReviewFindingDraft, candidate_review: dict[str, Any]) -> GateRecommendation:
+    candidate = candidate_review.get("final_gate_recommendation")
+    if candidate not in GATE_RANK:
+        return finding.gate_recommendation
+    if (
+        finding.metadata.get("allow_semantic_downgrade") is False
+        and GATE_RANK[candidate] < GATE_RANK[finding.gate_recommendation]
+    ):
+        return finding.gate_recommendation
+    return candidate
+
+
+def resolve_semantic_review_confidence(finding: ReviewFindingDraft, candidate_review: dict[str, Any]) -> Confidence:
+    candidate = candidate_review.get("confidence")
+    if candidate not in CONFIDENCE_RANK:
+        return finding.confidence
+    if (
+        finding.metadata.get("allow_semantic_downgrade") is False
+        and CONFIDENCE_RANK[candidate] < CONFIDENCE_RANK[finding.confidence]
+    ):
+        return finding.confidence
+    return candidate
+
+
+def build_reviewed_description(
+    finding: ReviewFindingDraft,
+    candidate_review: dict[str, Any],
+    final_severity: Severity,
+    final_gate: GateRecommendation,
+) -> str:
+    if final_severity == finding.severity and final_gate == finding.gate_recommendation:
+        return finding.description
     if candidate_review.get("disposition") == "confirmed_risk":
         return finding.description
     return str(candidate_review.get("rationale") or "").strip() or finding.description
 
 
-def build_reviewed_recommendation(finding: ReviewFindingDraft, candidate_review: dict[str, Any]) -> str:
+def build_reviewed_recommendation(
+    finding: ReviewFindingDraft,
+    candidate_review: dict[str, Any],
+    final_severity: Severity,
+    final_gate: GateRecommendation,
+) -> str:
+    if final_severity == finding.severity and final_gate == finding.gate_recommendation:
+        return finding.recommendation
     disposition = candidate_review.get("disposition")
     if disposition == "confirmed_risk":
         return finding.recommendation

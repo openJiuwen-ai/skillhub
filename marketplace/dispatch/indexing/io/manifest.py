@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Dict, Sequence
 
-from indexing.catalog.records import CatalogRecord
+from indexing.models import CatalogRecord
 from indexing.io.items_jsonl import is_passthrough_item_uri
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -294,6 +295,7 @@ def build_disclosure_prompt_parts(
         suffix_text = query_text
     else:
         suffix_text = f"{query_text}\n</USER_REQUEST>".rstrip()
+    suffix_text = f"[req:{uuid.uuid4().hex[:16]}]{suffix_text}"
     user_content = f"{user_prefix}{suffix_text}".rstrip()
     prefix_messages = (
         {"role": "system", "content": system_prompt},

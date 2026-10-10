@@ -21,6 +21,7 @@ INDEXING_YAML = "indexing.yaml"
 RETRIEVAL_PROTOCOLS_YAML = "retrieval_protocols.yaml"
 RETRIEVAL_DISCLOSURE_YAML = "retrieval_disclosure.yaml"
 EXPERIENCE_YAML = "experience.yaml"
+AGENTIC_RETRIEVAL_YAML = "agentic_retrieval.yaml"
 
 
 def get_prompt_dir() -> Path:

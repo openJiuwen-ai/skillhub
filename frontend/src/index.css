@@ -32,8 +32,166 @@ body,
   animation: noticeSlideDown 2000ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
 }
 
+/* 右下角通知卡片：从右下方滑入 */
+@keyframes oj-slide-in-left {
+  0% {
+    opacity: 0;
+    transform: translate(16px, 8px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+/* 弹窗在浮窗右侧（浮窗在左侧时），从左向右滑入 */
+@keyframes oj-slide-in-right {
+  0% {
+    opacity: 0;
+    transform: translate(-16px, 8px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+.oj-notify-card {
+  animation: oj-slide-in-left 0.25s ease-out both;
+}
+.oj-notify-card.oj-notify-right {
+  animation: oj-slide-in-right 0.25s ease-out both;
+}
+.oj-notify-card.oj-notify-left {
+  animation: oj-slide-in-left 0.25s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-notice-in {
     animation: none;
   }
+  .oj-notify-card {
+    animation: none !important;
+  }
 }
+
+/* ── 右侧浮窗（照搬 openjiuwen.com 浮窗 hover 规则）────────────── */
+/* 图标/文字默认色 #333（照搬 openjiuwen buttonIcon/buttonLabel） */
+.oj-btn-icon,
+.oj-btn-label {
+  color: #333333;
+}
+
+/* 标星图标默认空心；已标星态实心金色（fill 由 CSS 控制，避免内联 fill 覆盖 hover 预览） */
+.oj-star-icon {
+  fill: none;
+}
+
+/* 按钮默认背景（浅灰底，照搬 openjiuwen codeButton/topButton） */
+.oj-float-btn {
+  background: rgba(248, 249, 252, 0.8);
+}
+
+/* 普通按钮 hover：浅蓝底 + 蓝色图标文字（代码/顶部/未标星标星 统一） */
+.oj-float-btn:hover {
+  background: rgba(10, 89, 247, 0.12);
+}
+.oj-float-btn:hover .oj-btn-icon,
+.oj-float-btn:hover .oj-btn-label {
+  color: rgb(10, 89, 247);
+}
+
+/* 未标星态 hover：星星变实心金色（预览标星效果），只影响标星按钮，不影响代码/顶部 */
+.oj-float-btn:hover .oj-star-icon:not(.oj-starred) {
+  fill: #fbbf24;
+  color: #f59e0b;
+}
+.oj-float-btn:hover .oj-star-label:not(.oj-starred-label) {
+  color: #d97706;
+}
+
+/* 已标星态：图标实心金色 #fbbf24/#f59e0b，文字 #d97706；hover 时保持金色（不随普通按钮变蓝） */
+.oj-star-icon.oj-starred {
+  fill: #fbbf24;
+  color: #f59e0b;
+}
+.oj-starred-label {
+  color: #d97706;
+}
+.oj-float-btn:hover .oj-star-icon.oj-starred,
+.oj-float-btn:hover .oj-starred-label {
+  fill: #fbbf24;
+  color: #f59e0b;
+}
+
+/* ── 拖拽光标（照搬 openjiuwen .contactContainerDragging 模式）────────────── */
+/* 拖拽时：容器及所有子元素强制 grabbing 光标，覆盖子元素自身的 cursor:pointer */
+.oj-dragging,
+.oj-dragging * {
+  cursor: grabbing !important;
+}
+
+/* 按钮组默认光标：grab（照搬 openjiuwen .buttonGroup { cursor: grab }） */
+.oj-button-group {
+  cursor: grab;
+}
+
+/* ── 收起按钮左右镜像（照搬 openjiuwen collapseButtonRight/Left 模式）────── */
+/* side=right: 收起按钮在按钮组左侧 */
+.oj-collapse-right {
+  border-radius: 6px 0 0 6px;
+  margin-right: 4px;
+  right: 100%;
+  left: auto;
+}
+.oj-collapse-right.oj-collapse-collapsed {
+  border-radius: 10px 0 0 10px;
+  margin-right: 0 !important;
+  right: 0 !important;
+  left: auto !important;
+}
+
+/* side=left: 收起按钮在按钮组右侧 */
+.oj-collapse-left {
+  border-radius: 0 6px 6px 0;
+  margin-left: 4px;
+  left: 100%;
+  right: auto;
+}
+.oj-collapse-left.oj-collapse-collapsed {
+  border-radius: 0 10px 10px 0;
+  margin-left: 0 !important;
+  left: 0 !important;
+  right: auto !important;
+}
+
+/* ── 拖拽吸附提示（照搬 openjiuwen .dragHint 模式）────────────────────── */
+/* 提示出现在浮窗上方，绝对定位相对于容器 */
+@keyframes oj-fade-in-down {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+.oj-drag-hint {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+  backdrop-filter: blur(8px);
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  animation: oj-fade-in-down 0.2s ease both;
+}
+

@@ -1,68 +1,37 @@
-# pylint: disable=line-too-long,complicate-comprehension
+# pylint: disable=line-too-long
 from __future__ import annotations
 
-import json
 import logging
-import shutil
 import tempfile
-import zipfile
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Sequence
 
-from indexing.models import (
-    CATALOG_FILENAME,
-    TREE_HTML_FILENAME,
-    TREE_INDEX_FILENAME,
-)
-from indexing.io.items_jsonl import (
-    download_http_object_to_path,
-    is_http_uri,
-    is_passthrough_item_uri,
-    load_items_jsonl_text,
-    parse_jsonl_scanned_items,
-)
-from indexing.workflows.tree_ops import (
-    apply_incremental_tree_maintenance,
-    align_leaf_nodes_with_catalog,
-    build_catalog_records_from_existing,
-    enrich_branch_descriptions,
-    merge_added_skills_into_tree_with_report,
-    prune_deleted_skills_from_tree,
-    slug_term,
-    tree_nodes_to_tree_dict,
-    unique_child_cid,
-)
-from indexing.tree.visualizer import generate_html as generate_tree_html
-
-from indexing.io import load_catalog_records, load_manifest, load_tree_preset, normalize_item_paths, write_manifest, write_tree_preset
-from indexing.scanners import create_scanner, get_scanner_class, normalize_item_type
-from indexing.tree import DynamicTreeConfig, TreeBuildConfig, TreeManagerConfig
+from indexing.io import load_manifest, normalize_item_paths
 from indexing.tree.builder import build_tree
-from indexing.tree.prompts import SUBTREE_REBUILD_PROMPT
-from indexing.tree.schema import normalize_root_categories
-from shared.profiling import StageTimer
-from shared.storage import download_s3_object_to_path, is_s3_uri, materialize_s3_dir, upload_local_dir_to_s3
-
-from .artifacts import (
-    BuildConfig,
-    ResolvedBuildConfig,
-    build_catalog_records_from_nodes,
-    build_fallback_tree_nodes,
-    can_build_tree_with_llm,
-    resolve_build_config,
-    write_catalog,
+from indexing.workflows.full_build import _IndexBuildWorkflow
+from indexing.workflows.incremental_build import (
+    _IncrementalIndexBuildWorkflow,
+    branch_and_ancestors,
+    parent_branches_for_workers,
 )
+from indexing.workflows.item_sources import (
+    ResolvedItemPath,
+    download_remote_zip,
+    extract_item_zip,
+    load_pre_scanned_items,
+    materialize_existing_index_dir,
+    normalize_manifest_item_path,
+    resolve_item_paths_or_error,
+    resolve_materialized_item_paths,
+    safe_extract_zip,
+    validate_item_dir,
+)
+from indexing.workflows.subtree_rebuild import extract_json_object, is_descendant_cid
+from shared.profiling import StageTimer
+from shared.storage import download_s3_object_to_path, is_s3_uri, upload_local_dir_to_s3
+
+from .artifacts import BuildConfig, resolve_build_config
 
 LOGGER = logging.getLogger("index_builder")
-MAX_LOGGED_HEALTH_ISSUES = 5
-
-
-@dataclass(frozen=True)
-class ResolvedItemPath:
-    source_path: str
-    source_type: str
-    materialized_dir: Path
 
 
 class IndexBuilder:
@@ -73,7 +42,7 @@ class IndexBuilder:
         *,
         item_type: str = "skill",
         config: BuildConfig | None = None,
-        runtime_config: BuildConfig | None = None,  # 向后兼容：现在也接受BuildConfig
+        runtime_config: BuildConfig | None = None,
         item_jsonl_path: str | None = None,
     ) -> str | Path:
         timer = StageTimer("IndexBuilder.build", logger=LOGGER)
@@ -81,40 +50,35 @@ class IndexBuilder:
             with timer.phase("resolve_inputs"):
                 if output_dir is None:
                     raise ValueError("IndexBuilder.build: output_dir is required")
-                normalized_item_paths = _resolve_item_paths_or_error(
+                normalized_item_paths = resolve_item_paths_or_error(
                     item_paths=item_paths,
                     item_jsonl_path=item_jsonl_path,
                     operation="build",
                 )
                 resolved_config = resolve_build_config(config=config, runtime_config=runtime_config)
-                normalized_item_type = normalize_item_type(item_type)
-                pre_scanned_skills, manifest_item_paths = _load_pre_scanned_items(
+                pre_scanned_skills, manifest_item_paths = load_pre_scanned_items(
                     item_jsonl_path=item_jsonl_path,
                     default_paths=normalized_item_paths,
                 )
                 output_value = str(output_dir).strip()
-            if is_s3_uri(output_value):
-                with tempfile.TemporaryDirectory(prefix="retriever-index-s3-output-") as tmpdir:
-                    local_output_dir = Path(tmpdir) / "index"
-                    _IndexBuildWorkflow(
-                        item_paths=manifest_item_paths,
-                        output_dir=local_output_dir,
-                        resolved_config=resolved_config,
-                        item_type=normalized_item_type,
-                        pre_scanned_skills=pre_scanned_skills,
-                        manifest_item_paths=manifest_item_paths,
-                    ).build()
-                    with timer.phase("upload_s3_output"):
-                        upload_local_dir_to_s3(local_output_dir, output_value)
-                return output_value.rstrip("/")
-            return _IndexBuildWorkflow(
-                item_paths=manifest_item_paths,
-                output_dir=Path(output_dir),
-                resolved_config=resolved_config,
-                item_type=normalized_item_type,
-                pre_scanned_skills=pre_scanned_skills,
-                manifest_item_paths=manifest_item_paths,
-            ).build()
+
+            def workflow_factory(local_output_dir: Path):
+                return _IndexBuildWorkflow(
+                    item_paths=manifest_item_paths,
+                    output_dir=local_output_dir,
+                    resolved_config=resolved_config,
+                    item_type=item_type,
+                    pre_scanned_skills=pre_scanned_skills,
+                    manifest_item_paths=manifest_item_paths,
+                )
+
+            return _build_and_maybe_upload_s3(
+                output_value=output_value,
+                local_output_dir=Path(output_dir),
+                temp_prefix="retriever-index-s3-output-",
+                workflow_factory=workflow_factory,
+                timer=timer,
+            )
         finally:
             timer.finish()
 
@@ -126,7 +90,7 @@ class IndexBuilder:
         *,
         item_type: str = "skill",
         config: BuildConfig | None = None,
-        runtime_config: BuildConfig | None = None,  # 向后兼容：现在也接受BuildConfig
+        runtime_config: BuildConfig | None = None,
         item_jsonl_path: str | None = None,
     ) -> str | Path:
         timer = StageTimer("IndexBuilder.add", logger=LOGGER)
@@ -136,50 +100,42 @@ class IndexBuilder:
                     raise ValueError("IndexBuilder.add: base_index_dir is required")
                 if output_dir is None:
                     raise ValueError("IndexBuilder.add: output_dir is required")
-                base_dir = _materialize_existing_index_dir(base_index_dir, cache_namespace="retriever-index-add-cache")
+                base_dir = materialize_existing_index_dir(base_index_dir, cache_namespace="retriever-index-add-cache")
                 manifest = load_manifest(base_dir)
                 existing = normalize_item_paths(manifest.get("item_paths") or ())
-                normalized_item_paths = _resolve_item_paths_or_error(
+                normalized_item_paths = resolve_item_paths_or_error(
                     item_paths=item_paths,
                     item_jsonl_path=item_jsonl_path,
                     operation="add",
                 )
-                added_scanned_skills, added_paths = _load_pre_scanned_items(
+                added_scanned_skills, added_paths = load_pre_scanned_items(
                     item_jsonl_path=item_jsonl_path,
                     default_paths=normalized_item_paths,
                 )
                 combined = normalize_item_paths([*existing, *added_paths])
                 resolved_config = resolve_build_config(config=config, runtime_config=runtime_config)
-                normalized_item_type = normalize_item_type(item_type)
                 output_value = str(output_dir).strip()
-            if is_s3_uri(output_value):
-                with tempfile.TemporaryDirectory(prefix="retriever-index-add-s3-output-") as tmpdir:
-                    local_output_dir = Path(tmpdir) / "index"
-                    _IncrementalIndexBuildWorkflow(
-                        item_paths=combined,
-                        output_dir=local_output_dir,
-                        resolved_config=resolved_config,
-                        base_index_dir=base_dir,
-                        added_paths=added_paths,
-                        removed_paths=[],
-                        item_type=normalized_item_type,
-                        added_scanned_skills=added_scanned_skills,
-                        manifest_item_paths=combined,
-                    ).build()
-                    with timer.phase("upload_s3_output"):
-                        upload_local_dir_to_s3(local_output_dir, output_value)
-                return output_value.rstrip("/")
-            return _IncrementalIndexBuildWorkflow(
-                item_paths=combined,
-                output_dir=Path(output_dir),
-                resolved_config=resolved_config,
-                base_index_dir=base_dir,
-                added_paths=added_paths,
-                removed_paths=[],
-                item_type=normalized_item_type,
-                added_scanned_skills=added_scanned_skills,
-                manifest_item_paths=combined,
-            ).build()
+
+            def workflow_factory(local_output_dir: Path):
+                return _IncrementalIndexBuildWorkflow(
+                    item_paths=combined,
+                    output_dir=local_output_dir,
+                    resolved_config=resolved_config,
+                    base_index_dir=base_dir,
+                    added_paths=added_paths,
+                    removed_paths=[],
+                    item_type=item_type,
+                    added_scanned_skills=added_scanned_skills,
+                    manifest_item_paths=combined,
+                )
+
+            return _build_and_maybe_upload_s3(
+                output_value=output_value,
+                local_output_dir=Path(output_dir),
+                temp_prefix="retriever-index-add-s3-output-",
+                workflow_factory=workflow_factory,
+                timer=timer,
+            )
         finally:
             timer.finish()
 
@@ -191,7 +147,7 @@ class IndexBuilder:
         *,
         item_type: str = "skill",
         config: BuildConfig | None = None,
-        runtime_config: BuildConfig | None = None,  # 向后兼容：现在也接受BuildConfig
+        runtime_config: BuildConfig | None = None,
         item_jsonl_path: str | None = None,
     ) -> str | Path:
         timer = StageTimer("IndexBuilder.delete", logger=LOGGER)
@@ -201,958 +157,84 @@ class IndexBuilder:
                     raise ValueError("IndexBuilder.delete: base_index_dir is required")
                 if output_dir is None:
                     raise ValueError("IndexBuilder.delete: output_dir is required")
-                base_dir = _materialize_existing_index_dir(base_index_dir, cache_namespace="retriever-index-delete-cache")
+                base_dir = materialize_existing_index_dir(base_index_dir, cache_namespace="retriever-index-delete-cache")
                 manifest = load_manifest(base_dir)
                 existing = normalize_item_paths(manifest.get("item_paths") or ())
-                normalized_item_paths = _resolve_item_paths_or_error(
+                normalized_item_paths = resolve_item_paths_or_error(
                     item_paths=item_paths,
                     item_jsonl_path=item_jsonl_path,
                     operation="delete",
                 )
-                _, removed_paths = _load_pre_scanned_items(
+                _, removed_paths = load_pre_scanned_items(
                     item_jsonl_path=item_jsonl_path,
                     default_paths=normalized_item_paths,
                 )
                 removed = set(removed_paths)
-                remaining = [path for path in existing if path not in removed]
-                normalized_remaining = normalize_item_paths(remaining)
+                normalized_remaining = normalize_item_paths([path for path in existing if path not in removed])
                 resolved_config = resolve_build_config(config=config, runtime_config=runtime_config)
-                normalized_item_type = normalize_item_type(item_type)
                 output_value = str(output_dir).strip()
-            if is_s3_uri(output_value):
-                with tempfile.TemporaryDirectory(prefix="retriever-index-delete-s3-output-") as tmpdir:
-                    local_output_dir = Path(tmpdir) / "index"
-                    _IncrementalIndexBuildWorkflow(
-                        item_paths=normalized_remaining,
-                        output_dir=local_output_dir,
-                        resolved_config=resolved_config,
-                        base_index_dir=base_dir,
-                        added_paths=[],
-                        removed_paths=sorted(removed),
-                        item_type=normalized_item_type,
-                        manifest_item_paths=normalized_remaining,
-                    ).build()
-                    with timer.phase("upload_s3_output"):
-                        upload_local_dir_to_s3(local_output_dir, output_value)
-                return output_value.rstrip("/")
-            return _IncrementalIndexBuildWorkflow(
-                item_paths=normalized_remaining,
-                output_dir=Path(output_dir),
-                resolved_config=resolved_config,
-                base_index_dir=base_dir,
-                added_paths=[],
-                removed_paths=sorted(removed),
-                item_type=normalized_item_type,
-                manifest_item_paths=normalized_remaining,
-            ).build()
+
+            def workflow_factory(local_output_dir: Path):
+                return _IncrementalIndexBuildWorkflow(
+                    item_paths=normalized_remaining,
+                    output_dir=local_output_dir,
+                    resolved_config=resolved_config,
+                    base_index_dir=base_dir,
+                    added_paths=[],
+                    removed_paths=sorted(removed),
+                    item_type=item_type,
+                    manifest_item_paths=normalized_remaining,
+                )
+
+            return _build_and_maybe_upload_s3(
+                output_value=output_value,
+                local_output_dir=Path(output_dir),
+                temp_prefix="retriever-index-delete-s3-output-",
+                workflow_factory=workflow_factory,
+                timer=timer,
+            )
         finally:
             timer.finish()
 
 
-def _load_pre_scanned_items(
+def _build_and_maybe_upload_s3(
     *,
-    item_jsonl_path: str | None,
-    default_paths: Sequence[str],
-) -> tuple[Dict[str, dict] | None, list[str]]:
-    jsonl_text = load_items_jsonl_text(item_jsonl_path=item_jsonl_path)
-    if not str(jsonl_text or "").strip():
-        return None, list(default_paths)
-    scanned_items, manifest_paths = parse_jsonl_scanned_items(jsonl_text)
-    return scanned_items, normalize_item_paths(manifest_paths)
+    output_value: str,
+    local_output_dir: Path,
+    temp_prefix: str,
+    workflow_factory,
+    timer: StageTimer,
+) -> str | Path:
+    if is_s3_uri(output_value):
+        with tempfile.TemporaryDirectory(prefix=temp_prefix) as tmpdir:
+            materialized_output_dir = Path(tmpdir) / "index"
+            workflow_factory(materialized_output_dir).build()
+            with timer.phase("upload_s3_output"):
+                upload_local_dir_to_s3(materialized_output_dir, output_value)
+        return output_value.rstrip("/")
+    return workflow_factory(local_output_dir).build()
 
 
-def _resolve_item_paths_or_error(
-    *,
-    item_paths: Sequence[str] | None,
-    item_jsonl_path: str | None,
-    operation: str,
-) -> list[str]:
-    normalized_item_paths = normalize_item_paths(item_paths or ())
-    if normalized_item_paths:
-        return normalized_item_paths
-    if str(item_jsonl_path or "").strip():
-        return []
-    raise ValueError(f"IndexBuilder.{operation}: item_paths is empty and item_jsonl_path is not provided")
+# Backward-compatible private names for local tests/scripts that imported them
+# from the old monolithic module.
+_branch_and_ancestors = branch_and_ancestors
+_download_remote_zip = download_remote_zip
+_extract_item_zip = extract_item_zip
+_extract_json_object = extract_json_object
+_is_descendant_cid = is_descendant_cid
+_load_pre_scanned_items = load_pre_scanned_items
+_materialize_existing_index_dir = materialize_existing_index_dir
+_normalize_manifest_item_path = normalize_manifest_item_path
+_parent_branches_for_workers = parent_branches_for_workers
+_resolve_item_paths_or_error = resolve_item_paths_or_error
+_resolve_materialized_item_paths = resolve_materialized_item_paths
+_safe_extract_zip = safe_extract_zip
+_validate_item_dir = validate_item_dir
 
 
-def _materialize_existing_index_dir(base_index_dir: str | Path, *, cache_namespace: str) -> Path:
-    raw = str(base_index_dir).strip()
-    if is_s3_uri(raw):
-        return materialize_s3_dir(raw, cache_namespace=cache_namespace)
-    return Path(base_index_dir).resolve()
-
-
-def _resolve_materialized_item_paths(item_paths: Sequence[str], *, work_dir: Path, item_type: str) -> list[ResolvedItemPath]:
-    resolved: list[ResolvedItemPath] = []
-    extracted_root = work_dir / "materialized"
-    extracted_root.mkdir(parents=True, exist_ok=True)
-    scanner_cls = get_scanner_class(item_type)
-
-    for index, raw_path in enumerate(item_paths):
-        raw_text = str(raw_path).strip()
-        if not raw_text:
-            continue
-        if is_s3_uri(raw_text) or is_http_uri(raw_text):
-            archive_path = _download_remote_zip(raw_text, extracted_root / f"item-{index}.zip")
-            item_dir = _extract_item_zip(archive_path, extracted_root / f"item-{index}", scanner_cls=scanner_cls)
-            source_type = "s3_zip" if is_s3_uri(raw_text) else "http_zip"
-            resolved.append(ResolvedItemPath(source_path=raw_text, source_type=source_type, materialized_dir=item_dir))
-            continue
-
-        local_path = Path(raw_text).expanduser().resolve()
-        if not local_path.exists():
-            raise FileNotFoundError(f"Item path not found: {local_path}")
-        if local_path.is_dir():
-            candidate = scanner_cls.detect_item_root(local_path)
-            if candidate is None:
-                LOGGER.warning(f"Skipping invalid {scanner_cls.item_type} directory (no {scanner_cls.item_type} root found): {local_path}")
-                continue
-            resolved.append(
-                ResolvedItemPath(
-                    source_path=str(local_path),
-                    source_type="local_dir",
-                    materialized_dir=candidate,
-                )
-            )
-            continue
-        if local_path.is_file() and local_path.suffix.lower() == ".zip":
-            item_dir = _extract_item_zip(local_path, extracted_root / f"item-{index}", scanner_cls=scanner_cls)
-            resolved.append(
-                ResolvedItemPath(
-                    source_path=str(local_path),
-                    source_type="local_zip",
-                    materialized_dir=item_dir,
-                )
-            )
-            continue
-        raise ValueError(f"Unsupported item path: {raw_text}. Only local dir/zip, s3://...zip, and http(s)://...zip are supported")
-
-    names: set[str] = set()
-    for item in resolved:
-        if item.materialized_dir.name in names:
-            raise ValueError(f"Duplicate skill directory name detected: {item.materialized_dir.name}")
-        names.add(item.materialized_dir.name)
-    return resolved
-
-
-def _download_remote_zip(uri: str, destination_path: Path) -> Path:
-    if not str(uri).lower().endswith(".zip"):
-        raise ValueError(f"Remote item path must point to a zip file: {uri}")
-    if is_http_uri(uri):
-        return download_http_object_to_path(str(uri), destination_path)
-    return download_s3_object_to_path(str(uri), destination_path)
-
-
-def _extract_item_zip(zip_path: Path, target_dir: Path, *, scanner_cls) -> Path:
-    if zip_path.suffix.lower() != ".zip":
-        raise ValueError(f"Zip path expected, got: {zip_path}")
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as archive:
-        _safe_extract_zip(archive, target_dir)
-
-    direct_candidate = scanner_cls.detect_item_root(target_dir)
-    if direct_candidate is not None:
-        return direct_candidate
-
-    child_dirs = [path for path in sorted(target_dir.iterdir()) if path.is_dir() and not path.name.startswith(".")]
-    if len(child_dirs) == 1:
-        nested_candidate = scanner_cls.detect_item_root(child_dirs[0])
-        if nested_candidate is not None:
-            return nested_candidate
-
-    unique_parents = sorted(
-        {
-            path.resolve()
-            for path in target_dir.rglob("*")
-            if path.is_dir() and "__MACOSX" not in path.parts and scanner_cls.detect_item_root(path) is not None
-        }
-    )
-    if len(unique_parents) == 1:
-        return unique_parents[0]
-    if len(unique_parents) > 1:
-        pretty = ", ".join(str(path.relative_to(target_dir)) for path in unique_parents[:5])
-        raise ValueError(
-            "Zip archive contains multiple item roots; unable to choose one: "
-            f"{pretty}"
-        )
-    raise ValueError(f"Zip archive does not contain a valid {scanner_cls.item_type} root: {zip_path}")
-
-
-def _safe_extract_zip(archive: zipfile.ZipFile, target_dir: Path) -> None:
-    target_root = target_dir.resolve()
-    for member in archive.infolist():
-        member_name = str(member.filename or "").replace("\\", "/")
-        try:
-            (target_root / member_name).resolve().relative_to(target_root)
-        except ValueError as exc:
-            raise ValueError(f"Unsafe zip member path: {member.filename}") from exc
-    archive.extractall(target_root)
-
-
-def _validate_item_dir(path: Path, *, scanner_cls) -> Path:
-    candidate = scanner_cls.detect_item_root(path)
-    if candidate is None:
-        raise ValueError(f"Item directory does not contain a valid {scanner_cls.item_type} root: {path}")
-    return candidate
-
-
-def _normalize_manifest_item_path(value: str | Path) -> str:
-    raw = str(value).strip()
-    if is_passthrough_item_uri(raw):
-        return raw
-    return str(Path(raw).expanduser().resolve())
-
-
-def _branch_and_ancestors(cid: str) -> set[str]:
-    parts = [part for part in str(cid or "").split(".") if part]
-    return {".".join(parts[:index]) for index in range(1, len(parts) + 1)}
-
-
-def _parent_branches_for_workers(nodes: Sequence[object], worker_ids: set[str]) -> set[str]:
-    branches: set[str] = set()
-    for raw_node in nodes:
-        if not isinstance(raw_node, dict):
-            continue
-        worker_id = str(raw_node.get("worker_id") or "")
-        if worker_id not in worker_ids:
-            continue
-        cid = str(raw_node.get("cid") or "")
-        parent = cid.rsplit(".", 1)[0] if "." in cid else ""
-        branches.update(_branch_and_ancestors(parent))
-    return branches
-
-
-def _is_descendant_cid(cid: str, root_cid: str) -> bool:
-    return bool(cid and root_cid and cid.startswith(f"{root_cid}."))
-
-
-def _extract_json_object(text: str) -> dict[str, object]:
-    raw = str(text or "").strip()
-    try:
-        payload = json.loads(raw)
-        return payload if isinstance(payload, dict) else {}
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            return {}
-        try:
-            payload = json.loads(raw[start:end + 1])
-            return payload if isinstance(payload, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-
-
-class _IndexBuildWorkflow:
-    def __init__(
-        self,
-        *,
-        item_paths: Sequence[str],
-        output_dir: Path,
-        resolved_config: ResolvedBuildConfig,
-        item_type: str,
-        pre_scanned_skills: Dict[str, dict] | None = None,
-        manifest_item_paths: Sequence[str] | None = None,
-    ) -> None:
-        self._item_paths = [str(path).strip() for path in item_paths if str(path).strip()]
-        self._output_dir = output_dir.resolve()
-        self._config = resolved_config
-        self._item_type = normalize_item_type(item_type)
-        self._pre_scanned_skills = {str(key): dict(value) for key, value in (pre_scanned_skills or {}).items()} if pre_scanned_skills is not None else None
-        self._manifest_item_paths = [str(path).strip() for path in (manifest_item_paths or self._item_paths) if str(path).strip()]
-
-    def build(self) -> Path:
-        timer = StageTimer("_IndexBuildWorkflow.build", logger=LOGGER)
-        try:
-            with timer.phase("prepare_workspace"):
-                self._output_dir.mkdir(parents=True, exist_ok=True)
-            if self._pre_scanned_skills is not None:
-                return self._build_from_pre_scanned(timer=timer)
-            with tempfile.TemporaryDirectory(prefix="retriever-index-build-") as tmpdir:
-                aggregate_dir = Path(tmpdir) / "skills"
-                aggregate_dir.mkdir(parents=True, exist_ok=True)
-                pre_scanned_skills = self._pre_scanned_skills
-                if pre_scanned_skills is None:
-                    with timer.phase("materialize_items"):
-                        resolved_item_paths = _resolve_materialized_item_paths(self._item_paths, work_dir=Path(tmpdir), item_type=self._item_type)
-                        self._materialize_skill_dirs(aggregate_dir, resolved_item_paths)
-                    tree_skill_entries = None
-                else:
-                    resolved_item_paths = []
-                    tree_skill_entries = list(pre_scanned_skills.values())
-
-                tree_output_path = self._output_dir / TREE_INDEX_FILENAME
-                tree_preset: dict | None = None
-                if can_build_tree_with_llm(self._config):
-                    LOGGER.info(
-                        "tree llm runtime | workers=%s | timeout_seconds=%s | classify_batch_cap=%s",
-                        self._config.tree_max_workers,
-                        self._config.tree_timeout_seconds,
-                        self._config.tree_classify_batch_cap,
-                    )
-                    with timer.phase("build_tree_llm"):
-                        tree_preset = build_tree(
-                            skills_dir=aggregate_dir,
-                            output_path=tree_output_path,
-                            config=DynamicTreeConfig(
-                                branching_factor=self._config.tree_branching_factor,
-                                max_depth=self._config.tree_max_depth,
-                                root_categories=normalize_root_categories(self._config.tree_root_categories),
-                            ),
-                            manager_config=TreeManagerConfig(
-                                branching_factor=self._config.tree_branching_factor,
-                                max_depth=self._config.tree_max_depth,
-                                root_categories=normalize_root_categories(self._config.tree_root_categories),
-                                build=TreeBuildConfig(
-                                    max_workers=self._config.tree_max_workers,
-                                    caching=self._config.tree_caching,
-                                    num_retries=self._config.tree_num_retries,
-                                    timeout=self._config.tree_timeout_seconds,
-                                    classify_batch_cap=self._config.tree_classify_batch_cap,
-                                    context_window=self._config.tree_context_window,
-                                    max_output_tokens=self._config.tree_max_output_tokens,
-                                    postprocess_enabled=self._config.tree_postprocess_enabled,
-                                    postprocess_max_passes=self._config.tree_postprocess_max_passes,
-                                    postprocess_min_skills=self._config.tree_postprocess_min_skills,
-                                    equiv_grouping_enabled=self._config.tree_equiv_grouping_enabled,
-                                    equiv_max_groups_per_parent=self._config.tree_equiv_max_groups_per_parent,
-                                    equiv_allow_singleton_groups=self._config.tree_equiv_allow_singleton_groups,
-                                    equiv_min_lexical_similarity=self._config.tree_equiv_min_lexical_similarity,
-                                    deterministic_prompts=self._config.tree_deterministic_prompts,
-                                    discovery_seed=self._config.tree_discovery_seed,
-                                    prompt_fingerprint_version=self._config.tree_prompt_fingerprint_version,
-                                    cache_observability=self._config.tree_cache_observability,
-                                    skill_profiles_enabled=self._config.tree_skill_profiles_enabled,
-                                    skill_profile_select_rules_enabled=self._config.tree_skill_profile_select_rules_enabled,
-                                    skill_profile_batch_size=self._config.tree_skill_profile_batch_size,
-                                    skill_profile_description_limit=self._config.tree_skill_profile_description_limit,
-                                    skill_profile_rule_limit=self._config.tree_skill_profile_rule_limit,
-                                ),
-                            ),
-                            client=self._config.llm_openai_client,
-                            model=self._config.llm_model,
-                            api_key=self._config.tree_llm_api_key,
-                            base_url=self._config.tree_llm_base_url,
-                            llm_seed=self._config.llm_seed,
-                            max_workers=self._config.tree_max_workers,
-                            verbose=False,
-                            show_tree=False,
-                            display_skills_dir=self._infer_display_skills_dir(resolved_item_paths) if pre_scanned_skills is None else None,
-                            item_type=self._item_type,
-                            skill_entries=tree_skill_entries,
-                        )
-                else:
-                    if not self._config.allow_fallback_tree:
-                        raise ValueError("Tree build requested but no LLM capability is configured and fallback is disabled")
-                    LOGGER.warning("build fallback: tree -> fallback_tree | reason=tree llm is unavailable")
-                    with timer.phase("build_tree_fallback"):
-                        if pre_scanned_skills is None:
-                            tree_preset = {"nodes": build_fallback_tree_nodes(aggregate_dir=aggregate_dir)}
-                        else:
-                            tree_preset = {"nodes": self._fallback_tree_nodes_from_scanned(pre_scanned_skills)}
-
-                with timer.phase("build_catalog_and_tree_outputs"):
-                    raw_nodes = list((tree_preset or {}).get("nodes") or [])
-                    catalog_records = self._build_catalog_records(
-                        aggregate_dir,
-                        raw_nodes,
-                        resolved_item_paths=resolved_item_paths,
-                        pre_scanned_skills=pre_scanned_skills,
-                    )
-                    enriched_nodes = enrich_branch_descriptions(raw_nodes, catalog_records=catalog_records)
-                    write_tree_preset({"nodes": enriched_nodes}, tree_output_path)
-                    if self._config.generate_tree_html:
-                        generate_tree_html(
-                            tree_nodes_to_tree_dict(enriched_nodes, catalog_records),
-                            self._output_dir / TREE_HTML_FILENAME,
-                        )
-                    else:
-                        self._unlink_if_exists(self._output_dir / TREE_HTML_FILENAME)
-                    write_catalog(catalog_records, self._output_dir / CATALOG_FILENAME)
-                with timer.phase("write_manifest"):
-                    write_manifest(self._output_dir, self._manifest_item_paths, catalog_records, mode="full", item_type=self._item_type)
-            return self._output_dir
-        finally:
-            timer.finish()
-
-    def _build_from_pre_scanned(self, *, timer: StageTimer) -> Path:
-        pre_scanned_skills = self._pre_scanned_skills or {}
-        tree_output_path = self._output_dir / TREE_INDEX_FILENAME
-        tree_preset: dict | None = None
-        if can_build_tree_with_llm(self._config):
-            LOGGER.info(
-                "tree llm runtime | workers=%s | timeout_seconds=%s | classify_batch_cap=%s",
-                self._config.tree_max_workers,
-                self._config.tree_timeout_seconds,
-                self._config.tree_classify_batch_cap,
-            )
-            with timer.phase("build_tree_llm"):
-                tree_preset = build_tree(
-                    skills_dir=self._output_dir,
-                    output_path=tree_output_path,
-                    config=DynamicTreeConfig(
-                        branching_factor=self._config.tree_branching_factor,
-                        max_depth=self._config.tree_max_depth,
-                        root_categories=normalize_root_categories(self._config.tree_root_categories),
-                    ),
-                    manager_config=TreeManagerConfig(
-                        branching_factor=self._config.tree_branching_factor,
-                        max_depth=self._config.tree_max_depth,
-                        root_categories=normalize_root_categories(self._config.tree_root_categories),
-                        build=TreeBuildConfig(
-                            max_workers=self._config.tree_max_workers,
-                            caching=self._config.tree_caching,
-                            num_retries=self._config.tree_num_retries,
-                            timeout=self._config.tree_timeout_seconds,
-                            classify_batch_cap=self._config.tree_classify_batch_cap,
-                            context_window=self._config.tree_context_window,
-                            max_output_tokens=self._config.tree_max_output_tokens,
-                            postprocess_enabled=self._config.tree_postprocess_enabled,
-                            postprocess_max_passes=self._config.tree_postprocess_max_passes,
-                            postprocess_min_skills=self._config.tree_postprocess_min_skills,
-                            equiv_grouping_enabled=self._config.tree_equiv_grouping_enabled,
-                            equiv_max_groups_per_parent=self._config.tree_equiv_max_groups_per_parent,
-                            equiv_allow_singleton_groups=self._config.tree_equiv_allow_singleton_groups,
-                            equiv_min_lexical_similarity=self._config.tree_equiv_min_lexical_similarity,
-                            deterministic_prompts=self._config.tree_deterministic_prompts,
-                            discovery_seed=self._config.tree_discovery_seed,
-                            prompt_fingerprint_version=self._config.tree_prompt_fingerprint_version,
-                            cache_observability=self._config.tree_cache_observability,
-                            skill_profiles_enabled=self._config.tree_skill_profiles_enabled,
-                            skill_profile_select_rules_enabled=self._config.tree_skill_profile_select_rules_enabled,
-                            skill_profile_batch_size=self._config.tree_skill_profile_batch_size,
-                            skill_profile_description_limit=self._config.tree_skill_profile_description_limit,
-                            skill_profile_rule_limit=self._config.tree_skill_profile_rule_limit,
-                        ),
-                    ),
-                    client=self._config.llm_openai_client,
-                    model=self._config.llm_model,
-                    api_key=self._config.tree_llm_api_key,
-                    base_url=self._config.tree_llm_base_url,
-                    llm_seed=self._config.llm_seed,
-                    max_workers=self._config.tree_max_workers,
-                    verbose=False,
-                    show_tree=False,
-                    item_type=self._item_type,
-                    skill_entries=list(pre_scanned_skills.values()),
-                )
-        else:
-            if not self._config.allow_fallback_tree:
-                raise ValueError("Tree build requested but no LLM capability is configured and fallback is disabled")
-            LOGGER.warning("build fallback: tree -> fallback_tree | reason=tree llm is unavailable")
-            with timer.phase("build_tree_fallback"):
-                tree_preset = {"nodes": self._fallback_tree_nodes_from_scanned(pre_scanned_skills)}
-
-        with timer.phase("build_catalog_and_tree_outputs"):
-            raw_nodes = list((tree_preset or {}).get("nodes") or [])
-            catalog_records = self._build_catalog_records(
-                self._output_dir,
-                raw_nodes,
-                resolved_item_paths=[],
-                pre_scanned_skills=pre_scanned_skills,
-            )
-            enriched_nodes = enrich_branch_descriptions(raw_nodes, catalog_records=catalog_records)
-            write_tree_preset({"nodes": enriched_nodes}, tree_output_path)
-            if self._config.generate_tree_html:
-                generate_tree_html(
-                    tree_nodes_to_tree_dict(enriched_nodes, catalog_records),
-                    self._output_dir / TREE_HTML_FILENAME,
-                )
-            else:
-                self._unlink_if_exists(self._output_dir / TREE_HTML_FILENAME)
-            write_catalog(catalog_records, self._output_dir / CATALOG_FILENAME)
-        with timer.phase("write_manifest"):
-            write_manifest(self._output_dir, self._manifest_item_paths, catalog_records, mode="full", item_type=self._item_type)
-        return self._output_dir
-
-    @staticmethod
-    def _unlink_if_exists(path: Path) -> None:
-        if path.exists():
-            path.unlink()
-
-    @staticmethod
-    def _materialize_skill_dirs(aggregate_dir: Path, item_paths: Sequence[ResolvedItemPath]) -> None:
-        for item in item_paths:
-            skill_dir = item.materialized_dir
-            destination = aggregate_dir / skill_dir.name
-            if destination.exists():
-                raise ValueError(f"Duplicate skill directory name detected: {skill_dir.name}")
-            try:
-                destination.symlink_to(skill_dir, target_is_directory=True)
-            except Exception:
-                shutil.copytree(skill_dir, destination)
-
-    @staticmethod
-    def _infer_display_skills_dir(item_paths: Sequence[ResolvedItemPath]) -> Path | None:
-        local_dirs = [
-            item.materialized_dir.parent.resolve()
-            for item in item_paths
-            if item.source_type == "local_dir"
-        ]
-        if not local_dirs:
-            return None
-        parents = set(local_dirs)
-        return next(iter(parents)) if len(parents) == 1 else None
-
-    def _build_catalog_records(
-        self,
-        aggregate_dir: Path,
-        tree_nodes: Sequence[object],
-        *,
-        resolved_item_paths: Sequence[ResolvedItemPath],
-        pre_scanned_skills: Dict[str, dict] | None = None,
-    ):
-        if pre_scanned_skills is not None:
-            scanned = {str(key): dict(value) for key, value in pre_scanned_skills.items()}
-            return build_catalog_records_from_nodes(nodes=tree_nodes, scanned_skills=scanned)
-        source_by_skill = {item.materialized_dir.name: item.source_path for item in resolved_item_paths}
-        scanned = {
-            str(item["id"]): item
-            for item in create_scanner(self._item_type, aggregate_dir, display_items_dir=aggregate_dir).to_dict_list()
-        }
-        for worker_id, item in scanned.items():
-            source_path = source_by_skill.get(worker_id)
-            if source_path:
-                item["path"] = source_path
-        return build_catalog_records_from_nodes(nodes=tree_nodes, scanned_skills=scanned)
-
-    @staticmethod
-    def _fallback_tree_nodes_from_scanned(scanned_items: Dict[str, dict]) -> list[dict[str, object]]:
-        nodes = [
-            {
-                "cid": "Skills",
-                "type": "branch",
-                "description": "Fallback skill index built without LLM tree generation.",
-            }
-        ]
-        for worker_id in sorted(str(key) for key in scanned_items):
-            item = scanned_items.get(worker_id) or {}
-            nodes.append(
-                {
-                    "cid": f"Skills.{worker_id}",
-                    "type": "leaf",
-                    "description": str(item.get("description") or item.get("name") or worker_id),
-                    "worker_id": worker_id,
-                }
-            )
-        return nodes
-
-
-class _IncrementalIndexBuildWorkflow(_IndexBuildWorkflow):
-    def __init__(
-        self,
-        *,
-        item_paths: Sequence[str],
-        output_dir: Path,
-        resolved_config: ResolvedBuildConfig,
-        base_index_dir: Path,
-        added_paths: Sequence[str],
-        removed_paths: Sequence[str],
-        item_type: str,
-        added_scanned_skills: Dict[str, dict] | None = None,
-        manifest_item_paths: Sequence[str] | None = None,
-    ) -> None:
-        super().__init__(
-            item_paths=item_paths,
-            output_dir=output_dir,
-            resolved_config=resolved_config,
-            item_type=item_type,
-            manifest_item_paths=manifest_item_paths,
-        )
-        self._base_index_dir = base_index_dir.resolve()
-        self._added_paths = [str(path).strip() for path in added_paths if str(path).strip()]
-        self._removed_paths = [str(path).strip() for path in removed_paths if str(path).strip()]
-        self._added_scanned_skills = {str(key): dict(value) for key, value in (added_scanned_skills or {}).items()} if added_scanned_skills is not None else None
-
-    def build(self) -> Path:
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        if not (self._base_index_dir / TREE_INDEX_FILENAME).exists():
-            return super().build()
-
-        existing_catalog = load_catalog_records(self._base_index_dir / CATALOG_FILENAME)
-        existing_nodes = list(load_tree_preset(self._base_index_dir / TREE_INDEX_FILENAME).get("nodes") or [])
-        change_count = len(self._added_paths) + len(self._removed_paths)
-        change_ratio = change_count / max(1, len(existing_catalog))
-        if change_count > 0 and change_ratio > self._config.incremental_max_change_ratio:
-            LOGGER.info(
-                "incremental build escalated to full rebuild | change_count=%s | base_count=%s | ratio=%.4f | threshold=%.4f",
-                change_count,
-                len(existing_catalog),
-                change_ratio,
-                self._config.incremental_max_change_ratio,
-            )
-            return super().build()
-
-        remaining_paths = set(self._item_paths)
-        removed_path_set = set(self._removed_paths)
-        kept_catalog = [
-            record
-            for record in existing_catalog
-            if _normalize_manifest_item_path(record.skill_path) in remaining_paths
-            and _normalize_manifest_item_path(record.skill_path) not in removed_path_set
-        ]
-
-        if self._added_paths:
-            scanned_added = self._added_scanned_skills if self._added_scanned_skills is not None else self._scan_added_skills()
-            existing_nodes, placement_report = merge_added_skills_into_tree_with_report(
-                nodes=existing_nodes,
-                added_skills=scanned_added,
-                min_confidence=self._config.incremental_min_add_confidence,
-                min_margin=self._config.incremental_min_add_confidence_margin,
-            )
-            added_catalog = build_catalog_records_from_nodes(
-                nodes=existing_nodes,
-                scanned_skills=scanned_added,
-                restrict_worker_ids=set(scanned_added),
-            )
-            merged = {record.worker_id: record for record in kept_catalog}
-            for record in added_catalog:
-                merged[record.worker_id] = record
-            catalog_records = sorted(merged.values(), key=lambda item: item.cid)
-            affected_branch_cids = {
-                branch
-                for decision in placement_report.placement_decisions
-                for branch in _branch_and_ancestors(decision.parent_cid)
-            }
-            force_rebuild_branch_cids = {
-                decision.parent_cid
-                for decision in placement_report.placement_decisions
-                if decision.worker_id in set(placement_report.low_confidence_worker_ids)
-            }
-        else:
-            removed_worker_ids = {
-                record.worker_id
-                for record in existing_catalog
-                if _normalize_manifest_item_path(record.skill_path) in removed_path_set
-            }
-            affected_branch_cids = _parent_branches_for_workers(existing_nodes, removed_worker_ids)
-            force_rebuild_branch_cids = set()
-            existing_nodes = prune_deleted_skills_from_tree(existing_nodes, removed_worker_ids=removed_worker_ids)
-            catalog_records = sorted(kept_catalog, key=lambda item: item.cid)
-
-        worker_to_record = {record.worker_id: record for record in catalog_records}
-        existing_nodes, maintenance_report = apply_incremental_tree_maintenance(
-            nodes=existing_nodes,
-            affected_branch_cids=affected_branch_cids,
-            records_by_worker=worker_to_record,
-            max_direct_leaf_children=self._config.tree_branching_factor,
-            branch_imbalance_ratio=self._config.incremental_branch_imbalance_ratio,
-            force_rebuild_branch_cids=force_rebuild_branch_cids,
-            subtree_rebuilder=self._llm_rebuild_subtree if can_build_tree_with_llm(self._config) else None,
-        )
-        preserve_tree_cids = bool(maintenance_report.rebuilt_branch_cids)
-        if maintenance_report.rebuilt_branch_cids or maintenance_report.health_issues:
-            LOGGER.info(
-                "incremental tree maintenance | rebuilt=%s | remaining_health_issues=%s",
-                list(maintenance_report.rebuilt_branch_cids),
-                [issue.detail for issue in maintenance_report.health_issues[:MAX_LOGGED_HEALTH_ISSUES]],
-            )
-        nodes = align_leaf_nodes_with_catalog(existing_nodes, worker_to_record, preserve_cids=preserve_tree_cids)
-        catalog_records = build_catalog_records_from_existing(nodes=nodes, records_by_worker=worker_to_record)
-        nodes = enrich_branch_descriptions(nodes, catalog_records=catalog_records)
-
-        write_tree_preset({"nodes": nodes}, self._output_dir / TREE_INDEX_FILENAME)
-        if self._config.generate_tree_html:
-            generate_tree_html(tree_nodes_to_tree_dict(nodes, catalog_records), self._output_dir / TREE_HTML_FILENAME)
-        else:
-            self._unlink_if_exists(self._output_dir / TREE_HTML_FILENAME)
-        write_catalog(catalog_records, self._output_dir / CATALOG_FILENAME)
-        write_manifest(self._output_dir, self._manifest_item_paths, catalog_records, mode="incremental", item_type=self._item_type)
-        return self._output_dir
-
-    def _llm_rebuild_subtree(
-        self,
-        nodes: Sequence[object],
-        root_cid: str,
-        records_by_worker: Dict[str, Any],
-        max_direct_leaf_children: int,
-    ) -> List[Dict[str, object]] | None:
-        if not self._config.llm_model:
-            return None
-        normalized = [dict(node) for node in nodes if isinstance(node, dict)]
-        root_node = next(
-            (
-                node
-                for node in normalized
-                if str(node.get("cid") or "") == root_cid and str(node.get("type") or "") == "branch"
-            ),
-            None,
-        )
-        if root_node is None:
-            return None
-        leaves = [
-            dict(node)
-            for node in normalized
-            if str(node.get("type") or "") != "branch" and _is_descendant_cid(str(node.get("cid") or ""), root_cid)
-        ]
-        if len(leaves) < 2:
-            return None
-        try:
-            groups = self._expand_llm_subtree_groups(
-                root_cid=root_cid,
-                root_node=root_node,
-                leaves=leaves,
-                records_by_worker=records_by_worker,
-                max_direct_leaf_children=max_direct_leaf_children,
-                depth=len([part for part in str(root_cid or "").split(".") if part]),
-            )
-            if not groups:
-                return None
-            rebuilt = self._build_subtree_from_llm_groups(
-                nodes=normalized,
-                root_cid=root_cid,
-                leaves=leaves,
-                groups=groups,
-                records_by_worker=records_by_worker,
-                max_direct_leaf_children=max_direct_leaf_children,
-            )
-            LOGGER.info("incremental llm subtree rebuild succeeded | branch=%s | groups=%s", root_cid, self._count_llm_subtree_groups(groups))
-            return rebuilt
-        except Exception as exc:
-            LOGGER.warning("incremental llm subtree rebuild skipped | branch=%s | error=%s", root_cid, exc)
-            return None
-
-    def _expand_llm_subtree_groups(
-        self,
-        *,
-        root_cid: str,
-        root_node: Dict[str, object],
-        leaves: Sequence[Dict[str, object]],
-        records_by_worker: Dict[str, Any],
-        max_direct_leaf_children: int,
-        depth: int,
-    ) -> list[dict[str, object]] | None:
-        if depth >= max(1, int(self._config.tree_max_depth or 1)):
-            return None
-        groups = self._request_llm_subtree_groups(
-            root_cid=root_cid,
-            root_node=root_node,
-            leaves=leaves,
-            records_by_worker=records_by_worker,
-            max_direct_leaf_children=max_direct_leaf_children,
-        )
-        if not groups:
-            return None
-        leaf_by_worker = {str(leaf.get("worker_id") or ""): dict(leaf) for leaf in leaves}
-        expanded: list[dict[str, object]] = []
-        for group_index, group in enumerate(groups, start=1):
-            skill_ids = [str(item) for item in group.get("skill_ids") or () if str(item) in leaf_by_worker]
-            if not skill_ids:
-                continue
-            expanded_group = dict(group)
-            expanded_group["skill_ids"] = skill_ids
-            if len(skill_ids) > max_direct_leaf_children:
-                if depth + 1 >= max(1, int(self._config.tree_max_depth or 1)):
-                    return None
-                raw_segment = str(group.get("id") or group.get("name") or f"group-{group_index}")
-                nested_root_cid = f"{root_cid}.{slug_term(raw_segment, fallback=f'group-{group_index}')}" if root_cid else slug_term(raw_segment, fallback=f"group-{group_index}")
-                child_groups = self._expand_llm_subtree_groups(
-                    root_cid=nested_root_cid,
-                    root_node={
-                        "cid": nested_root_cid,
-                        "description": str(group.get("description") or group.get("name") or raw_segment),
-                    },
-                    leaves=[leaf_by_worker[skill_id] for skill_id in skill_ids],
-                    records_by_worker=records_by_worker,
-                    max_direct_leaf_children=max_direct_leaf_children,
-                    depth=depth + 1,
-                )
-                if not child_groups:
-                    return None
-                expanded_group["children"] = child_groups
-            expanded.append(expanded_group)
-        return expanded or None
-
-    def _request_llm_subtree_groups(
-        self,
-        *,
-        root_cid: str,
-        root_node: Dict[str, object],
-        leaves: Sequence[Dict[str, object]],
-        records_by_worker: Dict[str, Any],
-        max_direct_leaf_children: int,
-    ) -> list[dict[str, object]]:
-        client = self._llm_subtree_client()
-        skills_payload = []
-        for leaf in sorted(leaves, key=lambda item: str(item.get("worker_id") or "")):
-            worker_id = str(leaf.get("worker_id") or "")
-            record = records_by_worker.get(worker_id)
-            skills_payload.append(
-                {
-                    "skill_id": worker_id,
-                    "name": str(getattr(record, "name", "") or worker_id),
-                    "description": str(getattr(record, "description", "") or leaf.get("description") or ""),
-                }
-            )
-        system_prompt = (
-            "/no_think\n"
-            "You rebuild one capability-tree subtree for skill routing. "
-            "Return one JSON object only. Do not explain."
-        )
-        user_prompt = SUBTREE_REBUILD_PROMPT.format(
-            parent_branch=json.dumps(
-                {
-                    "cid": root_cid,
-                    "description": str(root_node.get("description") or ""),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            skills_payload=json.dumps(skills_payload, ensure_ascii=False, indent=2),
-            max_direct_leaf_children=max_direct_leaf_children,
-        )
-        response = client.chat.completions.create(
-            model=self._config.llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=2048,
-            timeout=self._config.tree_timeout_seconds,
-        )
-        content = str(response.choices[0].message.content or "")
-        payload = _extract_json_object(content)
-        return self._normalize_llm_subtree_groups(payload, valid_worker_ids={str(item.get("worker_id") or "") for item in leaves})
-
-    def _llm_subtree_client(self):
-        if self._config.llm_openai_client is not None:
-            return self._config.llm_openai_client
-        try:
-            from openai import OpenAI
-        except Exception as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError("openai package is required for incremental LLM subtree rebuild") from exc
-        if not self._config.tree_llm_api_key:
-            raise RuntimeError("llm_api_key is required for incremental LLM subtree rebuild")
-        return OpenAI(
-            api_key=self._config.tree_llm_api_key,
-            base_url=self._config.tree_llm_base_url or None,
-            max_retries=0,
-        )
-
-    @staticmethod
-    def _normalize_llm_subtree_groups(payload: dict[str, object], *, valid_worker_ids: set[str]) -> list[dict[str, object]]:
-        raw_groups = payload.get("groups") if isinstance(payload, dict) else None
-        if not isinstance(raw_groups, list):
-            return []
-        groups: list[dict[str, object]] = []
-        seen: set[str] = set()
-        for index, raw_group in enumerate(raw_groups, start=1):
-            if not isinstance(raw_group, dict):
-                continue
-            skill_ids = []
-            raw_skill_ids = raw_group.get("skill_ids") or []
-            if not isinstance(raw_skill_ids, list):
-                raw_skill_ids = []
-            for raw_skill_id in raw_skill_ids:
-                skill_id = str(raw_skill_id or "").strip()
-                if skill_id in valid_worker_ids and skill_id not in seen:
-                    skill_ids.append(skill_id)
-                    seen.add(skill_id)
-            if not skill_ids:
-                continue
-            name = str(raw_group.get("name") or raw_group.get("id") or f"group-{index}").strip()
-            groups.append(
-                {
-                    "id": str(raw_group.get("id") or name or f"group-{index}").strip(),
-                    "name": name or f"group-{index}",
-                    "description": str(raw_group.get("description") or "").strip(),
-                    "skill_ids": skill_ids,
-                }
-            )
-        missing = sorted(valid_worker_ids - seen)
-        if missing:
-            if not groups:
-                return []
-            fallback_group = max(groups, key=lambda group: (len(group["skill_ids"]), str(group["id"])))
-            fallback_group["skill_ids"] = [*fallback_group["skill_ids"], *missing]
-        return groups
-
-    @staticmethod
-    def _build_subtree_from_llm_groups(
-        *,
-        nodes: Sequence[Dict[str, object]],
-        root_cid: str,
-        leaves: Sequence[Dict[str, object]],
-        groups: Sequence[dict[str, object]],
-        records_by_worker: Dict[str, Any],
-        max_direct_leaf_children: int,
-    ) -> List[Dict[str, object]]:
-        retained = [
-            dict(node)
-            for node in nodes
-            if str(node.get("cid") or "") == root_cid or not _is_descendant_cid(str(node.get("cid") or ""), root_cid)
-        ]
-        leaf_by_worker = {str(leaf.get("worker_id") or ""): dict(leaf) for leaf in leaves}
-        used = {str(node.get("cid") or "") for node in retained}
-        rebuilt: list[Dict[str, object]] = []
-
-        def append_group(parent_cid: str, group: dict[str, object], group_index: int) -> None:
-            skill_ids = [str(item) for item in group.get("skill_ids") or () if str(item) in leaf_by_worker]
-            if not skill_ids:
-                return
-            raw_segment = str(group.get("id") or group.get("name") or f"group-{group_index}")
-            segment = slug_term(raw_segment, fallback=f"group-{group_index}")
-            branch_cid = unique_child_cid(parent_cid=parent_cid, segment=segment, used=used)
-            used.add(branch_cid)
-            rebuilt.append(
-                {
-                    "cid": branch_cid,
-                    "type": "branch",
-                    "description": str(group.get("description") or group.get("name") or segment),
-                }
-            )
-            child_groups = group.get("children")
-            if isinstance(child_groups, list) and child_groups:
-                for child_index, child_group in enumerate(child_groups, start=1):
-                    if isinstance(child_group, dict):
-                        append_group(branch_cid, child_group, child_index)
-                return
-            if len(skill_ids) > max_direct_leaf_children:
-                raise ValueError(f"oversized LLM subtree group without child groups: {branch_cid} has {len(skill_ids)} skills")
-            for worker_id in skill_ids:
-                leaf = dict(leaf_by_worker[worker_id])
-                record = records_by_worker.get(worker_id)
-                old_cid = str(leaf.get("cid") or "")
-                leaf_segment = old_cid.rsplit(".", 1)[-1] if old_cid else slug_term(worker_id, fallback="skill")
-                leaf["cid"] = unique_child_cid(parent_cid=branch_cid, segment=leaf_segment, used=used)
-                leaf["description"] = str(getattr(record, "description", "") or leaf.get("description") or "")
-                used.add(str(leaf["cid"]))
-                rebuilt.append(leaf)
-
-        for group_index, group in enumerate(groups, start=1):
-            append_group(root_cid, group, group_index)
-        return sorted(retained + rebuilt, key=lambda item: str(item.get("cid") or ""))
-
-    @staticmethod
-    def _count_llm_subtree_groups(groups: Sequence[dict[str, object]]) -> int:
-        total = 0
-        for group in groups:
-            total += 1
-            child_groups = group.get("children")
-            if isinstance(child_groups, list):
-                total += _IncrementalIndexBuildWorkflow._count_llm_subtree_groups([child for child in child_groups if isinstance(child, dict)])
-        return total
-
-    def _scan_added_skills(self) -> dict[str, dict]:
-        scanned: dict[str, dict] = {}
-        with tempfile.TemporaryDirectory(prefix="retriever-index-added-items-") as tmpdir:
-            resolved_item_paths = _resolve_materialized_item_paths(self._added_paths, work_dir=Path(tmpdir), item_type=self._item_type)
-            for item in resolved_item_paths:
-                skill_dir = item.materialized_dir
-                scan_root = skill_dir.parent
-                scanner = create_scanner(self._item_type, scan_root, display_items_dir=scan_root)
-                for scanned_item in scanner.to_dict_list():
-                    if str(scanned_item.get("id") or "") == skill_dir.name:
-                        scanned[skill_dir.name] = scanned_item
-                        if not is_s3_uri(item.source_path):
-                            scanned[skill_dir.name]["path"] = _normalize_manifest_item_path(item.source_path)
-                        else:
-                            scanned[skill_dir.name]["path"] = item.source_path
-                        break
-        return scanned
-
-
-__all__ = ["IndexBuilder", "_IndexBuildWorkflow", "_IncrementalIndexBuildWorkflow"]
+__all__ = [
+    "IndexBuilder",
+    "ResolvedItemPath",
+    "_IndexBuildWorkflow",
+    "_IncrementalIndexBuildWorkflow",
+]

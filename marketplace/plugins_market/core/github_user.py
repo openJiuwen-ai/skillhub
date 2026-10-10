@@ -8,12 +8,10 @@ from typing import Any
 
 import httpx
 
-from plugins_market.core.config import settings
+from plugins_market.core.config import DEFAULT_GITHUB_USER_API_URL, settings
 from plugins_market.core.logging import get_logger
 
 logger = get_logger(__name__)
-
-DEFAULT_GITHUB_USER_API_URL = "https://api.github.com/user"
 
 
 async def fetch_github_profile(access_token: str) -> dict[str, Any] | None:

@@ -13,6 +13,12 @@ from .market_assets_repository import (
     PluginFetchRecordRepository,
     MarketAssetInteractionRepository,
 )
+from .groups_repository import (
+    MarketGroupRepository,
+    MarketGroupMemberRepository,
+    MarketGroupJoinRequestRepository,
+    MarketGroupSkillGrantRepository,
+)
 
 __all__ = [
     "BaseRepository",
@@ -22,6 +28,10 @@ __all__ = [
     "MarketAssetVersionRepository",
     "PluginFetchRecordRepository",
     "MarketAssetInteractionRepository",
+    "MarketGroupRepository",
+    "MarketGroupMemberRepository",
+    "MarketGroupJoinRequestRepository",
+    "MarketGroupSkillGrantRepository",
     "PaginationQuery",
     "get_db_session",
 ]

@@ -70,6 +70,21 @@ BEHAVIOR_PATTERNS = [
         ),
     ),
     (
+        "filesystem_boundary_access",
+        "command",
+        "high",
+        re.compile(r"(?:\.\./|\.\.\\|\b(?:cp|mv|cat|tar|unzip|read|write|open)\b[^\n`]{0,80}(?:\.\./|\.\.\\))", re.I),
+    ),
+    (
+        "filesystem_boundary_access",
+        "code",
+        "medium",
+        re.compile(
+            r"\b(?:open|readFile|writeFile|Path|os\.path\.join)\b[^\n]{0,120}(?:\.\./|\.\.\\|/etc/|/root/|[A-Za-z]:\\)",
+            re.I,
+        ),
+    ),
+    (
         "environment_access",
         "code",
         "high",
@@ -77,11 +92,72 @@ BEHAVIOR_PATTERNS = [
     ),
     ("dynamic_code_execution", "code", "high", re.compile(r"\b(?:eval|exec|Function|compile)\s*\(", re.I)),
     (
+        "unsafe_object_loading",
+        "code",
+        "high",
+        re.compile(
+            r"\b(?:pickle\.loads|pickle\.load|yaml\.load\s*\(|marshal\.loads|"
+            r"unserialize\s*\(|BinaryFormatter|joblib\.load\s*\()",
+            re.I,
+        ),
+    ),
+    (
         "process_execution",
         "code",
         "high",
         re.compile(
             r"\b(?:child_process\.(?:exec|spawn|execFile)|subprocess\.(?:run|Popen|call)|os\.system)\s*\(", re.I
+        ),
+    ),
+    (
+        "resource_exhaustion",
+        "command",
+        "high",
+        re.compile(
+            r"\b(?:while\s+true|for\s*\(\s*;\s*;\s*\)|yes\b|dd\s+if=/dev/(?:zero|urandom)|"
+            r"fallocate\s+-l|truncate\s+-s)\b[^\n`]*",
+            re.I,
+        ),
+    ),
+    (
+        "resource_exhaustion",
+        "code",
+        "medium",
+        re.compile(
+            r"\b(?:while\s+True|while\s*\(\s*true\s*\)|for\s*\(\s*;\s*;\s*\)|"
+            r"setrecursionlimit\s*\(|Array\s*\(\s*10\*\*\d+|bytearray\s*\(\s*10\*\*\d+|"
+            r"new\s+Array\s*\(\s*10\*\*\d+|Buffer\.alloc\s*\(\s*10\*\*\d+)",
+            re.I,
+        ),
+    ),
+    (
+        "bulk_remote_requests",
+        "command",
+        "high",
+        re.compile(
+            r"\b(?:parallel\s+requests?|burst\s+requests?|flood\s+(?:the\s+)?api|"
+            r"bypass\s+rate\s+limit|retry\s+until\s+success|rotate\s+(?:api\s+)?keys?)\b",
+            re.I,
+        ),
+    ),
+    (
+        "bulk_remote_requests",
+        "code",
+        "medium",
+        re.compile(
+            r"\b(?:Promise\.all|asyncio\.gather|ThreadPoolExecutor|ProcessPoolExecutor)\b"
+            r"[^\n]{0,120}\b(?:fetch|requests\.|axios\.|httpx\.)",
+            re.I,
+        ),
+    ),
+    (
+        "query_or_template_construction",
+        "code",
+        "medium",
+        re.compile(
+            r"\b(?:cursor\.execute|db\.query|sequelize\.query|render_template_string|"
+            r"jinja2\.Template|XMLParser|DocumentBuilderFactory)\b[^\n`]*",
+            re.I,
         ),
     ),
     (
@@ -281,6 +357,11 @@ def find_artifact_side_effect_facts(
             "network_access",
             "remote_state_mutation",
             "dynamic_code_execution",
+            "resource_exhaustion",
+            "bulk_remote_requests",
+            "filesystem_boundary_access",
+            "unsafe_object_loading",
+            "query_or_template_construction",
         }:
             continue
         if any(evidence.get("file") == artifact_path for evidence in fact["evidence"]):
@@ -308,14 +389,19 @@ def build_invoked_artifact_effect_fact(
         (item for item in effect_fact["evidence"] if item.get("file") == artifact_path),
         effect_fact["evidence"][0],
     )
+    derived_kind = (
+        "execution_amplification_chain"
+        if effect_fact["kind"] in {"resource_exhaustion", "bulk_remote_requests"}
+        else effect_fact["kind"]
+    )
     return {
         "fact_id": build_behavior_fact_id(
-            effect_fact["kind"],
+            derived_kind,
             f"invoked_artifact:{artifact_path}",
             invocation_evidence.get("file", artifact_path),
             invocation_evidence.get("line", 1),
         ),
-        "kind": effect_fact["kind"],
+        "kind": derived_kind,
         "source": "documentation",
         "confidence": lower_confidence(invocation_fact["confidence"], effect_fact["confidence"]),
         "subject": f"invoked_artifact:{artifact_path}",

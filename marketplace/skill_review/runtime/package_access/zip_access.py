@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
 
 from skill_review.domain.types import PackageFileEntry
 from skill_review.runtime.package_access.base import PackageAccess, PackageTextReadResult
@@ -12,16 +12,37 @@ from skill_review.runtime.package_access.file_catalog import (
 )
 
 
+class ZipPathCollisionError(ValueError):
+    """ZIP members normalize to the same path; opening the archive is rejected."""
+
+
+def _index_safe_entries(zip_file: ZipFile) -> dict[str, ZipInfo]:
+    """Map normalized member paths to ZipInfo and reject aliases that would clobber."""
+    entries: dict[str, ZipInfo] = {}
+    for item in zip_file.infolist():
+        if item.is_dir() or not is_safe_archive_path(item.filename):
+            continue
+        normalized = normalize_archive_path(item.filename)
+        existing = entries.get(normalized)
+        if existing is not None:
+            raise ZipPathCollisionError(
+                f"ZIP 包含重复路径：{normalized} "
+                f"(members {existing.filename!r} and {item.filename!r})"
+            )
+        entries[normalized] = item
+    return entries
+
+
 class ZipPackageAccess(PackageAccess):
     archive_format = "zip"
 
     def __init__(self, local_path: Path):
         self._zip_file = ZipFile(local_path, "r")
-        self._entries_by_path = {
-            normalize_archive_path(item.filename): item
-            for item in self._zip_file.infolist()
-            if not item.is_dir() and is_safe_archive_path(item.filename)
-        }
+        try:
+            self._entries_by_path = _index_safe_entries(self._zip_file)
+        except Exception:
+            self._zip_file.close()
+            raise
 
     def list_files(self) -> list[PackageFileEntry]:
         return [

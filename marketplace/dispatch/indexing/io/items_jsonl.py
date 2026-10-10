@@ -95,6 +95,18 @@ def parse_jsonl_scanned_items(jsonl_content: str) -> tuple[dict[str, dict], list
             skill_name = str(content_extend.get("skillName") or "").strip() or skill_id
             skill_desc = str(content_extend.get("skillDesc") or "").strip()
             source_path = f"jsonl://skill/{skill_id}"
+            skill_path = str(
+                content_extend.get("skillPath")
+                or content_extend.get("skill_path")
+                or content_extend.get("path")
+                or source_path
+            ).strip()
+            skill_content = str(
+                content_extend.get("skillContent")
+                or content_extend.get("skill_content")
+                or content_extend.get("content")
+                or ""
+            ).strip()
             description = skill_desc or skill_name
 
             normalized_star = content_extend.get("stars", 0)
@@ -107,12 +119,14 @@ def parse_jsonl_scanned_items(jsonl_content: str) -> tuple[dict[str, dict], list
                 "id": skill_id,
                 "name": skill_name,
                 "description": description,
-                "skill_path": source_path,
-                "path": source_path,
+                "skill_path": skill_path,
+                "path": skill_path,
+                "content": skill_content,
                 "github_url": str(content_extend.get("githubUrl") or content_extend.get("github_url") or ""),
                 "stars": stars,
                 "is_official": bool(content_extend.get("isOfficial", content_extend.get("is_official", False))),
                 "author": str(content_extend.get("author") or ""),
+                "content_hash": str(content_extend.get("contentHash") or content_extend.get("content_hash") or ""),
                 "content_extend_param": dict(content_extend),
             }
             if source_path not in seen_paths:
@@ -122,4 +136,3 @@ def parse_jsonl_scanned_items(jsonl_content: str) -> tuple[dict[str, dict], list
             LOGGER.warning("skip invalid json item #%s: %s", item_no, exc)
             continue
     return scanned, ordered_paths
-

@@ -41,6 +41,7 @@ class ReviewFindingDraft:
     gate_recommendation: GateRecommendation
     evidence: list[dict[str, Any]]
     finding_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

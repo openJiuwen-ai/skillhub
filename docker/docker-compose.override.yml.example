@@ -1,0 +1,80 @@
+# docker-compose.override.yml
+#
+# 此文件供有外部 MySQL / MinIO / Redis 的开发者跳过对应服务。
+# Docker Compose 自动合并同名目录下的 override 文件，无需额外 -f 参数。
+#
+# 用法示例（在仓库根目录执行）：
+#   1. 复制此文件为 docker/docker-compose.override.yml（如果尚未存在）
+#   2. 按需取消注释并修改
+#   3. docker compose -f docker/docker-compose.yml --env-file .env up -d --build
+#
+# 也可以创建多个 override 文件，通过 -f 指定：
+#   docker compose -f docker/docker-compose.yml -f docker/my-override.yml up -d
+#
+# 注意：Docker Compose 对 depends_on 是合并（union）而非覆盖，
+# override 中写子集不会删除 base 中已存在的条目。
+# 使用 !reset {} 清除 base 的 depends_on 后再写保留项（需要 Compose 2.24+）。
+
+# ── 示例 A：使用外部 MySQL，跳过内置 MySQL 容器 ──────────────────────
+# 取消注释后将不启动 MySQL 容器；backend 直接连到外部 MySQL。
+
+# services:
+#   mysql:
+#     profiles: ["disabled"]
+#   backend:
+#     depends_on: !reset {}
+#     depends_on:
+#       redis:
+#         condition: service_healthy
+#       minio-init:
+#         condition: service_completed_successfully
+#     environment:
+#       DB_HOST: 192.168.1.100
+#       DB_PORT: "3306"
+#       DB_USER: myuser
+#       DB_PASSWORD: mypassword
+
+# ── 示例 B：使用外部 Redis，跳过内置 Redis 容器 ───────────────────────
+
+# services:
+#   redis:
+#     profiles: ["disabled"]
+#   backend:
+#     depends_on: !reset {}
+#     depends_on:
+#       mysql:
+#         condition: service_healthy
+#       minio-init:
+#         condition: service_completed_successfully
+#     environment:
+#       REDIS_HOST: 192.168.1.100
+#       REDIS_PORT: "6380"
+
+# ── 示例 C：使用外部 MinIO/OBS，跳过内置 MinIO 容器 ───────────────────
+
+# services:
+#   minio:
+#     profiles: ["disabled"]
+#   minio-init:
+#     profiles: ["disabled"]
+#   backend:
+#     depends_on: !reset {}
+#     depends_on:
+#       mysql:
+#         condition: service_healthy
+#       redis:
+#         condition: service_healthy
+#     environment:
+#       MARKET_S3_ENDPOINT: http://192.168.1.100:9000
+#       MARKET_S3_ACCESS_KEY: myaccesskey
+#       MARKET_S3_SECRET_KEY: mysecretkey
+
+# ── 示例 D：使用 PyPI 镜像加速构建 ─────────────────────────────────────
+# 取消注释后 backend 构建时使用国内镜像，加快下载。
+
+# services:
+#   backend:
+#     build:
+#       args:
+#         INDEX_URL: https://mirrors.aliyun.com/pypi/simple
+#         TRUSTED_HOST: mirrors.aliyun.com

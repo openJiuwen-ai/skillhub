@@ -7,6 +7,10 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
+DEFAULT_AUTH_USER_API_URL = "https://gitcode.com/api/v5/user"
+DEFAULT_GITHUB_USER_API_URL = "https://api.github.com/user"
+
+
 def _default_privacy_statement_file() -> str:
     """
     默认隐私声明文件路径。
@@ -29,9 +33,10 @@ class Settings(BaseSettings):
 
     app_name: str = "Store Service"
     app_version: str = "0.1.0"
-    debug: bool = True
+    debug: bool = False
 
-    host: str = "0.0.0.0"
+    # 默认仅监听本机回环（secure by default）；局域网/容器场景用 STORE_HOST 显式指定
+    host: str = "127.0.0.1"
     port: int = 8100
     reload: bool = Field(default=False, validation_alias=AliasChoices("STORE_RELOAD", "RELOAD"))
 
@@ -55,8 +60,12 @@ class Settings(BaseSettings):
     system_admin_token: str = Field(default="", validation_alias="SYSTEM_ADMIN_TOKEN")
     # 系统管理员用户标识（管理员请求时作为 publisher_id / user_id 写入）；默认 system_admin
     system_admin_user: str = Field(default="system_admin", validation_alias="SYSTEM_ADMIN_USER")
-    # 用户信息接口（默认 GitCode https://gitcode.com/api/v5/user，使用 query access_token）
-    auth_user_api_url: str = Field(default="https://gitcode.com/api/v5/user", validation_alias="AUTH_USER_API_URL")
+    # 用户信息接口：GitCode，query 参数 access_token；默认地址见 DEFAULT_AUTH_USER_API_URL
+    auth_user_api_url: str = Field(default=DEFAULT_AUTH_USER_API_URL, validation_alias="AUTH_USER_API_URL")
+
+    # 市场搜索框下方标签筛选：运营配置优先展示的标签（逗号分隔），
+    # 其余标签按使用次数自动推荐；为空则纯按热门度推荐
+    market_featured_tags: str = Field(default="", validation_alias="MARKET_FEATURED_TAGS")
 
     # OAuth 回调后浏览器重定向到此前缀下的 /login?oauth_session=...（须与前端访问前缀一致；根路径默认无 /hub）
     oauth_frontend_origin: str = Field(
@@ -64,11 +73,21 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_OAUTH_FRONTEND_ORIGIN", "OAUTH_FRONTEND_ORIGIN"),
     )
 
-    # 可选：Redis（多 worker / 多实例时必须配置，否则 OAuth pending 仅存内存）；REDIS_HOST 为空则仅用进程内存
+    # 可选：Redis / 华为云 DCS（多 worker / 多实例时必须配置，否则 OAuth pending 仅存内存）；REDIS_HOST 为空则仅用进程内存
+    # CACHE_BACKEND=redis|dcs：dcs 时默认启用 SSL（可用 MARKET_REDIS_SSL 显式覆盖）
     redis_host: str = Field(default="", validation_alias=AliasChoices("MARKET_REDIS_HOST", "REDIS_HOST"))
     redis_port: int = Field(default=6379, validation_alias=AliasChoices("MARKET_REDIS_PORT", "REDIS_PORT"))
     redis_db: int = Field(default=0, validation_alias=AliasChoices("MARKET_REDIS_DB", "REDIS_DB"))
     redis_password: str = Field(default="", validation_alias="MARKET_REDIS_PASSWORD")
+    cache_backend: str = Field(
+        default="redis",
+        validation_alias=AliasChoices("MARKET_CACHE_BACKEND", "CACHE_BACKEND", "REDIS_BACKEND"),
+    )
+    # 空字符串 = 未显式配置，由 cache_backend 推断；true/false 显式覆盖
+    redis_ssl_env: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_REDIS_SSL", "REDIS_SSL"),
+    )
 
     # GitCode OAuth2（应用回调 URL 须与 gitcode_oauth_redirect_uri 完全一致）
     gitcode_oauth_enabled: bool = Field(
@@ -117,8 +136,9 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MARKET_GITHUB_OAUTH_REDIRECT_URI", "GITHUB_OAUTH_REDIRECT_URI"),
     )
+    # public_repo scope：标星公开仓库需要（PUT /user/starred/{owner}/{repo}）
     github_oauth_scope: str = Field(
-        default="read:user user:email",
+        default="read:user user:email public_repo",
         validation_alias=AliasChoices("MARKET_GITHUB_OAUTH_SCOPE", "GITHUB_OAUTH_SCOPE"),
     )
     github_oauth_authorize_url: str = Field(
@@ -130,8 +150,57 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_GITHUB_OAUTH_TOKEN_URL", "GITHUB_OAUTH_TOKEN_URL"),
     )
     github_auth_user_api_url: str = Field(
-        default="https://api.github.com/user",
+        default=DEFAULT_GITHUB_USER_API_URL,
         validation_alias=AliasChoices("MARKET_GITHUB_AUTH_USER_API_URL", "GITHUB_AUTH_USER_API_URL"),
+    )
+    # 一键标星功能开关：false 时前端不显示按钮、后端 POST /github/watch 返回 404
+    github_star_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_GITHUB_STAR_ENABLED", "GITHUB_STAR_ENABLED"),
+    )
+    # 一键标星目标仓库：逗号分隔的仓库名列表（不含 owner 前缀）。
+    # 为空时回退使用硬编码默认值（见 github_watch.py DEFAULT_STAR_REPO_NAMES）。
+    # 示例：MARKET_GITHUB_STAR_REPOS=jiuwenswarm,agent-studio,agent-core
+    github_star_repos: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_GITHUB_STAR_REPOS", "GITHUB_STAR_REPOS",
+        ),
+    )
+    # 一键标星目标组织：标星的 GitHub 组织名，默认 openJiuwen-ai。
+    github_star_org: str = Field(
+        default="openJiuwen-ai",
+        validation_alias=AliasChoices("MARKET_GITHUB_STAR_ORG", "GITHUB_STAR_ORG"),
+    )
+
+    # AgentOS OAuth2（Control Panel）
+    agentos_oauth_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_ENABLED", "AGENTOS_OAUTH_ENABLED"),
+    )
+    agentos_oauth_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_CLIENT_ID", "AGENTOS_OAUTH_CLIENT_ID"),
+    )
+    agentos_oauth_client_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_CLIENT_SECRET", "AGENTOS_OAUTH_CLIENT_SECRET"),
+    )
+    agentos_oauth_redirect_uri: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_REDIRECT_URI", "AGENTOS_OAUTH_REDIRECT_URI"),
+    )
+    agentos_oauth_authorize_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_AUTHORIZE_URL", "AGENTOS_OAUTH_AUTHORIZE_URL"),
+    )
+    agentos_oauth_token_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_OAUTH_TOKEN_URL", "AGENTOS_OAUTH_TOKEN_URL"),
+    )
+    agentos_auth_user_api_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_AGENTOS_AUTH_USER_API_URL", "AGENTOS_AUTH_USER_API_URL"),
     )
 
     # 发布页「下载模板」zip：桶内对象 Key（私有桶）；为空则 GET /plugins/publish-template 返回 503
@@ -151,6 +220,34 @@ class Settings(BaseSettings):
     retrieval_plugin_index_obs_prefix: str = Field(
         default="plugins-index",
         validation_alias=AliasChoices("MARKET_RETRIEVAL_PLUGIN_INDEX_OBS_PREFIX", "RETRIEVAL_PLUGIN_INDEX_OBS_PREFIX"),
+    )
+    retrieval_agent_plugin_index_obs_prefix: str = Field(
+        default="agent-plugins-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_PLUGIN_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_PLUGIN_INDEX_OBS_PREFIX",
+        ),
+    )
+    retrieval_agent_template_index_obs_prefix: str = Field(
+        default="agent-templates-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_TEMPLATE_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_TEMPLATE_INDEX_OBS_PREFIX",
+        ),
+    )
+    retrieval_agent_group_index_obs_prefix: str = Field(
+        default="agent-groups-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_GROUP_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_GROUP_INDEX_OBS_PREFIX",
+        ),
+    )
+    retrieval_agent_mcp_index_obs_prefix: str = Field(
+        default="agent-mcps-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_MCP_INDEX_OBS_PREFIX",
+            "RETRIEVAL_AGENT_MCP_INDEX_OBS_PREFIX",
+        ),
     )
 
     # 检索模块：OBS 上保留的索引版本数（默认 168 = 每小时构建一次保留最近一周）
@@ -182,6 +279,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # 火爆值（hot_score）定时重算 cron（标准 5 字段，默认每 2 小时整点触发）。
+    # 近期下载使用 7 天滚动窗口（业界 marketplace trending 标准），评分本身滞后，2 小时内排名几乎无变化；频繁重算只增 DB 负载无收益。
+    # 属于核心市场功能，不受 recommender_enabled 控制。
+    hot_score_recompute_cron: str = Field(
+        default="0 */2 * * *",
+        validation_alias=AliasChoices("MARKET_HOT_SCORE_RECOMPUTE_CRON", "HOT_SCORE_RECOMPUTE_CRON"),
+    )
+    # 启动时是否立即重算一次 hot_score（默认 true，确保首次加载即有火爆值）
+    hot_score_recompute_on_startup: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MARKET_HOT_SCORE_RECOMPUTE_ON_STARTUP", "HOT_SCORE_RECOMPUTE_ON_STARTUP"),
+    )
+    # 「热门」页签只展示最火爆的前 N 个（total 同步封顶，不暴露全量列表）
+    hot_list_top_k: int = Field(
+        default=100,
+        ge=1,
+        le=2000,
+        validation_alias=AliasChoices("MARKET_HOT_LIST_TOP_K", "HOT_LIST_TOP_K"),
+    )
+
     # 检索模块：直接指定 skill / plugin 索引的 OBS URI（obs://bucket/path 格式）
     # 设置后跳过 list_index_dirs 自动发现，优先用于测试或手动指定已有索引
     retrieval_skill_index_path: str = Field(
@@ -191,6 +308,34 @@ class Settings(BaseSettings):
     retrieval_plugin_index_path: str = Field(
         default="",
         validation_alias=AliasChoices("MARKET_RETRIEVAL_PLUGIN_INDEX_PATH", "RETRIEVAL_PLUGIN_INDEX_PATH"),
+    )
+    retrieval_agent_plugin_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_PLUGIN_INDEX_PATH",
+            "RETRIEVAL_AGENT_PLUGIN_INDEX_PATH",
+        ),
+    )
+    retrieval_agent_template_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_TEMPLATE_INDEX_PATH",
+            "RETRIEVAL_AGENT_TEMPLATE_INDEX_PATH",
+        ),
+    )
+    retrieval_agent_group_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_GROUP_INDEX_PATH",
+            "RETRIEVAL_AGENT_GROUP_INDEX_PATH",
+        ),
+    )
+    retrieval_agent_mcp_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_AGENT_MCP_INDEX_PATH",
+            "RETRIEVAL_AGENT_MCP_INDEX_PATH",
+        ),
     )
 
     # 检索模块：模型 / API 配置（非密钥字段，密钥在 main.py startup 中经 SecurityUtils 解密后注入）
@@ -250,7 +395,17 @@ class Settings(BaseSettings):
         default="embedding",
         validation_alias=AliasChoices("MARKET_RETRIEVAL_SEARCH_METHOD", "RETRIEVAL_SEARCH_METHOD"),
     )
-    # 在线检索过滤阈值：卡掉低相关召回结果；可配置为 None 关闭
+    # 在线检索过滤阈值：卡掉低相关召回结果；绝对阈值未设置时关闭
+    retrieval_embedding_min_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        allow_inf_nan=False,
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_EMBEDDING_MIN_SCORE",
+            "RETRIEVAL_EMBEDDING_MIN_SCORE",
+        ),
+    )
     retrieval_embedding_relative_min_score: float | None = Field(
         default=0.9,
         ge=0.0,
@@ -260,12 +415,32 @@ class Settings(BaseSettings):
             "RETRIEVAL_EMBEDDING_RELATIVE_MIN_SCORE",
         ),
     )
+    retrieval_bm25_min_score: float | None = Field(
+        default=None,
+        ge=0.0,
+        allow_inf_nan=False,
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_BM25_MIN_SCORE",
+            "RETRIEVAL_BM25_MIN_SCORE",
+        ),
+    )
     retrieval_bm25_min_query_term_matches: int = Field(
         default=0,
         ge=0,
         validation_alias=AliasChoices(
             "MARKET_RETRIEVAL_BM25_MIN_QUERY_TERM_MATCHES",
             "RETRIEVAL_BM25_MIN_QUERY_TERM_MATCHES",
+        ),
+    )
+    # RRF 融合时 BM25 的权重占比；向量权重为 1 - 此值
+    retrieval_rrf_bm25_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        allow_inf_nan=False,
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_RRF_BM25_WEIGHT",
+            "RETRIEVAL_RRF_BM25_WEIGHT",
         ),
     )
 
@@ -299,15 +474,86 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── 通用 Marketplace API 统一限流 ─────────────────────────
+    # 总开关：默认 false，升级不改变存量部署行为；显式置 true 后限流中间件才生效。
+    rate_limiting_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_RATE_LIMITING_ENABLED", "RATE_LIMITING_ENABLED"),
+    )
+    # 各档位每分钟限额（0 = 关闭该档位）；档位与路由规则见 core/rate_limit.py::_DEFAULT_RULES
+    # 公开查询（搜索/详情/下载/群组发现等 GET）：按 IP
+    rate_limit_public_read_per_minute: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MARKET_RATE_LIMIT_PUBLIC_READ_PER_MINUTE",
+            "RATE_LIMIT_PUBLIC_READ_PER_MINUTE",
+        ),
+    )
+    # 发布（POST /api/v1/plugins，含新版本）：按凭证用户
+    rate_limit_publish_per_minute: int = Field(
+        default=10,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MARKET_RATE_LIMIT_PUBLISH_PER_MINUTE",
+            "RATE_LIMIT_PUBLISH_PER_MINUTE",
+        ),
+    )
+    # 批量/重型查询（interactions/batch、recommend*）：按凭证用户
+    rate_limit_batch_per_minute: int = Field(
+        default=5,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MARKET_RATE_LIMIT_BATCH_PER_MINUTE",
+            "RATE_LIMIT_BATCH_PER_MINUTE",
+        ),
+    )
+    # 登录/OAuth（/api/v1/auth/*）：按 IP
+    rate_limit_auth_per_minute: int = Field(
+        default=20,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MARKET_RATE_LIMIT_AUTH_PER_MINUTE",
+            "RATE_LIMIT_AUTH_PER_MINUTE",
+        ),
+    )
+    # 其余变更类端点兜底（交互/群组管理/通知/标星/审核等）：按凭证用户
+    rate_limit_default_write_per_minute: int = Field(
+        default=30,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MARKET_RATE_LIMIT_DEFAULT_WRITE_PER_MINUTE",
+            "RATE_LIMIT_DEFAULT_WRITE_PER_MINUTE",
+        ),
+    )
+    # 是否信任 X-Forwarded-For / X-Real-IP 作为客户端 IP（用于 IP 维度限流）。
+    # 默认 True：兼容 SkillHub 常规 nginx 前置部署（由代理覆写转发头）。
+    # 后端直连暴露（无受信代理覆盖该头）时应设为 false，避免客户端伪造转发头绕过限流。
+    rate_limit_trust_forwarded: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MARKET_RATE_LIMIT_TRUST_FORWARDED",
+            "RATE_LIMIT_TRUST_FORWARDED",
+        ),
+    )
+
     # Skill 发布自动审查总开关
     skill_review_enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("MARKET_SKILL_REVIEW_ENABLED", "SKILL_REVIEW_ENABLED"),
     )
 
-    # 开关：开启后服务端拒绝发布非 skill-like 类型（tools / mcp-stdio / restful-api 等会执行代码的插件），
-    # 仅允许 skill / swarmskill 上架。用于从发布入口直接关闭“可执行非 skill 插件”的上架，消除任意代码执行风险。
-    # 默认开启（安全优先）；如需放开，置 MARKET_BLOCK_NONSKILL_PLUGIN_PUBLISH=false。
+    # 开关：允许审核员审核自己发布的 Skill。默认关闭（安全优先）；如需自审自审场景，置
+    # MARKET_ALLOW_SELF_MODERATION=true。仅当发布者同时也是拥有审核权限的市场审核员时才生效，
+    # 不会绕过 is_market_moderation_admin 权限校验。
+    allow_self_moderation: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_ALLOW_SELF_MODERATION", "ALLOW_SELF_MODERATION"),
+    )
+
+    # 开关：开启后服务端拒绝发布非 moderated 类型（tools / mcp-stdio / restful-api 等），
+    # 仅允许 Skill / SwarmSkill / 四类 Agent 上架。默认开启（安全优先）；
+    # 如需放开历史插件类型，置 MARKET_BLOCK_NONSKILL_PLUGIN_PUBLISH=false。
     block_nonskill_plugin_publish: bool = Field(
         default=True,
         validation_alias=AliasChoices(
@@ -315,7 +561,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # Skill 能力默认模型配置：预留给非审查类 Skill 能力使用，系统审查不会隐式回退到这里
+    # Skill 能力默认模型配置：预留给非审查类 Skill 能力使用，审查不会隐式回退到这里
     skill_model_default_base_url: str = Field(
         default="",
         validation_alias=AliasChoices("MARKET_SKILL_MODEL_DEFAULT_BASE_URL", "SKILL_MODEL_DEFAULT_BASE_URL"),
@@ -337,7 +583,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # Skill 审查专用模型配置；开启系统审查时必须显式配置完整，缺省按 fail-close 处理
+    # Skill 审查专用模型配置；开启审查时必须显式配置完整，缺省按 fail-close 处理
     skill_review_model_base_url: str = Field(
         default="",
         validation_alias=AliasChoices("MARKET_SKILL_REVIEW_MODEL_BASE_URL", "SKILL_REVIEW_MODEL_BASE_URL"),
@@ -365,6 +611,69 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_INTERFACE_LOG_ENABLED", "INTERFACE_LOG_ENABLED"),
     )
 
+    # Skill Playground：在线试用功能开关。关闭时后端路由不注册，前端按钮不显示，不影响现有功能。
+    playground_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_PLAYGROUND_ENABLED", "PLAYGROUND_ENABLED"),
+    )
+    # skill-runner 服务地址（Playground 后端；仅 playground_enabled=true 时生效）
+    skill_runner_url: str = Field(
+        default="http://127.0.0.1:8900",
+        validation_alias=AliasChoices("MARKET_SKILL_RUNNER_URL", "SKILL_RUNNER_URL"),
+    )
+    # Playground 每日配额：每用户每自然日最多创建的 session 数（0 = 不限制；管理员始终不受限）
+    playground_daily_limit: int = Field(
+        default=20,
+        ge=0,
+        validation_alias=AliasChoices("MARKET_PLAYGROUND_DAILY_LIMIT", "PLAYGROUND_DAILY_LIMIT"),
+    )
+    # Playground 每用户同时可活跃的 session 数上限（0 = 不限制；管理员始终不受限）
+    playground_max_concurrent_sessions: int = Field(
+        default=3,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MARKET_PLAYGROUND_MAX_CONCURRENT_SESSIONS", "PLAYGROUND_MAX_CONCURRENT_SESSIONS"
+        ),
+    )
+    # Playground 每用户每分钟发消息上限（0 = 不限制；管理员始终不受限）
+    playground_message_rate_per_minute: int = Field(
+        default=10,
+        ge=0,
+        validation_alias=AliasChoices("MARKET_PLAYGROUND_MSG_RATE_PER_MIN", "PLAYGROUND_MSG_RATE_PER_MIN"),
+    )
+    # 每用户最多创建的组群数（0 = 不限制；特权用户始终不受限）
+    max_groups_per_user: int = Field(
+        default=10,
+        ge=0,
+        validation_alias=AliasChoices("MARKET_MAX_GROUPS_PER_USER", "MAX_GROUPS_PER_USER"),
+    )
+    # 每组群最多成员数（0 = 不限制；特权用户始终不受限）
+    max_members_per_group: int = Field(
+        default=500,
+        ge=0,
+        validation_alias=AliasChoices("MARKET_MAX_MEMBERS_PER_GROUP", "MAX_MEMBERS_PER_GROUP"),
+    )
+    # Playground 多实例开关：false（默认）= 单实例，会话跟踪状态存进程内存，行为与
+    # 引入本开关前完全一致；true = 状态外置 Redis（复用 REDIS_HOST 等配置，必须已配置，
+    # 否则启动即报错），marketplace 可多副本部署，且支持 skill-runner 多实例的粘性路由。
+    playground_multi_instance: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_PLAYGROUND_MULTI_INSTANCE", "PLAYGROUND_MULTI_INSTANCE"),
+    )
+    # 多实例模式下会话注册记录的 Redis TTL 兜底（秒）；应 ≥ skill-runner 会话最大生命周期
+    # 加余量。正常路径由 DELETE/beacon/探活清理，TTL 只兜底异常残留。
+    playground_session_ttl_seconds: int = Field(
+        default=7200,
+        ge=60,
+        validation_alias=AliasChoices("MARKET_PLAYGROUND_SESSION_TTL", "PLAYGROUND_SESSION_TTL"),
+    )
+    # Playground 上传单文件字节上限（入口主闸；会话累计/数量上限在 skill-runner 侧）
+    playground_upload_max_file_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        gt=0,
+        validation_alias=AliasChoices("MARKET_PLAYGROUND_UPLOAD_MAX_FILE_BYTES", "PLAYGROUND_UPLOAD_MAX_FILE_BYTES"),
+    )
+
     # ClawHub CLI 兼容：与 marketplace 同进程，路由挂在 /api/v1
     clawhub_compat_enabled: bool = Field(
         default=True,
@@ -373,6 +682,79 @@ class Settings(BaseSettings):
     clawhub_plugin_type: str = Field(
         default="skill",
         validation_alias=AliasChoices("MARKET_CLAWHUB_PLUGIN_TYPE", "CLAWHUB_PLUGIN_TYPE"),
+    )
+
+    # Recommender（个性化推荐：Milvus + Redis 历史 / 下载量兜底）。默认关闭，本地部署按需开启。
+    recommender_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_RECOMMENDER_ENABLED", "RECOMMENDER_ENABLED"),
+    )
+    # 首页「推荐精选」一次召回上限，再按 page/page_size 切片
+    rec_list_top_k: int = Field(
+        default=50,
+        ge=1,
+        le=2000,
+        validation_alias=AliasChoices("MARKET_REC_LIST_TOP_K", "REC_LIST_TOP_K"),
+    )
+    # POST /recommend 公开页进程内缓存条数；Swarm 首页 top_k 更小时切前缀。改后需重启。
+    rec_plaza_cache_top_k: int = Field(
+        default=30,
+        ge=1,
+        le=500,
+        validation_alias=AliasChoices("MARKET_REC_PLAZA_CACHE_TOP_K", "REC_PLAZA_CACHE_TOP_K"),
+    )
+    milvus_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=AliasChoices("MARKET_MILVUS_HOST", "MILVUS_HOST"),
+    )
+    milvus_port: int = Field(
+        default=19530,
+        validation_alias=AliasChoices("MARKET_MILVUS_PORT", "MILVUS_PORT"),
+    )
+    milvus_collection: str = Field(
+        default="skill_index",
+        validation_alias=AliasChoices("MARKET_MILVUS_COLLECTION", "MILVUS_COLLECTION"),
+    )
+    # Optional Milvus auth (when server authorizationEnabled=true; default root/Milvus)
+    milvus_user: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_MILVUS_USER", "MILVUS_USER"),
+    )
+    milvus_password: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_MILVUS_PASSWORD", "MILVUS_PASSWORD"),
+    )
+    rec_package_sync_cron: str = Field(
+        default="30 * * * *",
+        validation_alias=AliasChoices("MARKET_REC_PACKAGE_SYNC_CRON", "REC_PACKAGE_SYNC_CRON"),
+    )
+    rec_milvus_incremental_cron: str = Field(
+        default="0 * * * *",
+        validation_alias=AliasChoices(
+            "MARKET_REC_MILVUS_INCREMENTAL_CRON",
+            "REC_MILVUS_INCREMENTAL_CRON",
+        ),
+    )
+    rec_milvus_full_cron: str = Field(
+        default="0 3 * * *",
+        validation_alias=AliasChoices("MARKET_REC_MILVUS_FULL_CRON", "REC_MILVUS_FULL_CRON"),
+    )
+    rec_redis_sync_cron: str = Field(
+        default="15 * * * *",
+        validation_alias=AliasChoices("MARKET_REC_REDIS_SYNC_CRON", "REC_REDIS_SYNC_CRON"),
+    )
+    # 服务启动时立即跑一轮离线任务（redis_sync + milvus_full）；默认开启
+    rec_rebuild_on_startup: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MARKET_REC_REBUILD_ON_STARTUP", "REC_REBUILD_ON_STARTUP"),
+    )
+    redis_topk_install_key: str = Field(
+        default="skill_rec:topk:install",
+        validation_alias=AliasChoices("MARKET_REDIS_TOPK_INSTALL_KEY", "REDIS_TOPK_INSTALL_KEY"),
+    )
+    redis_user_seq_key_prefix: str = Field(
+        default="skill_rec:user",
+        validation_alias=AliasChoices("MARKET_REDIS_USER_SEQ_KEY_PREFIX", "REDIS_USER_SEQ_KEY_PREFIX"),
     )
 
     # 隐私声明：本地 Markdown（UTF-8）。默认 marketplace/privacy-statement.md；可用环境变量覆盖路径；显式置空则不再读文件

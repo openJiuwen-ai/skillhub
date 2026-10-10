@@ -2,12 +2,15 @@
 
 import asyncio
 import hashlib
+import json
 import tempfile
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path as FsPath
-from typing import Any, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import (
@@ -42,9 +45,11 @@ from plugins_market.core.context import (
     set_user_id,
     set_user_name,
     get_user_id as get_user_id_from_context,
+    get_user_id_or_none,
     get_user_name,
 )
 from plugins_market.core.viewer_context import ViewerContext
+from plugins_market.core.cache import cache_delete, cache_get, cache_set, cache_set_nx
 from plugins_market.core.config import settings
 from plugins_market.core.database import get_db
 from plugins_market.core.errors import (
@@ -63,12 +68,22 @@ from plugins_market.core.operation_log import (
     operation_failure_result,
     operation_log_fields,
 )
+from plugins_market.core.rate_limit import client_ip_from_scope
 from plugins_market.core.s3_storage_client import get_storage_client
 from plugins_market.repositories.git_source_repository import GitSourceRepository
-from plugins_market.validation.constants import MAX_FILE_SIZE, ZIP_STREAM_READ_CHUNK_BYTES
+from plugins_market.validation.constants import (
+    MAX_FILE_SIZE,
+    RUNTIME_AGENT_MCP,
+    RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_TEMPLATE,
+    ZIP_STREAM_READ_CHUNK_BYTES,
+)
 from plugins_market.imports.skill_import_service import skill_import_from_bundle
 from plugins_market.schemas.common import ResponseModel
 from plugins_market.schemas.plugin import (
+    AssetVersionDeleteData,
+    AssetImportResponse,
+    CategoryTotalsData,
     GitSourceCreateRequest,
     GitSourceItem,
     GitSourceListResponse,
@@ -87,8 +102,10 @@ from plugins_market.schemas.plugin import (
     SkillModerationRequest,
     SkillModerationResult,
     SkillModerationAuditListResponse,
+    TagOption,
     VersionFilesData,
 )
+from plugins_market.repositories import MarketAssetRepository
 from plugins_market.services import (
     PublishError,
     delete_plugin_version_service,
@@ -119,6 +136,18 @@ from plugins_market.core.publish_result import (
 plugin_router = APIRouter(prefix="/plugins", tags=["plugins"])
 artifact_router = APIRouter(prefix="/artifacts", tags=["plugins"])
 logger = get_logger(__name__)
+
+
+def _asset_audit_resource_type(plugin_type: str | None) -> str:
+    """Keep each supported market asset type visible in audit records."""
+    return {
+        ResourceType.SKILL: ResourceType.SKILL,
+        ResourceType.SWARMSKILL: ResourceType.SWARMSKILL,
+        ResourceType.PLUGIN: ResourceType.PLUGIN,
+        RUNTIME_AGENT_PLUGIN: ResourceType.AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE: ResourceType.AGENT_TEMPLATE,
+        RUNTIME_AGENT_MCP: ResourceType.AGENT_MCP,
+    }.get((plugin_type or "").strip().lower(), ResourceType.PLUGIN)
 
 
 @background_task_exception_boundary(
@@ -194,8 +223,11 @@ def _run_git_source_sync_background_safe(
         user_agent=user_agent,
     )
 
+
 _skill_import_req_times: deque[float] = deque()
 _skill_import_rl_lock = asyncio.Lock()
+_asset_import_req_times: deque[float] = deque()
+_asset_import_rl_lock = asyncio.Lock()
 _git_sync_req_times_by_user: dict[str, deque[float]] = {}
 _git_sync_rl_lock = asyncio.Lock()
 _git_sync_rl_op_count = 0
@@ -218,6 +250,24 @@ async def _enforce_skill_import_rate_limit() -> None:
                 error="rate_limited",
             ) from None
         _skill_import_req_times.append(now)
+
+
+async def _enforce_asset_import_rate_limit() -> None:
+    limit = settings.skill_import_rate_limit_per_minute
+    if limit <= 0:
+        return
+    async with _asset_import_rl_lock:
+        now = time.monotonic()
+        window = 60.0
+        while _asset_import_req_times and _asset_import_req_times[0] < now - window:
+            _asset_import_req_times.popleft()
+        if len(_asset_import_req_times) >= limit:
+            raise _auth_error(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "asset-import 请求过于频繁，请稍后再试",
+                error="rate_limited",
+            ) from None
+        _asset_import_req_times.append(now)
 
 
 def _prune_git_sync_rate_limit_buckets(*, now: float, window: float) -> None:
@@ -322,9 +372,7 @@ def _log_operation_failure_from_error(event: str, error: Exception, **fields: An
         if error_class and payload.get("error_class") is None:
             payload["error_class"] = error_class
     result = operation_failure_result(payload)
-    log_method = (
-        logger.info if is_invalid_or_denied_error(payload) else logger.warning
-    )
+    log_method = logger.info if is_invalid_or_denied_error(payload) else logger.warning
     log_method(
         event,
         **complete_operation_result(
@@ -345,6 +393,25 @@ def _raise_with_operation_failure_log(event: str, error: Exception, **fields: An
     except Exception:
         pass
     raise error
+
+
+def _normalize_asset_visibility(value: Optional[str]) -> str:
+    v = (value or "public").strip().lower()
+    if v not in ("public", "private"):
+        raise make_business_error(
+            status_code=400,
+            message="visibility 仅支持 public 或 private",
+            error="invalid_visibility",
+            error_class="validation",
+        )
+    return v
+
+
+def _parse_publish_tags(raw: Optional[str]) -> Optional[list[str]]:
+    if not raw or not raw.strip():
+        return None
+    tags = [part.strip() for part in raw.replace("，", ",").split(",") if part.strip()]
+    return tags or None
 
 
 def _parse_fail_fast_query(
@@ -416,11 +483,24 @@ class PublishFormOptional:
         plugin_version: Optional[str] = Form(None),
         version_desc: Optional[str] = Form(None),
         force: bool = Form(False),
+        visibility: Optional[str] = Form("public"),
+        asset_name: Optional[str] = Form(
+            None,
+            description="市场包 name；裸 agent 包发布时必填或与 manifest.id 一致",
+        ),
+        display_name: Optional[str] = Form(None),
+        description: Optional[str] = Form(None),
+        tags: Optional[str] = Form(None, description="逗号分隔标签，写入 plugin.yaml metadata.tags"),
     ):
         self.plugin_id = plugin_id.strip() if plugin_id else None
         self.plugin_version = plugin_version.strip() if plugin_version else None
         self.version_desc = version_desc.strip() if version_desc else None
         self.force = force
+        self.visibility = _normalize_asset_visibility(visibility)
+        self.asset_name = asset_name.strip() if asset_name else None
+        self.display_name = display_name.strip() if display_name else None
+        self.description = description.strip() if description else None
+        self.tags = tags.strip() if tags else None
 
 
 def build_publish_form(
@@ -434,6 +514,11 @@ def build_publish_form(
         plugin_version=optional.plugin_version,
         version_desc=optional.version_desc,
         force=optional.force,
+        visibility=optional.visibility,
+        asset_name=optional.asset_name,
+        display_name=optional.display_name,
+        description=optional.description,
+        tags=_parse_publish_tags(optional.tags),
     )
 
 
@@ -568,7 +653,8 @@ async def publish_plugin(
         _log_operation_started("plugin publish", filename=form.file.filename)
         try:
             content = await form.file.read()
-            result = plugin_publish(
+            result = await asyncio.to_thread(
+                plugin_publish,
                 user_id=acting_user_id or "",
                 content=content,
                 filename=form.file.filename,
@@ -577,18 +663,21 @@ async def publish_plugin(
                 plugin_version=form.plugin_version,
                 version_desc=form.version_desc,
                 force=form.force,
+                visibility=form.visibility,
                 db=db,
                 storage=storage,
                 publisher_name_override=publisher_name_override,
+                is_system_token=is_system_token,
+                asset_name=form.asset_name,
+                display_name=form.display_name,
+                description=form.description,
+                tags=form.tags,
             )
         except (PublishError, HTTPException) as exc:
             _raise_with_operation_failure_log("plugin publish", exc, filename=form.file.filename)
+        asset_resource_type = _asset_audit_resource_type(result.plugin_type)
         bind_operation_resource(
-            resource_type=(
-                "skill"
-                if is_skill_like_plugin_type(result.plugin_type)
-                else "plugin"
-            ),
+            resource_type=asset_resource_type,
             resource_id=result.plugin_id,
             resource_version=result.version,
         )
@@ -610,7 +699,7 @@ async def publish_plugin(
 
         is_skill_like = is_skill_like_plugin_type(result.plugin_type)
         event_type = "SKILL_MANAGE" if is_skill_like else "PLUGIN_MANAGE"
-        resource_type = "skill" if is_skill_like else "plugin"
+        resource_type = asset_resource_type
         audit_log(
             event_type=event_type,
             action="PUBLISH",
@@ -624,6 +713,9 @@ async def publish_plugin(
             user_agent=request.headers.get("user-agent"),
             extra={
                 "force": form.force,
+                "visibility": form.visibility,
+                "asset_type": getattr(result, "asset_type", None),
+                "plugin_type": getattr(result, "plugin_type", None),
                 "skill_name": getattr(result, "name", None) or None,
                 "skill_display_name": getattr(result, "display_name", None) or None,
             },
@@ -632,17 +724,16 @@ async def publish_plugin(
         return ResponseModel(
             code=status.HTTP_200_OK,
             message=(
-                "Skill 已提交，正在自动审查"
+                "资产已提交，正在审查"
                 if result.publish_result == PUBLISH_RESULT_REVIEWING
                 else (
-                    "Skill 已提交，等待人工审核"
+                    "资产已提交，等待审核"
                     if result.publish_result == PUBLISH_RESULT_PENDING_MODERATION
                     else "Publish plugin successfully"
                 )
             ),
             data=result,
         )
-
 
 
 def _template_filename_from_key(key: str) -> str:
@@ -701,19 +792,19 @@ async def get_publish_template_presigned(
     )
 
 
-@plugin_router.post(
-    "/skill-import",
-    response_model=ResponseModel[SkillImportResponse],
-)
-async def skill_import(
+async def _import_uploaded_bundle(
     request: Request,
-    bundle: SkillImportBundle = Depends(build_skill_import_bundle),
-    db: Session = Depends(get_db),
-    storage=Depends(get_storage_client),
-    auth: Tuple[Optional[str], bool, Optional[str], str] = Depends(get_publish_auth),
+    bundle: SkillImportBundle,
+    db: Session,
+    storage,
+    auth: Tuple[Optional[str], bool, Optional[str], str],
+    *,
+    allow_multi_asset: bool,
 ):
-    """批量导入 skill：仅 X-System-Token；须 X-Checksum-SHA256。"""
-    await _enforce_skill_import_rate_limit()
+    if allow_multi_asset:
+        await _enforce_asset_import_rate_limit()
+    else:
+        await _enforce_skill_import_rate_limit()
 
     _token, is_system_token, acting_user_id, _oauth_provider = auth
     if not is_system_token:
@@ -759,7 +850,11 @@ async def skill_import(
                     if written > MAX_FILE_SIZE:
                         raise make_publish_error(
                             status_code=400,
-                            message="技能集合包原始大小超过 512MB 上限",
+                            message=(
+                                "资产集合包原始大小超过 512MB 上限"
+                                if allow_multi_asset
+                                else "技能集合包原始大小超过 512MB 上限"
+                            ),
                             error="payload_too_large",
                             error_class="validation",
                         ) from None
@@ -769,11 +864,23 @@ async def skill_import(
             if hasher.hexdigest() != bundle.checksum:
                 raise make_publish_error(
                     status_code=400,
-                    message="技能集合包 X-Checksum-SHA256 与实际上传内容不一致",
+                    message=(
+                        "资产集合包 X-Checksum-SHA256 与实际上传内容不一致"
+                        if allow_multi_asset
+                        else "技能集合包 X-Checksum-SHA256 与实际上传内容不一致"
+                    ),
                     error="checksum_mismatch",
                     error_class="validation",
                 ) from None
 
+            import_options = {}
+            if allow_multi_asset:
+                import_options.update(
+                    single_entry_name_hint=bundle.file.filename,
+                    is_system_token=True,
+                    publisher_name_override=acting_user_id,
+                    allow_multi_asset=True,
+                )
             data = skill_import_from_bundle(
                 bundle_path=tmp_path,
                 user_id=acting_user_id or "",
@@ -781,6 +888,7 @@ async def skill_import(
                 storage=storage,
                 force=bundle.force,
                 fail_fast=bundle.fail_fast,
+                **import_options,
             )
             result = "success"
             if data.summary.failed > 0 and data.summary.ok > 0:
@@ -836,7 +944,8 @@ async def skill_import(
                 operator_name=settings.system_admin_user,
                 resource_type="skill_bundle",
                 detail=(
-                    f"批量导入 Skill 完成，成功 {data.summary.ok} 个，"
+                    f"批量导入{'资产' if allow_multi_asset else ' Skill '}完成，"
+                    f"成功 {data.summary.ok} 个，"
                     f"失败 {data.summary.failed} 个，跳过 {data.summary.skipped} 个，"
                     f"共 {data.summary.total} 个"
                 ),
@@ -857,7 +966,11 @@ async def skill_import(
 
             return ResponseModel(
                 code=status.HTTP_200_OK,
-                message="Import skills finished",
+                message=(
+                    "Import assets finished"
+                    if allow_multi_asset
+                    else "Import skills finished"
+                ),
                 data=data,
             )
         except (PublishError, HTTPException) as exc:
@@ -874,6 +987,50 @@ async def skill_import(
                     FsPath(upload_tmp_name).unlink(missing_ok=True)
                 except OSError:
                     pass
+
+
+@plugin_router.post(
+    "/skill-import",
+    response_model=ResponseModel[SkillImportResponse],
+)
+async def skill_import(
+    request: Request,
+    bundle: SkillImportBundle = Depends(build_skill_import_bundle),
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage_client),
+    auth: Tuple[Optional[str], bool, Optional[str], str] = Depends(get_publish_auth),
+):
+    """批量导入 skill：仅 X-System-Token；须 X-Checksum-SHA256。"""
+    return await _import_uploaded_bundle(
+        request,
+        bundle,
+        db,
+        storage,
+        auth,
+        allow_multi_asset=False,
+    )
+
+
+@plugin_router.post(
+    "/asset-import",
+    response_model=ResponseModel[AssetImportResponse],
+)
+async def asset_import(
+    request: Request,
+    bundle: SkillImportBundle = Depends(build_skill_import_bundle),
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage_client),
+    auth: Tuple[Optional[str], bool, Optional[str], str] = Depends(get_publish_auth),
+):
+    """批量导入支持的市场资产：仅 X-System-Token；须 X-Checksum-SHA256。"""
+    return await _import_uploaded_bundle(
+        request,
+        bundle,
+        db,
+        storage,
+        auth,
+        allow_multi_asset=True,
+    )
 
 
 @plugin_router.get(
@@ -1010,6 +1167,7 @@ async def delete_git_source_route(
     source_id: str,
     auth: AuthContext = Depends(require_auth),
     db: Session = Depends(get_db),
+    storage=Depends(get_storage_client),
 ):
     set_user_id(auth.acting_user_id)
     src = GitSourceRepository(db).get_by_id(source_id)
@@ -1029,15 +1187,23 @@ async def delete_git_source_route(
         )
         bind_operation_resource(resource_type="git_source", resource_id=source_id)
         try:
-            delete_git_source_for_user(
+            data = delete_git_source_for_user(
                 db=db,
                 user_id=auth.acting_user_id,
                 source_id=source_id,
+                storage=storage,
+                auth=auth,
             )
         except (PublishError, HTTPException) as exc:
             _raise_with_operation_failure_log("delete git source", exc, source_id=source_id)
-        _log_operation_completed("delete git source", result="success", source_id=source_id)
+        _log_operation_completed(
+            "delete git source",
+            result="success",
+            source_id=source_id,
+            deleted_skill_count=data.get("deleted_skill_count"),
+        )
 
+    deleted_skill_count = int(data.get("deleted_skill_count") or 0)
     audit_log(
         event_type="SKILL_MANAGE",
         action="GIT_SOURCE_DELETE",
@@ -1045,12 +1211,12 @@ async def delete_git_source_route(
         operator_name=auth.acting_user_name,
         resource_type="git_source",
         resource_id=source_id,
-        detail="删除 Git 源注册",
+        detail=f"删除 Git 源注册（级联删除关联 Skill {deleted_skill_count} 个）",
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
-        extra=source_snapshot,
+        extra={**(source_snapshot or {}), "deleted_skill_count": deleted_skill_count},
     )
-    return ResponseModel(code=status.HTTP_200_OK, message="ok", data={"deleted": True})
+    return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
 
 
 @plugin_router.get(
@@ -1058,12 +1224,118 @@ async def delete_git_source_route(
     response_model=ResponseModel[PluginListResponse],
 )
 async def list_plugins(
-    query: PluginListQuery = Depends(),
+    query: Annotated[PluginListQuery, Query()],
     db: Session = Depends(get_db),
     storage=Depends(get_storage_client),
     viewer: ViewerContext = Depends(resolve_viewer_context),
 ):
     data = list_plugins_service(query=query, db=db, storage=storage, viewer=viewer)
+    return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
+
+
+# 标签热度变化慢；按 (type, keyword, limit) 缓存 30s，挡住搜索框每键/跨用户的重复子串扫描。
+# 无 Redis 时 cache_get 返回 None、cache_set 静默跳过，端点照常回源计算。
+_TAG_OPTIONS_CACHE_TTL = 30
+
+
+@plugin_router.get(
+    "/tags",
+    response_model=ResponseModel[List[TagOption]],
+)
+async def list_plugin_tags(
+    db: Session = Depends(get_db),
+    plugin_type: Optional[str] = Query(None, description="限定插件类型（如 skill / swarmskill）"),
+    limit: int = Query(20, ge=1, le=100, description="返回的标签数量上限"),
+    keyword: Optional[str] = Query(None, description="标签子串搜索；提供时按子串匹配返回热门度前 N，跳过运营置顶"),
+):
+    """市场搜索框下方的标签筛选选项：按使用次数自动推荐热门标签。
+
+    运营可通过 MARKET_FEATURED_TAGS 配置优先展示的标签（逗号分隔），
+    配置中的标签按配置顺序排前，其余按使用次数降序补齐。
+    数据库中无可见资产使用的标签（count=0）不展示，避免点击后空结果。
+
+    keyword 非空时进入子串搜索模式：在全量标签上 ilike 匹配，按使用次数降序
+    返回前 limit 个，跳过运营置顶--用于覆盖长尾标签（低 count 但名字匹配）。
+    """
+    repo = MarketAssetRepository(db)
+    pt = (plugin_type or "").strip() or None
+    # keyword 在直接调用（单测未走 FastAPI 解析）时默认是 Query 哨兵（truthy），须按 str 判定。
+    kw = (keyword if isinstance(keyword, str) else "").strip()
+
+    # 命中缓存直接返回；手动构造 dict 序列化，绕开 pydantic v1/v2 的 dump API 差异。
+    cache_key = f"plugins:tags:v1:{pt or '-'}:{kw or '-'}:{limit}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        try:
+            return ResponseModel(
+                code=status.HTTP_200_OK,
+                message="ok",
+                data=[TagOption(tag=x["tag"], count=x["count"]) for x in json.loads(hit)],
+            )
+        except Exception:
+            pass  # 缓存值损坏（反序列化失败）-> 回退重新计算，不阻断请求
+
+    if kw:
+        rows = repo.list_tag_options(plugin_type=pt, keyword=kw, limit=limit)
+        data = [TagOption(tag=t, count=c) for t, c in rows]
+    else:
+        count_map = dict(repo.list_tag_options(plugin_type=pt, limit=1000))
+        featured: List[str] = []
+        raw = getattr(settings, "market_featured_tags", "") or ""
+        for t in raw.split(","):
+            # 与发布校验侧同口径归一化：count_map 键来自 DB（已 NFKC + casefold），
+            # 配置值不归一化会因大小写/全半角不一致而字典查找失败，置顶标签被静默跳过。
+            t = unicodedata.normalize("NFKC", t.strip()).casefold()
+            if t and t not in featured:
+                featured.append(t)
+        ordered: List[TagOption] = [
+            TagOption(tag=tag_name, count=count_map[tag_name])
+            for tag_name in featured
+            if tag_name in count_map
+        ]
+        ordered_names = {opt.tag for opt in ordered}
+        for tag, cnt in sorted(count_map.items(), key=lambda kv: (-kv[1], kv[0])):
+            if len(ordered) >= limit:
+                break
+            if tag not in ordered_names:
+                ordered.append(TagOption(tag=tag, count=cnt))
+                ordered_names.add(tag)
+        data = ordered[:limit]
+
+    cache_set(cache_key, json.dumps([{"tag": opt.tag, "count": opt.count} for opt in data]), _TAG_OPTIONS_CACHE_TTL)
+    return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
+
+
+# 分类计数变化慢，缓存 30s 挡住首页侧栏的计数扇出
+_CATEGORY_TOTALS_CACHE_TTL = 30
+
+
+@plugin_router.get(
+    "/category-totals",
+    response_model=ResponseModel[Dict[str, CategoryTotalsData]],
+)
+async def get_category_totals(db: Session = Depends(get_db)):
+    """侧栏分类计数聚合：一次返回所有市场 tab 类型的分类计数，口径与列表 total 一致。"""
+    cache_key = "plugins:category-totals:v2"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        try:
+            payload = json.loads(hit)
+            return ResponseModel(
+                code=status.HTTP_200_OK,
+                message="ok",
+                data={t: CategoryTotalsData(totals=v["totals"], all=v["all"]) for t, v in payload.items()},
+            )
+        except Exception:
+            pass  # 缓存值损坏（反序列化失败）-> 回源重算，不阻断请求
+
+    by_type = MarketAssetRepository(db).category_totals_by_type()
+    data = {t: CategoryTotalsData(totals=totals, all=total_all) for t, (totals, total_all) in by_type.items()}
+    cache_set(
+        cache_key,
+        json.dumps({t: {"totals": d.totals, "all": d.all} for t, d in data.items()}),
+        _CATEGORY_TOTALS_CACHE_TTL,
+    )
     return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
 
 
@@ -1094,13 +1366,35 @@ async def list_my_skill_moderation_audits(
 async def get_artifact_download(
     request: Request,
     artifact_id: str = Path(..., alias="id"),
-    version: Optional[str] = Query(None, description="版本号（如 1.0.0），不指定则返回最新版本"),
+    version: Optional[str] = Query(
+        None,
+        description="版本号（如 1.0.0）；不指定则返回最新已通过审核的对外版本",
+    ),
     is_cli_download: bool = Query(False, description="是否 CLI 下载；CLI=true 下载原始 zip，其他下载 raw.zip"),
     db: Session = Depends(get_db),
     storage=Depends(get_storage_client),
     viewer: ViewerContext = Depends(resolve_viewer_context),
 ):
     fetch_user_id: Optional[str] = get_user_id_from_context()
+
+    # 计量去重闸门：同一来源（登录按 user_id，匿名按 IP+UA）同一天同一资产只计一次量，
+    # 防脚本/API 刷量虚增 install_count 与火爆值；重复下载照常服务，只是不重复计数。
+    # 火爆值 recent_dl 即近 7 天 fetch 记录数，闸门挡在写入前，口径自动成为「不同来源数」。
+    # Redis 不可用时 cache_set_nx fail-open 返回 True，照常计数（可用性优先）。
+    # 注意必须用 get_user_id_or_none()：get_user_id() 对匿名返回 "anonymous" 哨兵，
+    # 若当成登录态，所有匿名访客会共享同一指纹，同资产同天只计 1 次（严重少计）。
+    counted_user_id = get_user_id_or_none()
+    # 匿名指纹的 IP 与限流同源（client_ip_from_scope + rate_limit_trust_forwarded）：
+    # nginx 前置时 peer 是代理 IP，直接用会把所有匿名访客的指纹坍缩成 UA 去重，失去 IP 维度。
+    _ip = client_ip_from_scope(request.scope, trust_forwarded=settings.rate_limit_trust_forwarded)
+    _ua = request.headers.get("user-agent", "")
+    if counted_user_id:
+        source_fp = f"u:{counted_user_id}"
+    else:
+        source_fp = "ip:" + hashlib.sha256(f"{_ip}|{_ua}".encode()).hexdigest()[:16]
+    utc_today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    gate_key = f"dlcnt:{artifact_id}:{source_fp}:{utc_today}"
+    counted_today = cache_set_nx(gate_key, 86400 * 8)
 
     with operation_context(operation_type="download_artifact"):
         bind_operation_actor(actor_id=fetch_user_id, actor_type="viewer")
@@ -1114,8 +1408,13 @@ async def get_artifact_download(
                 fetch_user_id=fetch_user_id,
                 viewer=viewer,
                 is_cli_download=is_cli_download,
+                counted=counted_today,
             )
         except (PublishError, HTTPException) as exc:
+            # 下载失败（404/403 等）时释放闸门：失败的首日下载不该消耗该来源当天的计量名额。
+            # 仅在本次请求确实占用闸门时释放——counted_today=False 说明名额是更早的成功请求占的，不能动。
+            if counted_today:
+                cache_delete(gate_key)
             _raise_with_operation_failure_log(
                 "artifact download",
                 exc,
@@ -1123,7 +1422,12 @@ async def get_artifact_download(
                 version=version,
                 is_cli_download=is_cli_download,
             )
-        bind_operation_resource(resource_type="artifact", resource_id=artifact_id, resource_version=result.version)
+        download_resource_type = _asset_audit_resource_type(result.plugin_type)
+        bind_operation_resource(
+            resource_type=download_resource_type,
+            resource_id=artifact_id,
+            resource_version=result.version,
+        )
         _log_operation_completed(
             "artifact download",
             result="success",
@@ -1133,15 +1437,10 @@ async def get_artifact_download(
         )
 
     # 审计：下载是系统对外提供数据出口，需长期保留下载记录。
-    # resource_type 依资产实际 plugin_type 记录（skill / swarmskill / plugin），不要一律写 skill。
+    # resource_type 依资产实际 plugin_type 记录；四类 Agent 资产保留精确 type。
     # 团队技能下载会被统计成 skill，会污染 resource_type 维度下的“使用量”展示。
     # 失败下载（404/403 等）当前由 GET 路径外，不在 audit_failed 覆盖范围内，暂不补录失败；
     # 若未来需要追踪未授权访问尝试，可在上方 except 分支前补一条 FAILED 审计。
-    download_resource_type = {
-        ResourceType.SKILL: ResourceType.SKILL,
-        ResourceType.SWARMSKILL: ResourceType.SWARMSKILL,
-        ResourceType.PLUGIN: ResourceType.PLUGIN,
-    }.get((result.plugin_type or "").strip().lower(), ResourceType.SKILL)
     try:
         audit_log(
             event_type=EventType.SKILL_USE,
@@ -1156,9 +1455,10 @@ async def get_artifact_download(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
             extra={
+                "asset_type": result.asset_type,
+                "plugin_type": result.plugin_type,
                 "skill_name": result.name,
                 "skill_display_name": result.display_name,
-                "plugin_type": result.plugin_type,
                 "file_size": int(result.file_size),
                 "checksum_sha256": result.checksum_sha256,
                 "is_cli_download": bool(is_cli_download),
@@ -1176,7 +1476,6 @@ async def get_artifact_download(
         message="ok",
         data=result,
     )
-
 
 
 @plugin_router.get(
@@ -1273,7 +1572,7 @@ async def moderate_skill(
 
 @plugin_router.delete(
     "/{asset_id}/versions/{version}",
-    response_model=ResponseModel[PluginVersionDeleteData],
+    response_model=ResponseModel[AssetVersionDeleteData | PluginVersionDeleteData],
 )
 async def delete_plugin_version(
     asset_id: str,
@@ -1301,7 +1600,16 @@ async def delete_plugin_version(
             _raise_with_operation_failure_log("delete asset version", exc, asset_id=asset_id, version=version)
 
         is_skill_like = is_skill_like_plugin_type(data.plugin_type)
-        resource_type = "skill" if is_skill_like else "plugin"
+        agent_asset_type = (
+            data.asset_type if isinstance(data, AssetVersionDeleteData) else None
+        )
+        resource_type = (
+            "skill"
+            if is_skill_like
+            else _asset_audit_resource_type(agent_asset_type)
+            if agent_asset_type
+            else "plugin"
+        )
         bind_operation_resource(resource_type=resource_type, resource_id=asset_id, resource_version=version)
         _log_operation_completed(
             "delete asset version",
@@ -1327,11 +1635,15 @@ async def delete_plugin_version(
                 "deleted_all": version.lower() == "all",
                 "skill_name": data.skill_name or None,
                 "skill_display_name": data.skill_display_name or None,
+                **(
+                    {"asset_type": agent_asset_type, "plugin_type": data.plugin_type}
+                    if agent_asset_type
+                    else {}
+                ),
             },
         )
 
         return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
-
 
 
 router = APIRouter()

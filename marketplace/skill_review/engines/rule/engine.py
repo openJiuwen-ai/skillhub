@@ -169,6 +169,10 @@ def build_rule_finding(input_value: RuleFindingInput) -> ReviewFindingDraft:
                 "location": {"file": input_value.file_path, "line": input_value.line_number},
             }
         ],
+        metadata={
+            "rule_pattern_id": pattern.pattern_id,
+            "allow_semantic_downgrade": pattern.allow_semantic_downgrade,
+        },
     )
 
 

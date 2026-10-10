@@ -6,6 +6,7 @@ import sys
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import wraps
+from logging.handlers import RotatingFileHandler
 from typing import Any, Callable, TypeVar, cast
 
 import structlog
@@ -19,6 +20,9 @@ from plugins_market.core.operation_log import (
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+_DEFAULT_LOG_MAX_BYTES = 50 * 1024 * 1024
+_DEFAULT_LOG_BACKUP_COUNT = 5
 
 _RESERVED_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__.keys())
 _COMMON_FIELD_ORDER = (
@@ -177,8 +181,29 @@ def _ensure_filter(handler: logging.Handler) -> None:
         handler.addFilter(_GLOBAL_LOG_FILTER)
 
 
+def _get_log_max_bytes() -> int:
+    try:
+        value = int(os.getenv("LOG_MAX_BYTES", str(_DEFAULT_LOG_MAX_BYTES)))
+    except (TypeError, ValueError):
+        return _DEFAULT_LOG_MAX_BYTES
+    return value if value > 0 else _DEFAULT_LOG_MAX_BYTES
+
+
+def _get_log_backup_count() -> int:
+    try:
+        value = int(os.getenv("LOG_BACKUP_COUNT", str(_DEFAULT_LOG_BACKUP_COUNT)))
+    except (TypeError, ValueError):
+        return _DEFAULT_LOG_BACKUP_COUNT
+    return value if value > 0 else _DEFAULT_LOG_BACKUP_COUNT
+
+
 def _build_handler(log_path: str, level: int) -> logging.Handler:
-    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler = RotatingFileHandler(
+        log_path,
+        maxBytes=_get_log_max_bytes(),
+        backupCount=_get_log_backup_count(),
+        encoding="utf-8",
+    )
     handler.setFormatter(PlainLogFormatter())
     handler.setLevel(level)
     _ensure_filter(handler)
@@ -279,13 +304,20 @@ def setup_logging(debug: bool = False):
         if (
             logger_name.startswith("plugins_market")
             or logger_name.startswith("common")
-            or logger_name.startswith("sqlalchemy")
         ):
             logger_obj.handlers.clear()
             logger_obj.filters.clear()
             logger_obj.addFilter(_GLOBAL_LOG_FILTER)
             logger_obj.propagate = True
             logger_obj.setLevel(level)
+            logger_obj.disabled = False
+        elif logger_name.startswith("sqlalchemy"):
+            # 提到 INFO 会绕过 echo=False 刷出全量 SQL，锁 WARNING 以上
+            logger_obj.handlers.clear()
+            logger_obj.filters.clear()
+            logger_obj.addFilter(_GLOBAL_LOG_FILTER)
+            logger_obj.propagate = True
+            logger_obj.setLevel(max(level, logging.WARNING))
             logger_obj.disabled = False
 
     from plugins_market.core.interface_log import setup_interface_logger

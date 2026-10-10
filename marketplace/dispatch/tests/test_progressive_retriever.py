@@ -589,8 +589,14 @@ class DisclosureModuleTests(unittest.TestCase):
         self.assertIn(fragment.rendered_tree, str(messages_a[0]["content"]))
         self.assertNotIn("<CANDIDATE_TREE>", str(messages_a[1]["content"]))
         self.assertNotIn(fragment.rendered_tree, str(messages_a[1]["content"]))
-        self.assertTrue(str(messages_a[1]["content"]).endswith("<USER_REQUEST>\nfirst query\n</USER_REQUEST>"))
-        self.assertTrue(str(messages_b[1]["content"]).endswith("<USER_REQUEST>\nsecond query\n</USER_REQUEST>"))
+        self.assertRegex(
+            str(messages_a[1]["content"]),
+            r"<USER_REQUEST>\n(?:\[req:[0-9a-f]+\])?first query\n</USER_REQUEST>\Z",
+        )
+        self.assertRegex(
+            str(messages_b[1]["content"]),
+            r"<USER_REQUEST>\n(?:\[req:[0-9a-f]+\])?second query\n</USER_REQUEST>\Z",
+        )
         self.assertEqual(
             str(messages_a[0]["content"]),
             str(messages_b[0]["content"]),
@@ -1169,7 +1175,10 @@ class ProgressiveRetrieverTests(unittest.TestCase):
         self.assertIn('"raw_name": "SemanticScholar"', system_content)
         self.assertIn('"id": "Y2"', system_content)
         self.assertNotIn('"raw_name": "Arxiv"', str(llm.calls[0]["messages"][1]["content"]))
-        self.assertIn("User request:\nfind paper tools", str(llm.calls[0]["messages"][1]["content"]))
+        self.assertRegex(
+            str(llm.calls[0]["messages"][1]["content"]),
+            r"User request:\n(?:\[req:[0-9a-f]+\])?find paper tools",
+        )
 
     def test_progressive_streaming_llm_records_ttft_latency(self) -> None:
         llm = _StreamingLLM(

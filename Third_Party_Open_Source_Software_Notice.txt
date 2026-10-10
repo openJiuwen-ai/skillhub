@@ -521,7 +521,7 @@ Software: i18next-browser-languagedetector 8.2.0
 License: MIT License
 Please see above
 
-Software: js-yaml 4.1.1
+Software: js-yaml 4.3.2
 
 License: MIT License
 Please see above
@@ -619,7 +619,7 @@ Software: autoprefixer 10.4.14
 License: MIT License
 Please see above
 
-Software: postcss 8.4.27
+Software: postcss 8.5.23
 
 License: MIT License
 Please see above

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
-
 from .bank import ExperienceBank
 
 LOGGER = logging.getLogger(__name__)
@@ -61,11 +59,6 @@ class ExperienceRetriever:
             "query_examples": best_item.query_examples,
             "success_count": best_item.success_count,
         }
-
-
-def _now() -> float:
-    import time
-    return time.time()
 
 
 __all__ = ["ExperienceRetriever"]

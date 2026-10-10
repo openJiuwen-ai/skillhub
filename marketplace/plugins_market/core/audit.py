@@ -244,7 +244,13 @@ def list_skill_moderation_audit_logs_for_operator(
     page: int,
     page_size: int,
 ) -> tuple[list[AuditLog], int]:
-    """当前操作者作为审核员产生的 Skill 审核类审计记录（按时间倒序，分页）。"""
+    """当前操作者作为审核员产生的 Skill 审核类审计记录（按时间倒序，分页）。
+
+    仅返回 result=SUCCESS 的记录：成功路径的 audit_log 在 db.commit() 之后才写，
+    代表"已生效的审核决定"；失败补录（如自审 self_moderation_forbidden）写的是
+    result=FAILED + action=MODERATE 的兜底行（见 Action.MODERATE 注释），并非真实
+    审核，排除出"我的审核历史"。失败记录仍保留在管理员全量审计日志（audit/logs）。
+    """
     safe_page = max(1, page)
     safe_size = min(max(1, page_size), 100)
     q = (
@@ -252,6 +258,7 @@ def list_skill_moderation_audit_logs_for_operator(
         .filter(
             AuditLog.event_type == EVENT_SKILL_MODERATION,
             AuditLog.operator_id == operator_id,
+            AuditLog.result == Result.SUCCESS,
         )
         .order_by(AuditLog.created_at.desc())
     )

@@ -9,7 +9,7 @@ from typing import Any
 from shared.limits import MAX_JSON_ARTIFACT_BYTES, MAX_TEXT_FILE_BYTES, read_text_file
 
 from .base import BaseScanner, ScannedItem, console
-from .common import clean_first_paragraph, parse_frontmatter
+from .common import clean_first_paragraph, extract_tags_from_metadata, parse_frontmatter
 
 
 class SkillScanner(BaseScanner):
@@ -94,7 +94,11 @@ class SkillScanner(BaseScanner):
         market_display_name = str(meta.get("display_name") or "").strip()
         market_short_desc = str(meta.get("short_desc") or "").strip()
         market_detail_desc = str(meta.get("detail_desc") or "").strip()
-        plugin_display_name = self._load_plugin_display_name(item_root) or market_display_name
+        plugin_payload = self._load_plugin_payload_for_root(item_root)
+        plugin_display_name = (
+            str(plugin_payload.get("display_name") or "").strip() if plugin_payload else ""
+        ) or market_display_name
+        tags = extract_tags_from_metadata(plugin_payload.get("metadata")) if plugin_payload else []
         if market_short_desc:
             description = "\n".join(part for part in (market_short_desc, description) if part)
 
@@ -112,20 +116,19 @@ class SkillScanner(BaseScanner):
             stars=int(meta.get("stars") or 0),
             is_official=bool(meta.get("is_official")),
             author=str(meta.get("author") or ""),
+            tags=tags,
         )
 
     @classmethod
-    def _load_plugin_display_name(cls, item_root: Path) -> str:
+    def _load_plugin_payload_for_root(cls, item_root: Path) -> dict[str, Any] | None:
+        """Locate and parse plugin.yaml/yml/json for an item root (single read+parse)."""
         plugin_file = next(
             (candidate for candidate in cls._plugin_metadata_candidates(item_root) if candidate.exists()),
             None,
         )
         if plugin_file is None:
-            return ""
-        payload = cls._load_plugin_payload(plugin_file)
-        if not isinstance(payload, dict):
-            return ""
-        return str(payload.get("display_name") or "").strip()
+            return None
+        return cls._load_plugin_payload(plugin_file)
 
     @staticmethod
     def _load_plugin_payload(plugin_file: Path) -> dict[str, Any] | None:

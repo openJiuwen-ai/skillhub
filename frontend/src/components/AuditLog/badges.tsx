@@ -22,7 +22,7 @@ const EVENT_TYPE_META: Record<string, { label: string; className: string }> = {
   SKILL_MODERATION: { label: 'Skill 审核', className: 'bg-blue-50 text-blue-700' },
   SKILL_MANAGE: { label: 'Skill 管理', className: 'bg-purple-50 text-purple-700' },
   PLUGIN_MANAGE: { label: '插件管理', className: 'bg-orange-50 text-orange-700' },
-  SKILL_REVIEW: { label: '系统审查', className: 'bg-indigo-50 text-indigo-700' },
+  SKILL_REVIEW: { label: '审查', className: 'bg-indigo-50 text-indigo-700' },
   SKILL_USE: { label: 'Skill 使用', className: 'bg-teal-50 text-teal-700' },
   AUDIT: { label: '审计自身', className: 'bg-amber-50 text-amber-800' },
   UNKNOWN: { label: '未识别', className: 'bg-slate-100 text-slate-500' },
@@ -36,7 +36,7 @@ const ACTION_META: Record<string, { label: string; className: string }> = {
   GIT_SYNC: { label: 'Git 同步', className: 'bg-cyan-50 text-cyan-800' },
   GIT_SOURCE_DELETE: { label: '删除 Git 源', className: 'bg-orange-50 text-orange-800' },
   IMPORT: { label: '批量导入', className: 'bg-purple-50 text-purple-700' },
-  // 系统审查相关
+  // 审查相关
   AUTO_REVIEW_PASS: { label: '审查通过', className: 'bg-emerald-50 text-emerald-800' },
   AUTO_REVIEW_FAIL: { label: '审查未通过', className: 'bg-rose-50 text-rose-800' },
   AUTO_REVIEW_SYS_FAIL: { label: '审查异常', className: 'bg-amber-50 text-amber-800' },
@@ -96,17 +96,30 @@ export function getEventTypeLabel(value: string): string {
   return EVENT_TYPE_META[value]?.label || value
 }
 
-const SKILL_RESOURCE_TYPES = new Set(['skill', 'swarmskill', 'plugin'])
+const AGENT_ASSET_RESOURCE_TYPES = new Set([
+  'agent-plugin',
+  'agent-template',
+  'agent-group',
+  'agent-mcp',
+])
+const MARKET_ASSET_RESOURCE_TYPES = new Set(['skill', 'swarmskill', 'plugin'])
 
-/** 把一条审计记录归到 5 种"操作对象"形态之一，名称列 / 类型 badge 都由此分支。 */
-export type AuditObjectKind = 'skill' | 'audit_log' | 'git_source' | 'skill_bundle' | 'unknown'
+/** 把一条审计记录归到对应的操作对象形态，名称列 / 类型 badge 都由此分支。 */
+export type AuditObjectKind =
+  | 'skill'
+  | 'agent_asset'
+  | 'audit_log'
+  | 'git_source'
+  | 'skill_bundle'
+  | 'unknown'
 
 export function getObjectKind(item: ObjectLike): AuditObjectKind {
   const rt = item.resource_type
   if (rt === 'audit_log') return 'audit_log'
   if (rt === 'git_source') return 'git_source'
   if (rt === 'skill_bundle') return 'skill_bundle'
-  if (rt && SKILL_RESOURCE_TYPES.has(rt)) return 'skill'
+  if (rt && AGENT_ASSET_RESOURCE_TYPES.has(rt)) return 'agent_asset'
+  if (rt && MARKET_ASSET_RESOURCE_TYPES.has(rt)) return 'skill'
   if (item.asset_plugin_type) return 'skill'
   return 'unknown'
 }
@@ -115,10 +128,12 @@ export interface ObjectDisplay {
   text: string
   /** 非 Skill 类 / 缺信息的兜底——列里用灰色斜体渲染 */
   isPlaceholder: boolean
-  /** Skill 详情可点击跳转；其他形态恒为 false */
+  /** Skill / Agent 详情可点击跳转；其他形态恒为 false */
   clickable: boolean
-  /** 跳转 /skills/<slug> 用 */
+  /** 跳转详情用的 asset_id */
   slug: string | null
+  /** 用于 /skills vs /assets 分流 */
+  pluginType?: string | null
   /** hover 提示，可选 */
   title?: string
 }
@@ -162,28 +177,29 @@ export function pickObjectDisplay(item: ObjectLike): ObjectDisplay {
     }
   }
 
-  // skill / unknown：跟原 pickSkillName 同优先级
+  // 市场资产 / unknown：跟原 pickSkillName 同优先级
   const fromExtraDisplay = String(extra.skill_display_name || '').trim()
   const extraSlug = String(extra.skill_name || '').trim()
-  // 优先用 resource_id (UUID) 当跳转 slug：/skills/:assetId 路由需要后端 asset_id (UUID)，
+  // 优先用 resource_id (UUID) 当跳转 slug：详情路由需要后端 asset_id (UUID)，
   // asset_name 是人类可读名，无法路由命中。仅当资源不存在或动作是"删除全部版本"时不可点。
   const isDeleteAll = String(item.action || '').trim().toUpperCase() === 'DELETE'
   const bestSlug = item.resource_id || extraSlug || item.asset_name || null
-  const clickable = Boolean(bestSlug) && !isDeleteAll
+  const pluginType = item.asset_plugin_type || item.resource_type || null
+  const clickable = (kind === 'skill' || kind === 'agent_asset') && Boolean(bestSlug) && !isDeleteAll
   if (fromExtraDisplay) {
-    return { text: fromExtraDisplay, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: fromExtraDisplay, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (item.asset_display_name) {
-    return { text: item.asset_display_name, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: item.asset_display_name, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (extraSlug) {
-    return { text: extraSlug, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: extraSlug, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (item.asset_name) {
-    return { text: item.asset_name, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: item.asset_name, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
   if (item.resource_id) {
-    return { text: item.resource_id, isPlaceholder: false, clickable, slug: bestSlug }
+    return { text: item.resource_id, isPlaceholder: false, clickable, slug: bestSlug, pluginType }
   }
 
   // 早拒兜底：连资源标识都没有
@@ -209,21 +225,29 @@ export function pickObjectDisplay(item: ObjectLike): ObjectDisplay {
 const OBJECT_TYPE_LABEL: Record<string, string> = {
   skill: 'skill',
   swarmskill: 'swarmskill',
-  plugin: '插件',
+  plugin: '普通插件',
+  'agent-plugin': '插件',
+  'agent-template': '专家',
+  'agent-group': '专家团',
+  'agent-mcp': '连接器',
   audit_log: '日志',
   git_source: 'Git 源',
   skill_bundle: 'Skill 包',
   unknown: '未识别',
 }
 
-/** "对象类型"列文本：Skill 子类时优先 asset_plugin_type 拿到 swarmskill 等更细分类。 */
+/** "对象类型"列文本：市场资产优先使用 asset_plugin_type 保留精确分类。 */
 export function getObjectTypeLabel(item: ObjectLike): string {
   const kind = getObjectKind(item)
-  if (kind === 'skill') {
+  if (kind === 'skill' || kind === 'agent_asset') {
     const sub = item.asset_plugin_type
     if (sub && OBJECT_TYPE_LABEL[sub]) return OBJECT_TYPE_LABEL[sub]
     if (sub) return sub
-    if (item.resource_type && SKILL_RESOURCE_TYPES.has(item.resource_type)) {
+    if (
+      item.resource_type &&
+      (MARKET_ASSET_RESOURCE_TYPES.has(item.resource_type) ||
+        AGENT_ASSET_RESOURCE_TYPES.has(item.resource_type))
+    ) {
       return OBJECT_TYPE_LABEL[item.resource_type] || item.resource_type
     }
     return OBJECT_TYPE_LABEL.skill

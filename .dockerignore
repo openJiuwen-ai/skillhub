@@ -3,7 +3,7 @@
 #   docker build -f docker/Dockerfile.skillhub-frontend -t skillhub-frontend:latest .
 node_modules
 **/node_modules
-**/dist
+!frontend/dist
 .git
 .gitignore
 .idea
@@ -25,8 +25,15 @@ marketplace/.ruff_cache
 marketplace/logs
 marketplace/*.log
 marketplace/data
-# 排除 marketplace 内 Markdown；保留默认隐私声明
+# 排除 marketplace 下的 Markdown；保留默认隐私声明
 marketplace/*.md
 marketplace/**/*.md
 !marketplace/privacy-statement.md
 
+# skill-runner（独立微服务源码）
+skill-runner/.venv
+skill-runner/**/__pycache__
+skill-runner/**/*.py[cod]
+
+# docker images tarballs
+docker-images/

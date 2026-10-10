@@ -16,6 +16,8 @@ from skill_review.runtime.package_access.file_catalog import normalize_archive_p
 ALLOWED_FINDING_SEVERITIES = {"high", "medium", "low"}
 ALLOWED_CANDIDATE_SEVERITIES = {"high", "medium", "low", "info"}
 ALLOWED_CONFIDENCES = {"high", "medium", "low"}
+SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3}
+GATE_RANK = {"info": 0, "attention": 1, "block": 2}
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,7 @@ def validate_candidate_reviews(
             context.response_body,
             context.full_response,
         )
+        validate_non_downgradable_policy(review, context)
         validate_response_paths(
             review,
             context.package_paths,
@@ -226,6 +229,42 @@ def validate_required_string_fields(
                 response_body,
                 full_response,
             )
+
+
+def validate_non_downgradable_policy(review: dict[str, Any], context: SemanticValidationContext) -> None:
+    rule_findings = context.prompt_payload.get("rule_findings")
+    if not isinstance(rule_findings, list):
+        return
+    prompt_finding = next(
+        (
+            finding
+            for finding in rule_findings
+            if isinstance(finding, dict) and finding.get("finding_ref") == review.get("finding_ref")
+        ),
+        None,
+    )
+    if not isinstance(prompt_finding, dict):
+        return
+    policy = prompt_finding.get("policy")
+    if not isinstance(policy, dict) or policy.get("allow_semantic_downgrade") is not False:
+        return
+    original_severity = prompt_finding.get("severity")
+    original_gate = prompt_finding.get("gate_recommendation")
+    severity_downgraded = (
+        original_severity in SEVERITY_RANK
+        and SEVERITY_RANK.get(review.get("final_severity"), -1) < SEVERITY_RANK[original_severity]
+    )
+    gate_downgraded = (
+        original_gate in GATE_RANK
+        and GATE_RANK.get(review.get("final_gate_recommendation"), -1) < GATE_RANK[original_gate]
+    )
+    if severity_downgraded or gate_downgraded:
+        raise_validation_error(
+            "candidate review violates non-downgradable policy",
+            context.prompt_payload,
+            context.response_body,
+            context.full_response,
+        )
 
 
 def validate_response_paths(

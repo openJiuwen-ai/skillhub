@@ -74,7 +74,9 @@ from .artifacts import (
 )
 
 
-_OBS_PUBLISHER_RE = re.compile(r'^(?:obs|s3)://[^/]+/(?:skills|plugins)/([^/]+)/')
+_OBS_PUBLISHER_RE = re.compile(
+    r'^(?:obs|s3)://[^/]+/(?:skills|plugins|agent-plugins|agent-templates|agent-groups|agent-mcps)/([^/]+)/'
+)
 _SKILLS_TAG_MAPPING_FILENAME = "skills_tag_mapping.jsonl"
 
 
@@ -702,6 +704,19 @@ class _IndexBuildWorkflow:
     def materialize_skill_dirs(aggregate_dir: Path, item_paths: Sequence[ResolvedItemPath]) -> None:
         for item in item_paths:
             skill_dir = item.materialized_dir
+            # Skill zips use a nested layout: <prefix>/plugin.yaml + <prefix>/<name>/SKILL.md.
+            # _extract_item_zip returns the inner dir (containing SKILL.md) as item_root,
+            # which breaks scanner's path.parent search for plugin.yaml after materialization.
+            # Copy plugin.yaml from the outer dir into item_root so the scanner can find it.
+            # Only do this for zip-extracted items — local_dir items point at the user's own
+            # source tree where writing would be an unwanted side effect, and local dirs use
+            # the canonical layout where scanner's path.parent search already works.
+            if item.source_type.endswith("_zip"):
+                for fn in ("plugin.yaml", "plugin.yml", "plugin.json"):
+                    src = skill_dir.parent / fn
+                    if src.is_file() and not (skill_dir / fn).exists():
+                        shutil.copy2(src, skill_dir / fn)
+                        break
             dir_name = _unique_dir_name(item.source_path, skill_dir.name)
             destination = aggregate_dir / dir_name
             if destination.exists():

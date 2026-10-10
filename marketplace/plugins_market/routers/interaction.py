@@ -10,7 +10,6 @@ from plugins_market.core.database import get_db
 from plugins_market.core.errors import http_error_payload
 from plugins_market.core.viewer_context import ANONYMOUS_VIEWER, ViewerContext
 from plugins_market.core.moderation import is_skill_like_plugin_type
-from plugins_market.services.plugin import _skill_visible_to_marketplace_viewer
 from plugins_market.repositories import MarketAssetRepository, MarketAssetInteractionRepository
 from plugins_market.schemas.common import ResponseModel
 from plugins_market.schemas.interaction import (
@@ -63,10 +62,12 @@ def _is_skill_asset(asset) -> bool:
     return is_skill_like_plugin_type(getattr(asset, "plugin_type", None))
 
 
-def _is_skill_interactable(asset, db: Session) -> bool:
-    if not _is_skill_asset(asset):
-        return True
-    return _skill_visible_to_marketplace_viewer(asset, ANONYMOUS_VIEWER, db)
+def _viewer_from_auth(auth: AuthContext) -> ViewerContext:
+    return ViewerContext(
+        user_id=auth.acting_user_id,
+        user_login=auth.acting_user_name,
+        is_system_admin=auth.is_admin,
+    )
 
 
 def _is_asset_offline(asset) -> bool:
@@ -82,7 +83,7 @@ def _asset_visible_to_viewer(asset, viewer: ViewerContext, db: Session) -> bool:
     if _is_asset_offline(asset):
         return False
     if _is_skill_asset(asset):
-        return _skill_visible_to_marketplace_viewer(asset, viewer, db)
+        return viewer.can_view_skill_asset(asset, db)
     return True
 
 
@@ -218,6 +219,7 @@ async def post_interact(
         )
 
     user_id = auth.acting_user_id
+    viewer = _viewer_from_auth(auth)
     asset_repo = MarketAssetRepository(db)
     interaction_repo = MarketAssetInteractionRepository(db)
 
@@ -228,7 +230,7 @@ async def post_interact(
         # 下架(OFFLINE)资产对外不可见，禁止对其点赞/收藏写入（F-38/F-39/F-40）；返回 404 不泄露存在性。
         if _is_asset_offline(asset):
             raise _asset_not_found(asset_id)
-        if not _is_skill_interactable(asset, db):
+        if not _asset_visible_to_viewer(asset, viewer, db):
             raise _skill_not_approved(asset_id)
         if _is_self_skill(asset, user_id):
             raise _http_exception(
@@ -264,7 +266,7 @@ async def post_interact(
     # 下架(OFFLINE)资产对外不可见，禁止对其点赞/收藏写入（F-38/F-39/F-40）；返回 404 不泄露存在性。
     if _is_asset_offline(asset):
         raise _asset_not_found(asset_id)
-    if not _is_skill_interactable(asset, db):
+    if not _asset_visible_to_viewer(asset, viewer, db):
         raise _skill_not_approved(asset_id)
     if _is_self_skill(asset, user_id):
         raise _http_exception(

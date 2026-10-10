@@ -1,9 +1,33 @@
 from __future__ import annotations
 
-from indexing.catalog.records import CatalogRecord
+from dataclasses import dataclass
+from typing import Dict
 
 
 INDEX_MANIFEST_FILENAME = "manifest.json"
 TREE_INDEX_FILENAME = "tree_index.yaml"
 TREE_HTML_FILENAME = "tree_index.html"
 CATALOG_FILENAME = "catalog.jsonl"
+
+
+@dataclass(frozen=True)
+class CatalogRecord:
+    worker_id: str
+    cid: str
+    name: str
+    description: str
+    skill_path: str
+    branch_path: tuple[str, ...]
+    category: str
+    retrieval_text: str
+    metadata: Dict[str, object]
+    tags: tuple[str, ...] = ()
+
+
+__all__ = [
+    "CATALOG_FILENAME",
+    "CatalogRecord",
+    "INDEX_MANIFEST_FILENAME",
+    "TREE_HTML_FILENAME",
+    "TREE_INDEX_FILENAME",
+]

@@ -8,6 +8,7 @@ __all__ = [
     "ExperienceBank",
     "ExperienceRetriever",
     "ExperienceAwareRetriever",
+    "EmbeddingClient",
     "SkillKnowledgeBuilder",
     "TraceRecord",
     "DistilledPattern",
@@ -23,3 +24,4 @@ from .wrapper import ExperienceAwareRetriever
 from .models import TraceRecord, DistilledPattern
 from .cluster import cluster_traces, ClusteredQuery
 from .distiller import TraceDistiller
+from .embed import EmbeddingClient

@@ -70,7 +70,28 @@ RUNTIME_SKILL = "skill"
 RUNTIME_TOOLS = "tools"
 RUNTIME_MCP_STDIO = "mcp-stdio"
 RUNTIME_RESTFUL_API = "restful-api"
-SUPPORTED_RUNTIME_TYPES = {RUNTIME_SKILL, RUNTIME_TOOLS, RUNTIME_MCP_STDIO, RUNTIME_RESTFUL_API}
+RUNTIME_AGENT_PLUGIN = "agent-plugin"
+RUNTIME_AGENT_TEMPLATE = "agent-template"
+RUNTIME_AGENT_GROUP = "agent-group"
+RUNTIME_AGENT_MCP = "agent-mcp"
+SUPPORTED_RUNTIME_TYPES = {
+    RUNTIME_SKILL,
+    RUNTIME_TOOLS,
+    RUNTIME_MCP_STDIO,
+    RUNTIME_RESTFUL_API,
+    RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_AGENT_GROUP,
+    RUNTIME_AGENT_MCP,
+}
+WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
+    {
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    }
+)
 
 # ---------------------------------------------------------------------------
 # File / zip size limits
@@ -94,6 +115,8 @@ MAX_YAML_BYTES = 1 * 1024 * 1024  # 1 MB per YAML document
 YAML_MAX_DEPTH = 100
 YAML_MAX_ALIASES = 1000
 YAML_MAX_SCALAR_LEN = 1 * 1024 * 1024  # 1 MB per scalar string
+# 节点上限：覆盖 1 MiB 量级合法 YAML，同时挡住图爆炸
+YAML_MAX_NODES = 200_000
 
 # ---------------------------------------------------------------------------
 # JSON parsing limits
@@ -110,8 +133,17 @@ PLUGIN_YAML_DESCRIPTION_MAX_LEN = 4096
 SKILL_DESC_MAX_LEN = 4096
 PLUGIN_TAGS_MAX_COUNT = 32
 PLUGIN_TAG_MAX_LEN = 64
+# 查询参数侧：tags 过滤参数（逗号分隔）的长度上限。
+# 发布侧单资产最多 32 个标签，查询侧留同量级余量；过长的参数直接 422 拒绝，
+# 避免构造数百个 JSON_CONTAINS 条件拖垮查询计划。
+QUERY_TAGS_MAX_LEN = 512
+# parse_tag_filter 解析后的标签数量上限（截断，不报错）：正常前端最多选十几个 chip，
+# 与 GET /plugins/tags 的 limit 同量级。
+QUERY_TAGS_MAX_COUNT = 20
 # 与 models.market_assets.MarketAssetDB.short_desc 列宽一致；较长文案走 detail_desc（Text）
 MARKET_ASSET_SHORT_DESC_MAX_LEN = 4096
+# MySQL TEXT 上限 65535 字节；超限须在写库前 4xx，避免 DataError 500
+MARKET_ASSET_DETAIL_DESC_MAX_BYTES = 65535
 
 # ---------------------------------------------------------------------------
 # Icon / PNG（仅当包内存在 icon.png 时校验；无则跳过校验且不写入占位对象）

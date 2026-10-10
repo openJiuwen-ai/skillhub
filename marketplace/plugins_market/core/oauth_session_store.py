@@ -92,7 +92,7 @@ class _MemoryOAuthStore:
 
 
 class _RedisOAuthStore:
-    def __init__(self, *, host: str, port: int, db: int, password: str) -> None:
+    def __init__(self, *, host: str, port: int, db: int, password: str, ssl: bool = False) -> None:
         import redis  # type: ignore[import-not-found]
 
         kwargs: dict = {
@@ -100,9 +100,15 @@ class _RedisOAuthStore:
             "port": port,
             "db": db,
             "decode_responses": True,
+            # 空闲连接被静默丢弃时限时报错（登录路径快速失败，不挂死）
+            "socket_connect_timeout": 2.0,
+            "socket_timeout": 2.0,
+            "health_check_interval": 30,
         }
         if password:
             kwargs["password"] = password
+        if ssl:
+            kwargs["ssl"] = True
         self._r = redis.Redis(**kwargs)
         # 首次建连：未 PING 则仅创建客户端对象，网络/密码错误要在第一次命令时才会暴露
         self._r.ping()
@@ -153,14 +159,23 @@ def get_oauth_str_store() -> OAuthStrStore:
     if host and not _redis_init_attempted:
         _redis_init_attempted = True
         try:
+            from plugins_market.core.redis_client import resolve_redis_ssl
+
+            ssl = resolve_redis_ssl()
             _redis_store = _RedisOAuthStore(
                 host=host,
                 port=int(settings.redis_port),
                 db=int(settings.redis_db),
                 password=_resolve_redis_password(),
+                ssl=ssl,
             )
-            logger.info("OAuth session store: Redis (PING OK, host=%s port=%s db=%s)", host, settings.redis_port,
-                        settings.redis_db)
+            logger.info(
+                "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",
+                host,
+                settings.redis_port,
+                settings.redis_db,
+                ssl,
+            )
             return _redis_store
         except Exception as e:
             logger.warning("OAuth session store: Redis init failed (%s), using memory", e)

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Bell } from 'lucide-react'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { fetchNotifications, markAllNotificationsRead, type SiteNotificationItem } from '@/api/notifications'
@@ -24,8 +24,13 @@ function formatListTime(createdAtMs: number, locale: string): string {
   }
 }
 
+function notificationTarget(template: string): string | null {
+  return template === 'group_skill_grant_pending' ? '/profile?tab=groups' : null
+}
+
 export function NotificationBell() {
   const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
   const { isAuthenticated } = useGitCodeAuth()
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<SiteNotificationItem[]>([])
@@ -145,15 +150,25 @@ export function NotificationBell() {
             <div className="px-3 py-6 text-center text-sm text-slate-500">{t('appHeader.notificationsEmpty')}</div>
           ) : (
             <ul className="flex flex-col gap-0.5">
-              {items.map(it => (
-                <li
-                  key={it.id}
-                  className="rounded-md px-2.5 py-2.5 text-left hover:bg-slate-50/90"
-                >
-                  <p className="text-sm leading-snug text-[#374151]">{it.message}</p>
-                  <p className="mt-1.5 text-xs text-[#9CA3AF]">{formatListTime(it.created_at_ms, i18n.language)}</p>
-                </li>
-              ))}
+              {items.map(it => {
+                const target = notificationTarget(it.template)
+                return (
+                  <li key={it.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (target) navigate(target)
+                        setOpen(false)
+                      }}
+                      className="w-full rounded-md px-2.5 py-2.5 text-left hover:bg-slate-50/90 disabled:cursor-default"
+                      disabled={!target}
+                    >
+                      <p className="text-sm leading-snug text-[#374151]">{it.message}</p>
+                      <p className="mt-1.5 text-xs text-[#9CA3AF]">{formatListTime(it.created_at_ms, i18n.language)}</p>
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>

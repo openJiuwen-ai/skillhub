@@ -2,6 +2,7 @@
 
 import os
 import hashlib
+import threading
 import time
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -141,6 +142,9 @@ class S3StorageConfig:
 class S3StorageClient:
     """S3存储客户端，支持本地MinIO和云端S3"""
 
+    # STS 剩余寿命低于该值（秒）时才重新换票；见 _sts_for_presign。
+    _STS_MIN_USABLE_SECONDS = 60
+
     def __init__(self, config: S3StorageConfig):
         """
         初始化S3客户端
@@ -152,6 +156,11 @@ class S3StorageClient:
         )
         self._static_s3_client: Optional[Any] = None
         self._obs_iam_client: Optional[Any] = None
+        # OBS dynamic：按临时凭证缓存复用的 boto3 client（凭证不变则不重建）
+        self._dyn_s3_client: Optional[Any] = None
+        self._dyn_s3_client_key: Optional[tuple] = None
+        # 保护 _dyn_s3_client/_dyn_s3_client_key 的并发读写（见 _s3_client_for_sts）
+        self._dyn_s3_client_lock = threading.Lock()
 
         if self._obs_iam_dynamic:
             self._obs_iam_client = HuaweiCloudIAM.from_env()
@@ -201,52 +210,65 @@ class S3StorageClient:
             kwargs["aws_session_token"] = session_token
         return boto3.client("s3", **kwargs)
 
+    def _s3_client_for_sts(self, sts: Dict[str, Any]):
+        """OBS dynamic：按临时凭证缓存复用 boto3 client，仅凭证变化时重建。"""
+        key = (sts["access"], sts["securitytoken"])
+        with self._dyn_s3_client_lock:
+            if self._dyn_s3_client is None or self._dyn_s3_client_key != key:
+                self._dyn_s3_client = self._new_boto3_s3_client(
+                    sts["access"], sts["secret"], sts["securitytoken"]
+                )
+                self._dyn_s3_client_key = key
+            return self._dyn_s3_client
+
     def _new_s3_client_from_iam_sts(self):
-        """OBS dynamic：每次新建 boto3 client；STS 由本客户端持有的 HuaweiCloudIAM 换发。"""
+        """OBS dynamic：STS 由本客户端持有的 HuaweiCloudIAM 换发；client 按凭证复用。"""
         if self._obs_iam_client is None:
             raise RuntimeError("OBS dynamic：HuaweiCloudIAM 客户端未初始化")
         sts = self._obs_iam_client.get_temporary_credentials_from_env(
             duration_seconds=self.config.sts_session_duration_seconds,
         )
-        return self._new_boto3_s3_client(
-            sts["access"], sts["secret"], sts["securitytoken"]
-        )
+        return self._s3_client_for_sts(sts)
 
     def _sts_for_presign(self, desired_seconds: int) -> tuple[dict, int]:
         """
         预签名在 OBS dynamic 下受 STS 剩余寿命限制。
         返回：用于签名的一组 sts（access/secret/securitytoken/expires_at）与最终 ExpiresIn。
+
+        换票策略：仅当缓存凭证剩余寿命低于 _STS_MIN_USABLE_SECONDS 时才重新换票。
+        华为 token 方式换取的临时凭证有效期固定较短（约 15 分钟），可能永远小于
+        desired_seconds；若因"签不满 desired"就作废重换，每次预签名都会触发两次
+        IAM 公网调用，且新票同样签不满——应直接使用缓存、按剩余寿命缩短 ExpiresIn。
         """
         if self._obs_iam_client is None:
             raise RuntimeError("OBS dynamic：HuaweiCloudIAM 客户端未初始化")
 
         buffer = 5.0
-        last_cap = 0
-        for attempt in range(2):
+        sts = self._obs_iam_client.get_temporary_credentials_from_env(
+            duration_seconds=self.config.sts_session_duration_seconds,
+        )
+        exp_ts = _sts_cred_expires_at_to_ts(sts.get("expires_at"))
+        cap = int((exp_ts - time.time()) - buffer) if exp_ts > 0 else 0
+
+        if cap < self._STS_MIN_USABLE_SECONDS:
+            self._obs_iam_client.invalidate_sts_cache()
             sts = self._obs_iam_client.get_temporary_credentials_from_env(
                 duration_seconds=self.config.sts_session_duration_seconds,
             )
             exp_ts = _sts_cred_expires_at_to_ts(sts.get("expires_at"))
-            rem = (exp_ts - time.time()) if exp_ts > 0 else 0.0
-            cap = int(rem - buffer)
-            last_cap = cap
+            cap = int((exp_ts - time.time()) - buffer) if exp_ts > 0 else 0
 
-            if cap >= desired_seconds:
-                return sts, desired_seconds
-            if attempt == 0:
-                self._obs_iam_client.invalidate_sts_cache()
-                continue
-            if cap >= 1:
-                return sts, min(desired_seconds, cap)
-            break
-
+        if cap >= desired_seconds:
+            return sts, desired_seconds
+        if cap >= 1:
+            return sts, cap
         raise RuntimeError(
-            f"OBS 临时凭证剩余有效过短（约 {max(0, last_cap)} 秒），无法生成预签名链接。"
+            f"OBS 临时凭证剩余有效过短（约 {max(0, cap)} 秒），无法生成预签名链接。"
         )
 
     @property
     def s3_client(self):
-        """static/MinIO：构建期单例。OBS+dynamic：每次访问新建 client。"""
+        """static/MinIO：构建期单例。OBS+dynamic：按 STS 凭证缓存复用 client。"""
         if self._obs_iam_dynamic:
             return self._new_s3_client_from_iam_sts()
         return self._static_s3_client
@@ -305,9 +327,7 @@ class S3StorageClient:
 
         if self._obs_iam_dynamic:
             sts, exp = self._sts_for_presign(desired)
-            client = self._new_boto3_s3_client(
-                sts["access"], sts["secret"], sts["securitytoken"]
-            )
+            client = self._s3_client_for_sts(sts)
         else:
             exp = desired
             client = self.s3_client

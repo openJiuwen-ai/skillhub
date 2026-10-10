@@ -14,6 +14,8 @@ import {
   stringifyOAuthPending,
 } from '@/api/auth'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
+import type { OAuthProvider } from '@/auth/gitcodeStorage'
+import { getSiteConfig } from '@/api/playground'
 import { POST_LOGIN_REDIRECT_KEY, sanitizePostLoginPath } from '@/auth/postLoginRedirect'
 import { AppHeader } from '@/components/Common/AppHeader'
 import jiuwenLogo from '@/assets/jiuwen-logo.png'
@@ -26,6 +28,24 @@ export default function LoginPage() {
   const { login, isAuthenticated } = useGitCodeAuth()
   const [commonError, setCommonError] = useState('')
   const [exchanging, setExchanging] = useState(false)
+
+  // 各 OAuth provider 是否启用：由后端 /site/config 实时返回，默认 false
+  const [gitcodeOAuthEnabled, setGitcodeOAuthEnabled] = useState(false)
+  const [githubOAuthEnabled, setGithubOAuthEnabled] = useState(false)
+  const [agentosOAuthEnabled, setAgentosOAuthEnabled] = useState(false)
+
+  // 是否从标星按钮跳来：从 URL 参数同步读取，惰性初始化避免闪烁
+  const [fromStar, setFromStar] = useState(() => searchParams.get('from') === 'star')
+
+  useEffect(() => {
+    getSiteConfig()
+      .then(cfg => {
+        setGitcodeOAuthEnabled(Boolean(cfg.gitcode_oauth_enabled))
+        setGithubOAuthEnabled(Boolean(cfg.github_oauth_enabled))
+        setAgentosOAuthEnabled(Boolean(cfg.agentos_oauth_enabled))
+      })
+      .catch(() => { /* 获取失败按未启用处理 */ })
+  }, [])
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -59,11 +79,13 @@ export default function LoginPage() {
     if (fromUrl) {
       const providerFromUrl = (searchParams.get('oauth_provider') || '').trim().toLowerCase()
       const provider =
-        providerFromUrl === 'github' || providerFromUrl === 'gitcode'
+        providerFromUrl === 'github' || providerFromUrl === 'gitcode' || providerFromUrl === 'agentos'
           ? providerFromUrl
-          : (sessionStorage.getItem(OAUTH_ACTIVE_PROVIDER_KEY) || 'gitcode').toLowerCase() === 'github'
-            ? 'github'
-            : 'gitcode'
+          : (() => {
+              const stored = (sessionStorage.getItem(OAUTH_ACTIVE_PROVIDER_KEY) || 'gitcode').toLowerCase()
+              if (stored === 'github' || stored === 'agentos') return stored as OAuthProvider
+              return 'gitcode'
+            })()
       sessionStorage.setItem(OAUTH_PENDING_KEY, stringifyOAuthPending({ provider, session: fromUrl }))
       navigate('/login', { replace: true })
       return
@@ -90,7 +112,7 @@ export default function LoginPage() {
       .finally(() => setExchanging(false))
   }, [searchParams, navigate, login, t])
 
-  const startOAuth = (provider: 'gitcode' | 'github') => {
+  const startOAuth = (provider: OAuthProvider) => {
     setCommonError('')
     sessionStorage.setItem(OAUTH_ACTIVE_PROVIDER_KEY, provider)
     window.location.href = getOAuthStartUrl(provider)
@@ -154,30 +176,67 @@ export default function LoginPage() {
               </div>
             ) : null}
 
-            <button
-              type="button"
-              disabled={exchanging}
-              onClick={() => startOAuth('gitcode')}
-              className="group relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-gradient-to-r from-[#1E54F9] to-[#852EFE] px-5 text-[15px] font-semibold text-white shadow-[0_10px_24px_-10px_rgba(79,70,229,0.65)] transition-all hover:shadow-[0_14px_28px_-10px_rgba(79,70,229,0.75)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <span
-                aria-hidden
-                className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 opacity-0 transition-opacity group-hover:opacity-100"
-              />
-              <Sparkles className="relative h-4 w-4" aria-hidden />
-              <span className="relative">{t('auth.login.gitcodeButton')}</span>
-              <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
-            </button>
+            {/* 正常入口按后端启用情况显示各 provider；标星入口只显示 GitHub 登录 */}
+            {fromStar || !gitcodeOAuthEnabled ? null : (
+              <button
+                type="button"
+                disabled={exchanging}
+                onClick={() => startOAuth('gitcode')}
+                className="group relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-gradient-to-r from-[#1E54F9] to-[#852EFE] px-5 text-[15px] font-semibold text-white shadow-[0_10px_24px_-10px_rgba(79,70,229,0.65)] transition-all hover:shadow-[0_14px_28px_-10px_rgba(79,70,229,0.75)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span
+                  aria-hidden
+                  className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 opacity-0 transition-opacity group-hover:opacity-100"
+                />
+                <Sparkles className="relative h-4 w-4" aria-hidden />
+                <span className="relative">{t('auth.login.gitcodeButton')}</span>
+                <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+              </button>
+            )}
+            {fromStar || !agentosOAuthEnabled ? null : (
+              <button
+                type="button"
+                disabled={exchanging}
+                onClick={() => startOAuth('agentos')}
+                className="group relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-gradient-to-r from-[#1E54F9] to-[#852EFE] px-5 text-[15px] font-semibold text-white shadow-[0_10px_24px_-10px_rgba(79,70,229,0.65)] transition-all hover:shadow-[0_14px_28px_-10px_rgba(79,70,229,0.75)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] disabled:cursor-not-allowed disabled:opacity-60 mt-3"
+              >
+                <span
+                  aria-hidden
+                  className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 opacity-0 transition-opacity group-hover:opacity-100"
+                />
+                <Sparkles className="relative h-4 w-4" aria-hidden />
+                <span className="relative">{t('auth.login.agentosButton')}</span>
+                <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+              </button>
+            )}
+            {fromStar || githubOAuthEnabled ? (
             <button
               type="button"
               disabled={exchanging}
               onClick={() => startOAuth('github')}
-              className="mt-3 group relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl border border-slate-300 bg-white px-5 text-[15px] font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] disabled:cursor-not-allowed disabled:opacity-60"
+              className={`mt-3 group relative inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl px-5 text-[15px] font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] disabled:cursor-not-allowed disabled:opacity-60 ${
+                fromStar
+                  ? 'bg-gradient-to-r from-[#1E54F9] to-[#852EFE] text-white shadow-[0_10px_24px_-10px_rgba(79,70,229,0.65)] hover:shadow-[0_14px_28px_-10px_rgba(79,70,229,0.75)]'
+                  : 'border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50'
+              }`}
             >
+              {fromStar ? (
+                <span
+                  aria-hidden
+                  className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 opacity-0 transition-opacity group-hover:opacity-100"
+                />
+              ) : null}
               <Sparkles className="relative h-4 w-4" aria-hidden />
               <span className="relative">{t('auth.login.githubButton')}</span>
               <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
             </button>
+            ) : null}
+            {!fromStar && !gitcodeOAuthEnabled && !githubOAuthEnabled && !agentosOAuthEnabled ? (
+              <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200/80 bg-red-50/80 px-3 py-2.5 text-sm text-red-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden />
+                <span className="leading-relaxed">{t('auth.login.noProviderError')}</span>
+              </div>
+            ) : null}
 
             <div className="mt-5 flex items-start gap-2 rounded-xl bg-slate-50/80 px-3 py-2.5">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden />

@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from plugins_market.core.review_admins import get_review_admin_usernames
@@ -32,12 +33,24 @@ NOTIFICATION_TEMPLATE_USER_REVIEW_DONE = "user_review_done"
 NOTIFICATION_TEMPLATE_USER_MANUAL_REVIEW_APPROVED = "user_manual_review_approved"
 NOTIFICATION_TEMPLATE_USER_MANUAL_REVIEW_REJECTED = "user_manual_review_rejected"
 NOTIFICATION_TEMPLATE_USER_SYSTEM_REVIEW_FAILED = "user_system_review_failed"
+NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_PENDING = "group_skill_grant_pending"
+NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_APPROVED = "group_skill_grant_approved"
+NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_REJECTED = "group_skill_grant_rejected"
+NOTIFICATION_TEMPLATE_GROUP_DELETED_MEMBER = "group_deleted_member"
+NOTIFICATION_TEMPLATE_GROUP_DELETED_APPLICANT = "group_deleted_applicant"
+NOTIFICATION_TEMPLATE_GROUP_DELETED_PUBLISHER = "group_deleted_publisher"
 
 MSG_ADMIN_PENDING = "您有新的待审核内容，请前往个人中心查看。"
 MSG_USER_REVIEW_DONE = "您的 skill 已审核完成，请前往个人中心查看。"
-MSG_USER_MANUAL_REVIEW_APPROVED = "您的 skill 已通过人工审核，请前往个人中心查看。"
-MSG_USER_MANUAL_REVIEW_REJECTED = "您的 skill 未通过人工审核，请前往个人中心查看。"
-MSG_USER_SYSTEM_REVIEW_FAILED = "您的 skill 未通过系统审查，请前往个人中心查看。"
+MSG_USER_MANUAL_REVIEW_APPROVED = "您的 skill 已通过审核，请前往个人中心查看。"
+MSG_USER_MANUAL_REVIEW_REJECTED = "您的 skill 未通过审核，请前往个人中心查看。"
+MSG_USER_SYSTEM_REVIEW_FAILED = "您的 skill 未通过审查，请前往个人中心查看。"
+MSG_GROUP_SKILL_GRANT_PENDING = "组群有新的 skill 授权待审批，请前往组群详情查看。"
+MSG_GROUP_SKILL_GRANT_APPROVED = "您的 skill 授权申请已通过，组群成员现可访问。"
+MSG_GROUP_SKILL_GRANT_REJECTED = "您的 skill 授权申请未通过。"
+MSG_GROUP_DELETED_MEMBER = "您所在的组群已被删除，您将不再享有该组群内 Skill 的访问权。"
+MSG_GROUP_DELETED_APPLICANT = "您申请加入的组群已被删除，加入申请已自动失效。"
+MSG_GROUP_DELETED_PUBLISHER = "您的 Skill 授权所在的组群已被删除，相关授权已自动失效。"
 
 
 def message_for_template(template: str) -> str:
@@ -51,6 +64,18 @@ def message_for_template(template: str) -> str:
         return MSG_USER_MANUAL_REVIEW_REJECTED
     if template == NOTIFICATION_TEMPLATE_USER_SYSTEM_REVIEW_FAILED:
         return MSG_USER_SYSTEM_REVIEW_FAILED
+    if template == NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_PENDING:
+        return MSG_GROUP_SKILL_GRANT_PENDING
+    if template == NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_APPROVED:
+        return MSG_GROUP_SKILL_GRANT_APPROVED
+    if template == NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_REJECTED:
+        return MSG_GROUP_SKILL_GRANT_REJECTED
+    if template == NOTIFICATION_TEMPLATE_GROUP_DELETED_MEMBER:
+        return MSG_GROUP_DELETED_MEMBER
+    if template == NOTIFICATION_TEMPLATE_GROUP_DELETED_APPLICANT:
+        return MSG_GROUP_DELETED_APPLICANT
+    if template == NOTIFICATION_TEMPLATE_GROUP_DELETED_PUBLISHER:
+        return MSG_GROUP_DELETED_PUBLISHER
     return ""
 
 
@@ -117,9 +142,85 @@ def notify_review_admins_new_skill_submission(db: Session) -> None:
             any_ins = True
         if any_ins:
             db.commit()
-    except Exception as e:  # noqa: BLE001
+    except SQLAlchemyError as e:
         db.rollback()
         logger.exception("admin pending notification failed: %s", e)
+
+
+def _notify_user_ids(db: Session, *, user_ids: list[str], template: str, failure_log: str) -> None:
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    any_ins = False
+    try:
+        with db.begin_nested():
+            for user_id in user_ids:
+                uid = (user_id or "").strip()
+                if not uid:
+                    continue
+                insert_and_trim(
+                    db,
+                    inbox_key=inbox_key_for_user_id(uid),
+                    template=template,
+                    created_at_ms=now_ms,
+                )
+                any_ins = True
+        if any_ins:
+            db.commit()
+    except SQLAlchemyError as e:
+        logger.exception("%s: %s", failure_log, e)
+
+
+def notify_group_owners_skill_grant_pending(db: Session, *, owner_user_ids: list[str]) -> None:
+    _notify_user_ids(
+        db,
+        user_ids=owner_user_ids,
+        template=NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_PENDING,
+        failure_log="group skill-grant-pending notification failed",
+    )
+
+
+def notify_publisher_skill_grant_approved(db: Session, *, publisher_id: str) -> None:
+    _notify_user_ids(
+        db,
+        user_ids=[publisher_id],
+        template=NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_APPROVED,
+        failure_log="group skill-grant-approved notification failed",
+    )
+
+
+def notify_publisher_skill_grant_rejected(db: Session, *, publisher_id: str) -> None:
+    _notify_user_ids(
+        db,
+        user_ids=[publisher_id],
+        template=NOTIFICATION_TEMPLATE_GROUP_SKILL_GRANT_REJECTED,
+        failure_log="group skill-grant-rejected notification failed",
+    )
+
+
+def notify_group_deleted_members(db: Session, *, user_ids: list[str]) -> None:
+    _notify_user_ids(
+        db,
+        user_ids=user_ids,
+        template=NOTIFICATION_TEMPLATE_GROUP_DELETED_MEMBER,
+        failure_log="group-deleted-member notification failed",
+    )
+
+
+def notify_group_deleted_applicants(db: Session, *, user_ids: list[str]) -> None:
+    _notify_user_ids(
+        db,
+        user_ids=user_ids,
+        template=NOTIFICATION_TEMPLATE_GROUP_DELETED_APPLICANT,
+        failure_log="group-deleted-applicant notification failed",
+    )
+
+
+def notify_group_deleted_publishers(db: Session, *, user_ids: list[str]) -> None:
+    _notify_user_ids(
+        db,
+        user_ids=user_ids,
+        template=NOTIFICATION_TEMPLATE_GROUP_DELETED_PUBLISHER,
+        failure_log="group-deleted-publisher notification failed",
+    )
 
 
 def notify_publisher_skill_manual_review_approved(db: Session, *, publisher_id: str) -> None:
@@ -136,7 +237,7 @@ def notify_publisher_skill_manual_review_approved(db: Session, *, publisher_id: 
             created_at_ms=now_ms,
         )
         db.commit()
-    except Exception as e:  # noqa: BLE001
+    except SQLAlchemyError as e:
         db.rollback()
         logger.exception("user manual-review-approved notification failed publisher=%s: %s", uid, e)
 
@@ -155,7 +256,7 @@ def notify_publisher_skill_manual_review_rejected(db: Session, *, publisher_id: 
             created_at_ms=now_ms,
         )
         db.commit()
-    except Exception as e:  # noqa: BLE001
+    except SQLAlchemyError as e:
         db.rollback()
         logger.exception("user manual-review-rejected notification failed publisher=%s: %s", uid, e)
 
@@ -174,6 +275,6 @@ def notify_publisher_skill_system_review_failed(db: Session, *, publisher_id: st
             created_at_ms=now_ms,
         )
         db.commit()
-    except Exception as e:  # noqa: BLE001
+    except SQLAlchemyError as e:
         db.rollback()
         logger.exception("user system-review-failed notification failed publisher=%s: %s", uid, e)

@@ -8,7 +8,6 @@
 dispatch/
 ├── build.py
 ├── indexing/
-│   ├── catalog/
 │   ├── io/
 │   ├── scanners/
 │   ├── tree/
@@ -21,9 +20,12 @@ dispatch/
 ## 核心能力
 
 - `indexing.scanners`：扫描 skill/plugin 目录。
+- `indexing.models`：定义构建产物文件名和叶子 catalog 记录模型。
 - `indexing.tree`：基于 LLM 或 fallback 逻辑构建 Capability Tree。
 - `indexing.workflows`：封装索引构建工作流，输出 tree、catalog、manifest 等产物。
 - `shared`：提供 Rich 兼容层和 S3/OBS 存储工具。
+
+离线索引构建的目录职责说明见 [离线索引构建](docs/zh/离线索引构建.md)；英文版本见 [Offline Indexing](docs/en/offline-indexing.md)。
 
 ## 安装
 

@@ -1,0 +1,89 @@
+# Namespace 与集群级资源
+# 包含：skillhub-system / skillhub-workers 两个 Namespace，worker 配额与限制，skill-runner 的 RBAC
+#
+# 部署顺序：本文件应最先 apply
+#   kubectl apply -f docker/k8s/namespace.yaml
+
+# ── Namespace: 应用服务 ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: skillhub-system
+---
+# ── Namespace: worker Pod（隔离运行）─────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: skillhub-workers
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# ── ResourceQuota（worker namespace）─────────────────────────────────────
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workers-quota
+  namespace: skillhub-workers
+spec:
+  hard:
+    pods: "60"
+    requests.cpu: "30"
+    requests.memory: "60Gi"
+    limits.cpu: "120"
+    limits.memory: "240Gi"
+---
+# ── LimitRange ──────────────────────────────────────────────────────────
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: workers-limits
+  namespace: skillhub-workers
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "2"
+        memory: "4Gi"
+      defaultRequest:
+        cpu: "500m"
+        memory: "2Gi"
+      max:
+        cpu: "4"
+        memory: "8Gi"
+---
+# ── ServiceAccount（skill-runner 控制面）────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: skill-runner
+  namespace: skillhub-system
+---
+# ── Role（跨 namespace 管理 worker pod）─────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: skill-runner-pod-manager
+  namespace: skillhub-workers
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+---
+# ── RoleBinding ─────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: skill-runner-pod-manager
+  namespace: skillhub-workers
+subjects:
+  - kind: ServiceAccount
+    name: skill-runner
+    namespace: skillhub-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: skill-runner-pod-manager

@@ -4,7 +4,22 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, List, Optional
 
 from fastapi import UploadFile
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from plugins_market.core.config import settings
+from plugins_market.validation.constants import QUERY_TAGS_MAX_LEN
+
+
+# system_admin 账号发布的资产，市场列表/详情序列化时打 publisher_official 标记位，
+# 前端据此把发布者显示名渲染为 官方/Official（i18n key: plugins.publisher.official）。
+# publisher_name 本身始终原样下发：官方与否由显式标记决定，避免与恰好叫
+# official / 官方 的真实用户名冲突（防冒充）。审核列表与 clawhub 兼容接口（直读 DB 模型）不受影响。
+# 判定依据是 publisher_id == system_admin_user（服务端写入、用户不可控），
+# 而不是 publisher_name（展示名，git-import 等路径可为任意值，同名普通用户会被误标记）。
+# 官方导入但保留品牌名的资产（如 publisher_id=system_admin、name=huawei）同样标记为官方：
+# 发布者确实是官方渠道，品牌名照常展示，仅附带官方认证徽标。
+def _is_official_publisher(publisher_id: Any) -> bool:
+    return str(publisher_id or "").strip() == settings.system_admin_user
 
 
 @dataclass
@@ -15,6 +30,11 @@ class PluginPublishForm:
     plugin_version: Optional[str]
     version_desc: Optional[str]
     force: bool
+    visibility: Literal["public", "private"] = "public"
+    asset_name: Optional[str] = None
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 class AssetCreate(BaseModel):
@@ -49,6 +69,9 @@ class AssetVersionCreate(BaseModel):
 
 class PluginPublishResult(BaseModel):
     plugin_id: str
+    # Generic alias for non-plugin asset families; kept alongside plugin_id for 1.x compatibility.
+    asset_id: Optional[str] = None
+    asset_type: str = "plugin"
     name: str
     display_name: Optional[str] = None
     version: str
@@ -57,6 +80,9 @@ class PluginPublishResult(BaseModel):
     storage_url: str
     plugin_type: Optional[str] = None
     publish_result: Optional[str] = None
+    visibility: Optional[str] = None
+    # 幂等命中（同名同版本同内容，未新增版本）时为 True；默认 False 不影响既有调用方
+    deduplicated: bool = False
 
 
 @dataclass
@@ -69,11 +95,11 @@ class SkillImportBundle:
     fail_fast: bool
 
 
-
 class SkillImportItemResult(BaseModel):
     """单条 skill 导入结果。"""
 
     entry: str
+    # skipped：幂等命中（同名同版本同内容）或 version_conflict 非 force 场景
     status: Literal["ok", "error", "skipped"]
     plugin_id: Optional[str] = None
     name: Optional[str] = None
@@ -88,12 +114,40 @@ class SkillImportSummary(BaseModel):
     total: int = Field(..., description="集合包内顶层 skill 目录总数")
     ok: int = Field(..., description="成功导入条数")
     failed: int = Field(..., description="失败条数（仅含已尝试并记入 results 的条目）")
-    skipped: int = Field(0, description="跳过条数（如同步时内容 MD5 未变）")
+    skipped: int = Field(
+        0,
+        description="跳过条数（幂等重复导入、version_conflict 非 force 等；不计入 ok）",
+    )
 
 
 class SkillImportResponse(BaseModel):
     summary: SkillImportSummary
     results: list[SkillImportItemResult]
+
+
+class AssetImportItemResult(SkillImportItemResult):
+    """单条多资产导入结果。"""
+
+    asset_id: Optional[str] = None
+    asset_type: Optional[str] = None
+    plugin_type: Optional[str] = None
+
+
+class AssetImportSummary(BaseModel):
+    """多资产导入汇总。"""
+
+    total: int = Field(..., description="集合包内资产条目总数")
+    ok: int = Field(..., description="成功导入条数")
+    failed: int = Field(..., description="失败条数（仅含已尝试并记入 results 的条目）")
+    skipped: int = Field(
+        0,
+        description="跳过条数（幂等重复导入、version_conflict 非 force 等；不计入 ok）",
+    )
+
+
+class AssetImportResponse(BaseModel):
+    summary: AssetImportSummary
+    results: list[AssetImportItemResult]
 
 
 # ----- GET /api/v1/plugins/{asset_id}/versions/{version}/files -----
@@ -116,6 +170,8 @@ class VersionFilesData(BaseModel):
 
 
 class PluginVersionDeleteData(BaseModel):
+    """Legacy delete response used by Skill and regular plugin assets."""
+
     asset_id: str
     version: str
     plugin_type: Optional[str] = None
@@ -124,12 +180,42 @@ class PluginVersionDeleteData(BaseModel):
     skill_display_name: Optional[str] = None
 
 
+class AssetVersionDeleteData(PluginVersionDeleteData):
+    """Delete response for agent assets, retaining their exact asset type."""
+
+    asset_type: Literal["agent-plugin", "agent-template", "agent-group", "agent-mcp"]
+
+
 class PluginTemplatePresignData(BaseModel):
     """GET /plugins/publish-template 返回的预签名下载信息。"""
 
     download_url: str
     expires_in: int
     filename: str
+
+
+class AgentPackageCapabilityItem(BaseModel):
+    kind: str
+    id: str
+    name: str
+    description: Optional[str] = None
+
+
+class AgentPackageProfile(BaseModel):
+    package_type: Optional[str] = None
+    category: Optional[str] = None
+    source: Optional[str] = None
+    integration_type: Optional[str] = Field(
+        None, description="agent-mcp manifest.integration.type"
+    )
+    credentials_type: Optional[str] = Field(
+        None, description="agent-mcp manifest.credentials.type"
+    )
+    default_init_input: Optional[str] = None
+    quick_inputs: List[str] = Field(default_factory=list)
+    persona_markdown: Optional[str] = None
+    capabilities: List[AgentPackageCapabilityItem] = Field(default_factory=list)
+    manifest_tags: List[str] = Field(default_factory=list)
 
 
 class PluginVersionDetail(BaseModel):
@@ -152,6 +238,13 @@ class PluginVersionDetail(BaseModel):
     detail_desc: Optional[str] = None
     publisher_id: str
     publisher_name: str
+    publisher_official: bool = Field(False, description="发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official")
+
+    @model_validator(mode="after")
+    def _mark_official_publisher(self) -> "PluginVersionDetail":
+        self.publisher_official = _is_official_publisher(self.publisher_id)
+        return self
+
     tags: Optional[List[str]] = None
     category_id: Optional[str] = None
     category_name: Optional[str] = None
@@ -161,8 +254,14 @@ class PluginVersionDetail(BaseModel):
     icon_uri: Optional[str] = None
     publish_result: Optional[str] = None
     publish_failed_reason: Optional[str] = None
+    review_status: Optional[str] = None
+    review_failed_reason: Optional[str] = None
     review_summary: Optional[dict[str, Any]] = None
     review_sections: Optional[list[dict[str, Any]]] = None
+    review_mode: Optional[str] = None
+    review_engine: Optional[str] = None
+    model_name: Optional[str] = None
+    trace_id: Optional[str] = None
     install_count: int = Field(
         0,
         description="与列表一致：资产累计下载次数（artifact 预签名下载成功时递增）",
@@ -173,18 +272,26 @@ class PluginVersionDetail(BaseModel):
     )
     update_time: Optional[int] = Field(
         None,
-        description="当前查看的版本记录上传时间（market_asset_versions.create_time，毫秒）",
+        description=(
+            "详情页更新时间（毫秒）：优先资产 update_time（审核通过会刷新），"
+            "否则版本 create_time"
+        ),
     )
     viewer_is_market_moderation_admin: bool = Field(
         False,
         description="当前请求者是否为市场审核管理员（与配置文件 / 系统 token 一致）",
     )
+    access_source: Optional[str] = Field(None, description="当前用户访问来源：public | owner | group | admin")
     storage_mode: Optional[str] = Field(None, description="如 git")
     resolved_commit_sha: Optional[str] = Field(None, description="Git 同步解析到的 commit")
     declared_skill_version: Optional[str] = Field(None, description="SKILL 声明的版本")
     git_version_display_as_commit: bool = Field(
         False,
         description="为 true 时本行 version 显示为 commit 短码（仅当 version 等于资产 latest_version）",
+    )
+    agent_package_profile: Optional[AgentPackageProfile] = Field(
+        None,
+        description="agent-plugin / agent-template / agent-group / agent-mcp 内层 manifest 只读摘要",
     )
 
 
@@ -196,6 +303,7 @@ class PluginDownloadData(BaseModel):
 
     download_url: str
     asset_id: str
+    asset_type: str = "plugin"
     name: str
     display_name: Optional[str] = None
     version: str
@@ -205,10 +313,27 @@ class PluginDownloadData(BaseModel):
     plugin_type: Optional[str] = None
 
 
-PLUGIN_ORDER_BY_OPTIONS = ("install_count", "like_count", "view_count", "create_time", "update_time", "review_count")
+PLUGIN_ORDER_BY_OPTIONS = (
+    "install_count",
+    "like_count",
+    "view_count",
+    "create_time",
+    "update_time",
+    "review_count",
+    "recommend",
+    "hot_score",
+)
 
 
-OrderByField = Literal["install_count", "like_count", "view_count", "create_time", "update_time", "review_count"]
+OrderByField = Literal[
+    "install_count",
+    "like_count",
+    "view_count",
+    "create_time",
+    "update_time",
+    "review_count",
+    "hot_score",
+]
 
 
 class PluginListQuery(BaseModel):
@@ -226,16 +351,39 @@ class PluginListQuery(BaseModel):
         None,
         description='排除某 plugin_type（如 "skill"）：结果包含 plugin_type 为空或与该值不等的记录',
     )
-    search_keyword: Optional[str] = Field(None, description="搜索关键词，传入时走检索引擎语义搜索")
+    search_keyword: Optional[str] = Field(
+        None,
+        description="搜索关键词；Skill/SwarmSkill 与四类 Agent 资产使用各自独立的检索索引",
+    )
     moderation_status: Optional[str] = Field(
         None,
         description="按 Skill 审核状态筛选：PENDING | APPROVED | REJECTED；常配合 plugin_type=skill",
     )
+    tags: Optional[str] = Field(
+        None,
+        max_length=QUERY_TAGS_MAX_LEN,
+        description=(
+            "按标签过滤：逗号分隔多个标签；与 tags_match 组合决定 all(子集)/any(交集) 语义；"
+            f"参数长度上限 {QUERY_TAGS_MAX_LEN} 字符，超出返回 422"
+        ),
+    )
+    tags_match: Literal["all", "any"] = Field("all", description="标签匹配模式: all=同时包含全部标签, any=包含任一标签")
     order_by: str = Field(
         "install_count",
-        description="排序字段: install_count, like_count, view_count, create_time, update_time, review_count",
+        description=(
+            "排序字段: install_count, like_count, view_count, create_time, update_time, "
+            "review_count, hot_score（火爆值；离线定时重算的加权对数综合分）, "
+            "recommend（推荐精选；带 category_id 时回退 install_count；"
+            "需 MARKET_RECOMMENDER_ENABLED）"
+        ),
     )
     desc: bool = Field(True, description="排序方向: true=降序, false=升序")  # True=降序，False=升序
+    # 热门 tab 截断：只返回前 top_k 条（total 同步封顶）。仅前端「热门」页签无搜索/无标签时传入。
+    top_k: Optional[int] = Field(
+        None,
+        ge=1,
+        description="截断上限：只返回前 top_k 条，total 同步封顶。用于「热门」页签只展示最火爆的 N 个",
+    )
 
     @field_validator("plugin_type", "plugin_type_exclude", mode="before")
     @classmethod
@@ -271,6 +419,31 @@ class PluginListQuery(BaseModel):
         if s in ("PENDING", "APPROVED", "REJECTED"):
             return s
         raise ValueError("moderation_status must be one of: PENDING, APPROVED, REJECTED")
+
+    @field_validator("tags_match", mode="before")
+    @classmethod
+    def normalize_tags_match(cls, v: object) -> str:
+        """Normalize tags_match to lowercase so "ANY" / "All" match the Literal options."""
+        if v is None:
+            return "all"
+        s = str(v).strip().lower()
+        if s == "":
+            return "all"
+        return s
+
+
+class TagOption(BaseModel):
+    """GET /plugins/tags 返回的标签选项。"""
+
+    tag: str = Field(..., description="标签文本")
+    count: int = Field(..., ge=0, description="使用该标签的可见资产数")
+
+
+class CategoryTotalsData(BaseModel):
+    """GET /plugins/category-totals 返回的分类计数聚合。"""
+
+    totals: Dict[str, int] = Field(default_factory=dict, description="category_id -> 可见资产数（未分类不计入）")
+    all: int = Field(0, ge=0, description="全部可见资产总数（含未分类），与不带 category_id 的列表 total 同口径")
 
 
 class SkillModerationRequest(BaseModel):
@@ -329,12 +502,20 @@ class PluginListItem(BaseModel):
     icon_uri: Optional[str] = None
     publisher_id: str
     publisher_name: str
+    publisher_official: bool = Field(False, description="发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official")
+
+    @model_validator(mode="after")
+    def _mark_official_publisher(self) -> "PluginListItem":
+        self.publisher_official = _is_official_publisher(self.publisher_id)
+        return self
+
     tags: Optional[List[str]] = None
     category_id: Optional[str] = None
     category_name: Optional[str] = None
     certification: Optional[str] = None
     plugin_type: Optional[str] = None
     publish_result: Optional[str] = None
+    visibility: Optional[str] = Field("public", description="资产可见性：public | private")
     moderation_status: Optional[str] = Field(None, description="Skill：PENDING | APPROVED | REJECTED")
     moderation_reject_reason: Optional[str] = None
     latest_version: Optional[str] = None
@@ -367,6 +548,7 @@ class PluginListItem(BaseModel):
     star_count: int = 0
     review_count: int = 0
     average_rating: float = 8.0
+    hot_score: float = 0.0
     create_time: Optional[int] = None
     update_time: Optional[int] = None
     pin_order: Optional[int] = Field(
@@ -377,6 +559,7 @@ class PluginListItem(BaseModel):
         False,
         description="当前请求者是否为市场审核管理员",
     )
+    access_source: Optional[str] = Field(None, description="当前用户访问来源：public | owner | group | admin")
     storage_mode: Optional[str] = Field(None, description="如 git；与 declared / commit 共同决定版本展示")
     resolved_commit_sha: Optional[str] = Field(None, description="Git 同步解析到的 commit 全串")
     declared_skill_version: Optional[str] = Field(None, description="SKILL 声明的版本；空且为 git 时可用 commit 短码展示")

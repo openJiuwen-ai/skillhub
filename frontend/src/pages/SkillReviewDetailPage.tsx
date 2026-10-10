@@ -95,6 +95,11 @@ const CATEGORY_LABEL_KEY: Record<string, string> = {
   destructive_action: 'profile.reviewCategoryDestructiveAction',
   data_exfiltration: 'profile.reviewCategoryDataExfiltration',
   suspicious_external_endpoint: 'profile.reviewCategorySuspiciousExternalEndpoint',
+  resource_exhaustion: 'profile.reviewCategoryResourceExhaustion',
+  filesystem_boundary_violation: 'profile.reviewCategoryFilesystemBoundaryViolation',
+  unsafe_deserialization: 'profile.reviewCategoryUnsafeDeserialization',
+  abusive_automation: 'profile.reviewCategoryAbusiveAutomation',
+  input_interpretation_injection: 'profile.reviewCategoryInputInterpretationInjection',
 }
 
 export default function SkillReviewDetailPage() {

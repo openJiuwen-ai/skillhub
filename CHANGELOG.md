@@ -1,20 +1,33 @@
 # Changelog
 
-本文件记录 SkillHub 的版本迭代、新功能、变更与兼容性说明。  
+本文件记录 openJiuwen Agentic Hub 的版本迭代、新功能、变更与兼容性说明。  
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
 
 ### Added
 
-- [TeamSkillsHub 接口参考](../接口文档/v1/TeamSkillsHub-接口参考.md)：按模块组织的对外 API 文档（端点总览、curl 示例、可见性/审核状态表）
+- 第四类 Agent 资产 **专家团**（`plugin_type` / `runtime.type` = `agent-group`，内层 `package_type` = `agent_group`；对象存储 `agent-groups/`）
+- **火爆值**（`hot_score`）：近 7 天下载、累计下载、浏览、点赞与收藏、评分加权后定时回写；市场「热门」按该分排序，条数上限 `MARKET_HOT_LIST_TOP_K`（`GET /site/config` 的 `hot_list_top_k`）。与推荐开关无关
+- 列表与详情返回 `publisher_official`：发布者 ID 为系统管理员账号时，前端显示官方徽标；`publisher_name` 仍为原名
 - 用户文档体系：新用户入门、前端操作手册、角色与权限、场景化指引与 FAQ、环境配置说明（使用者）
 - 根目录 `CHANGELOG.md` 持续记录版本变更
 
 ### Changed
 
-- 官方托管域名由 `teamskills.openjiuwen.com` 更名为 `swarmskills.openjiuwen.com`（文档与默认市场地址已同步）
-- README 文档索引补充用户指南入口
+- CLI 合并为单一发行包 `openjiuwen-agentichub`，命令为 `agentichub`。`init --type` 改为六类 Agent 资产：`skill`、`swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`。不再提供 `openjiuwen-plugin`、`jiuwen-teamskills`，也不再脚手架 `tools` / `mcp-stdio` / `restful-api`
+- `MARKET_RECOMMENDER_ENABLED=false` 时仍注册 `POST /api/v1/recommend*`：`POST /recommend` 按 `install_count` 返回 200（`source=install_count`），Hub 目录外的 `plugin_type` 返回空列表；不再因关闭推荐返回 503
+- 下载计量按来源按日去重：同一登录用户或同一匿名指纹（IP + User-Agent）对同一资产在 UTC 当日只计一次 `install_count`；重复下载仍返回文件。失败的首次下载会释放当天名额
+- Agent 四类资产（插件 / 连接器 / 专家 / 专家团）发布：manifest 声明的 `skills`、`tools`、`persona` 等缺失文件不再拒发；Hub 只做包结构、路径安全与危险内容扫描，运行时齐套留给 JiuwenSwarm
+- 产品展示名与文档由 SwarmSkillsHub / SkillHub / TeamSkillsHub 统一为 **openJiuwen Agentic Hub**（仓库目录、Docker/K8s 内部名、`swarmskill` 类型与官方域名暂不改）
+- 官方托管站点为 [agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)
+- Skill、SwarmSkill、插件、连接器、专家、专家团统一称为 Agent 资产，开发指南收成 `Agent资产.md`；用户指南的六篇发布说明合成 `Agent资产发布.md`
+- API 阅读入口只保留接口参考；`openJiuwen-Agentic-Hub-OpenAPI.md` 只留错误码和 OpenAPI YAML
+- 市场与发布展示名：`agent-plugin` 为**插件**、`agent-mcp` 为**连接器**、`agent-template` 为**专家**、`agent-group` 为**专家团**（Tab / 发布类型顺序：插件、连接器、专家、专家团）；发布成功提示按所选类型显示
+- **Git 源接入**
+  - 同一仓库不同 `skills_subpath` 可由不同用户分别注册（路径归一化）
+  - 同步跳过改为以 Skill 目录内容摘要为主，避免无关 commit 导致重复更新
+  - 删除 Git 源时级联删除该源导入的 Skill，释放去重后可再次注册
 
 ---
 
@@ -24,17 +37,17 @@
 
 ### Added
 
-- **Web 前端（Swarm Skills Hub）**
+- **Web 前端（openJiuwen Agentic Hub）**
   - 首页 Skill / Swarm Skill 市场：分类、搜索、网格/列表视图、详情与下载
   - 发布抽屉：Skill 目录打包上传、模板下载、版本与 changelog
   - 个人中心：我的 Skills、收藏、点赞、Git 源同步
   - 审核管理员：待审核、审核历史、审计日志查询与 CSV 导出
-  - 系统审查详情页（规则 + 可选 AI 语义复核）
+  - 审查详情页（规则 + 可选 AI 语义复核）
   - 通知中心、多语言（中/英）、OAuth 登录（GitCode / GitHub）
 
 - **marketplace 后端**
   - Skill 发布与版本治理、预签名下载、互动（浏览/点赞/收藏）
-  - Skill 上架审核（系统审查可选 + 人工审核）
+  - Skill 上架审核（可选审查 + 审核）
   - Git 公开仓库批量同步 Skill
   - ClawHub 兼容层 API
   - 审计日志与 Skill 审核操作追溯
@@ -44,7 +57,7 @@
 
 - **部署**
   - 本地安装与 Docker（Windows）文档
-  - TeamSkillsHub OpenAPI 接口文档
+  - openJiuwen Agentic Hub OpenAPI 接口文档
 
 ### Security
 
@@ -59,14 +72,14 @@
 ### 从 0.0.1 升级
 
 1. 备份 MySQL 与对象存储桶
-2. 对照 `.env.example` 检查新增环境变量（如 OAuth、系统审查、Git 同步相关项）
+2. 对照 `.env.example` 检查新增环境变量（如 OAuth、审查、Git 同步相关项）
 3. 重启 marketplace 与 frontend 容器/进程
 4. 验证 `/api/health` 与 OAuth 登录回调
 
 ### 兼容性
 
 - **数据库**：升级时 marketplace 启动会自动迁移 schema；建议在维护窗口操作
-- **API**：客户端请优先使用 `detail.error_code` 解析错误；OpenAPI 见 `docs/zh/接口文档/v1/TeamSkillsHub.md`
+- **API**：客户端请优先使用 `detail.error_code` 解析错误；OpenAPI 见 `docs/zh/7. API参考/openJiuwen-Agentic-Hub-OpenAPI.md`
 - **CLI**：与市场 API 版本保持一致部署，避免跨大版本混用
 
 ---

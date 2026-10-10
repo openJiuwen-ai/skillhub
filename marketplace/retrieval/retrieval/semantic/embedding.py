@@ -234,6 +234,12 @@ class EmbeddingFinder:
         return normalized_hits, {
             **decision.to_dict(),
             "requested_top_k": top_k,
+            # These are rejects within the vector top_k window, not the entire corpus.
+            "score_rejected_samples": [
+                {"choice_id": hit.choice_id, "payload": hit.payload, "score": hit.score}
+                for hit in hits[len(truncated):len(truncated) + 10]
+            ],
+            "score_rejected_omitted_count": max(0, len(hits) - len(truncated) - 10),
         }
 
 

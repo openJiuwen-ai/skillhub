@@ -3,7 +3,7 @@ import os
 import shutil
 import time
 
-from indexing.workflows.artifacts import BuildConfig, BuildMethod
+from indexing.workflows.artifacts import BuildConfig
 from indexing.workflows.index_builder import IndexBuilder
 
 logger = logging.getLogger(__name__)
@@ -21,12 +21,7 @@ def main():
 
     # 配置初始化
     config_start = time.time()
-    config = BuildConfig(
-        method=BuildMethod.TREE,
-        llm_model=os.getenv("LLM_MODEL_NAME"),
-        llm_api_key=os.getenv("OPENAI_API_KEY"),
-        llm_base_url=os.getenv("OPENAI_BASE_URL"),
-    )
+    config = BuildConfig()
     config_cost = time.time() - config_start
     logger.info("配置初始化完成，耗时: %.2f 秒", config_cost)
 

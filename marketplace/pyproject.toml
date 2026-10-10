@@ -31,6 +31,7 @@ dependencies = [
     "openai>=1.0.0",
     "numpy>=1.24.0",
     "faiss-cpu>=1.7.0",
+    "pymilvus>=2.4.0",
 ]
 
 [tool.setuptools]

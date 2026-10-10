@@ -17,6 +17,8 @@ import {
   ScrollText,
   Search,
   Star,
+  Trash2,
+  Users,
   X,
 } from 'lucide-react'
 import { Typography } from '@mui/material'
@@ -25,7 +27,7 @@ import { GitSourcesPanel } from '@/components/Profile/GitSourcesPanel'
 import { Breadcrumbs } from '@/components/Common/Breadcrumbs'
 import { usePublishDrawer } from '@/contexts/PublishDrawer'
 import { Pagination } from '@/components/Common/common-table'
-import { useQuery, useQueryClient } from 'react-query'
+import { useMutation, useQuery, useQueryClient } from 'react-query'
 import { AuditLogTab } from '@/components/AuditLog/AuditLogTab'
 import {
   deletePluginAllVersions,
@@ -43,7 +45,8 @@ import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
-import { SKILL_LIKE_QUERY_VALUE } from '@/utils/pluginType'
+import { MARKET_TAB_PLUGIN_TYPES, MODERATED_MARKET_QUERY_VALUE, assetDetailPath, isAgentAssetPluginType, normalizePluginType } from '@/utils/pluginType'
+import { listMyGroups, listMyGroupSkills, revokeSkillFromGroup, type GroupItem, type MyGroupSkillItem } from '@/api/groups'
 import emptyDataIllustration from '@/assets/empty-data.svg'
 
 const PROFILE_PAGE_SIZE_OPTIONS = [10, 20, 50] as const
@@ -62,6 +65,15 @@ function compareVersionStrings(left: string, right: string): number {
     if (compared !== 0) return compared
   }
   return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' })
+}
+
+function formatTime(ms?: number | null): string {
+  if (!ms) return '-'
+  try {
+    return new Date(ms).toLocaleString()
+  } catch {
+    return '-'
+  }
 }
 
 function resolveSkillReviewVersion(item: MarketplacePluginItem): string {
@@ -91,9 +103,11 @@ export default function MyProfilePage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [search, setSearch] = useState('')
+  const [pendingTypeFilter, setPendingTypeFilter] = useState<'all' | (typeof MARKET_TAB_PLUGIN_TYPES)[number]>('all')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<MarketplacePluginItem | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [revokingGrantKey, setRevokingGrantKey] = useState<string | null>(null)
 
   useEffect(() => {
     if (isAuthenticated) return
@@ -103,7 +117,9 @@ export default function MyProfilePage() {
 
   const tabParam = searchParams.get('tab')
 
-  const activeTab = useMemo<'skill' | 'stars' | 'likes' | 'git' | 'pending' | 'audit' | 'audit-log'>(() => {
+  const activeTab = useMemo<'skill' | 'groups' | 'group-skill' | 'stars' | 'likes' | 'git' | 'pending' | 'audit' | 'audit-log'>(() => {
+    if (tabParam === 'groups') return 'groups'
+    if (tabParam === 'group-skill') return 'group-skill'
     if (tabParam === 'stars') return 'stars'
     if (tabParam === 'likes') return 'likes'
     if (tabParam === 'git') return 'git'
@@ -123,10 +139,15 @@ export default function MyProfilePage() {
 
   useEffect(() => {
     setPage(1)
-  }, [activeTab])
+  }, [activeTab, search, pendingTypeFilter])
+
+  const pendingPluginTypeQuery =
+    pendingTypeFilter === 'all' ? MODERATED_MARKET_QUERY_VALUE : pendingTypeFilter
 
   const publisherId = user?.id
   const isSkillTab = activeTab === 'skill'
+  const isGroupsTab = activeTab === 'groups'
+  const isGroupSkillTab = activeTab === 'group-skill'
   const isStarsTab = activeTab === 'stars'
   const isLikesTab = activeTab === 'likes'
   const isGitTab = activeTab === 'git'
@@ -145,7 +166,7 @@ export default function MyProfilePage() {
         publisher_id: publisherId,
         order_by: 'update_time',
         desc: true,
-        plugin_type: SKILL_LIKE_QUERY_VALUE,
+        plugin_type: MODERATED_MARKET_QUERY_VALUE,
       }),
     {
       enabled: Boolean(publisherId) && isSkillTab,
@@ -156,12 +177,12 @@ export default function MyProfilePage() {
   )
 
   const pendingSkillsQuery = useQuery(
-    ['admin-pending-skills', page, pageSize],
+    ['admin-pending-skills', page, pageSize, pendingPluginTypeQuery],
     () =>
       getPlugins({
         page,
         page_size: pageSize,
-        plugin_type: SKILL_LIKE_QUERY_VALUE,
+        plugin_type: pendingPluginTypeQuery,
         moderation_status: 'PENDING',
         order_by: 'update_time',
         desc: true,
@@ -169,6 +190,31 @@ export default function MyProfilePage() {
     {
       enabled: isMarketModerationAdmin && isPendingTab,
       keepPreviousData: true,
+      refetchOnMount: 'always',
+      staleTime: 0,
+    },
+  )
+
+  const myGroupsQuery = useQuery(
+    ['profile-my-groups', page, pageSize, search.trim()],
+    () => listMyGroups({ page, page_size: pageSize, keyword: search.trim() || undefined }),
+    {
+      enabled: isGroupsTab,
+      keepPreviousData: true,
+      refetchOnMount: 'always',
+      staleTime: 0,
+    },
+  )
+
+
+  const myGroupSkillsQuery = useQuery(
+    ['my-group-skills', page, pageSize, search.trim()],
+    () => listMyGroupSkills({ page, page_size: pageSize, keyword: search.trim() || undefined }),
+    {
+      enabled: isGroupSkillTab,
+      keepPreviousData: true,
+      refetchOnMount: 'always',
+      staleTime: 0,
     },
   )
 
@@ -210,49 +256,61 @@ export default function MyProfilePage() {
     : isSkillTab
       ? mySkillsQuery.data
       : isStarsTab
-        ? myStarsQuery.data
-        : isLikesTab
-          ? myLikesQuery.data
-          : isPendingTab
-            ? pendingSkillsQuery.data
-            : auditHistoryQuery.data
+          ? myStarsQuery.data
+          : isLikesTab
+            ? myLikesQuery.data
+            : isPendingTab
+              ? pendingSkillsQuery.data
+              : auditHistoryQuery.data
   const isLoading = isGitTab
     ? false
     : isSkillTab
       ? mySkillsQuery.isLoading
-      : isStarsTab
-        ? myStarsQuery.isLoading
-        : isLikesTab
-          ? myLikesQuery.isLoading
-          : isPendingTab
-            ? pendingSkillsQuery.isLoading
-            : auditHistoryQuery.isLoading
+      : isGroupsTab
+        ? myGroupsQuery.isLoading
+        : isGroupSkillTab
+          ? myGroupSkillsQuery.isLoading
+          : isStarsTab
+          ? myStarsQuery.isLoading
+          : isLikesTab
+            ? myLikesQuery.isLoading
+            : isPendingTab
+              ? pendingSkillsQuery.isLoading
+              : auditHistoryQuery.isLoading
   const error = isGitTab
     ? undefined
     : isSkillTab
       ? mySkillsQuery.error
-      : isStarsTab
-        ? myStarsQuery.error
-        : isLikesTab
-          ? myLikesQuery.error
-          : isPendingTab
-            ? pendingSkillsQuery.error
-            : auditHistoryQuery.error
+      : isGroupsTab
+        ? myGroupsQuery.error
+        : isGroupSkillTab
+          ? myGroupSkillsQuery.error
+          : isStarsTab
+          ? myStarsQuery.error
+          : isLikesTab
+            ? myLikesQuery.error
+            : isPendingTab
+              ? pendingSkillsQuery.error
+              : auditHistoryQuery.error
 
-  const items = data?.data.items ?? []
-  const total = data?.data.total ?? 0
+  const items = isGroupsTab ? (myGroupsQuery.data?.items ?? []) : isGroupSkillTab ? (myGroupSkillsQuery.data?.items ?? []) : (data?.data.items ?? [])
+  const total = isGroupsTab ? (myGroupsQuery.data?.total ?? 0) : isGroupSkillTab ? (myGroupSkillsQuery.data?.total ?? 0) : (data?.data.total ?? 0)
+  const groupItems = isGroupsTab ? (items as GroupItem[]) : []
+  const groupSkillItems = isGroupSkillTab ? (items as MyGroupSkillItem[]) : []
   const auditItems = (items as SkillModerationAuditItem[]) ?? []
 
   useEffect(() => {
-    if (total <= 0 || !data) return
+    if (total <= 0 || (!data && !isGroupSkillTab && !isGroupsTab)) return
     const totalPages = Math.max(1, Math.ceil(total / pageSize))
     if (page > totalPages) setPage(totalPages)
-  }, [data, total, pageSize, page])
+  }, [data, total, pageSize, page, isGroupSkillTab, isGroupsTab])
 
   /** 客户端过滤当前页结果，保证搜索体验与服务端分页兼容（审核历史走服务端分页，不参与本地过滤） */
   const filteredItems = useMemo(() => {
     if (isAuditTab) return []
     if (isGitTab) return []
+    if (isGroupsTab) return groupItems
+    if (isGroupSkillTab) return groupSkillItems
     const list = items as MarketplacePluginItem[]
     const q = search.trim().toLowerCase()
     if (!q) return list
@@ -261,7 +319,7 @@ export default function MyProfilePage() {
       const b = (it.name || '').toLowerCase()
       return a.includes(q) || b.includes(q)
     })
-  }, [items, search, isAuditTab])
+  }, [items, search, isAuditTab, isGitTab, isGroupsTab, groupItems, isGroupSkillTab, groupSkillItems])
 
   const errMsg = useMemo(() => {
     if (!error) return ''
@@ -278,6 +336,10 @@ export default function MyProfilePage() {
   }
 
   const openReviewDetail = (row: MarketplacePluginItem) => {
+    if (isPendingTab) {
+      openDetail(row)
+      return
+    }
     const version = resolveSkillReviewVersion(row)
     if (!version) {
       window.alert(t('profile.missingVersion'))
@@ -303,7 +365,7 @@ export default function MyProfilePage() {
     if (isPendingTab) {
       const version = resolveSkillReviewVersion(row)
       const query = version ? `?version=${encodeURIComponent(version)}&moderation_status=PENDING` : '?moderation_status=PENDING'
-      navigate(`/skills/${encodeURIComponent(row.asset_id)}${query}`, {
+      navigate(`${assetDetailPath(row.asset_id, row.plugin_type)}${query}`, {
         state: { fromProfile: true, moderationContext: 'pending' },
       })
       return
@@ -311,13 +373,18 @@ export default function MyProfilePage() {
     if (isStarsTab || isLikesTab) {
       const version = row.latest_version?.trim()
       const query = version ? `?version=${encodeURIComponent(version)}` : ''
-      navigate(`/skills/${encodeURIComponent(row.asset_id)}${query}`, { state: { fromProfile: true } })
+      navigate(`${assetDetailPath(row.asset_id, row.plugin_type)}${query}`, { state: { fromProfile: true } })
       return
     }
     const v = row.latest_version?.trim()
     const versions = Array.isArray(row.all_versions) ? row.all_versions : []
     const fallback = versions.length ? versions[versions.length - 1] : ''
     const hint = v || fallback
+    if (isAgentAssetPluginType(row.plugin_type)) {
+      const query = hint ? `?version=${encodeURIComponent(hint)}` : ''
+      navigate(`${assetDetailPath(row.asset_id, row.plugin_type)}${query}`, { state: { fromProfile: true } })
+      return
+    }
     if (!hint) {
       window.alert(t('profile.missingVersion'))
       return
@@ -335,18 +402,51 @@ export default function MyProfilePage() {
   const { openPublish } = usePublishDrawer()
   const handleGoPublish = () => openPublish()
 
+  const invalidateSkillCaches = async (assetId: string) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['my-published-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['my-group-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['plugins'] }),
+      queryClient.invalidateQueries({ queryKey: ['group'] }),
+      queryClient.invalidateQueries({ queryKey: ['group-grants'] }),
+      queryClient.invalidateQueries({ queryKey: ['group-grantable-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['group-grant-states'] }),
+      queryClient.invalidateQueries({ queryKey: ['asset-detail-raw', assetId] }),
+    ])
+  }
+
   const handleConfirmDelete = async () => {
     if (!deleteTarget || deleting) return
     setDeleting(true)
     try {
       await deletePluginAllVersions(deleteTarget.asset_id)
       setDeleteTarget(null)
-      await queryClient.invalidateQueries({ queryKey: ['my-published-skills'] })
+      await invalidateSkillCaches(deleteTarget.asset_id)
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('profile.deleteFailed')
       window.alert(msg)
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const handleRevokeGroupGrant = async (groupId: string, assetId: string, skillTitle: string) => {
+    if (revokingGrantKey) return
+    if (!window.confirm(t('groups.revokeGrantConfirm', { name: skillTitle }))) return
+    const key = `${groupId}:${assetId}`
+    setRevokingGrantKey(key)
+    try {
+      await revokeSkillFromGroup(groupId, assetId)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['my-group-skills'] }),
+        queryClient.invalidateQueries({ queryKey: ['group-grants'] }),
+        queryClient.invalidateQueries({ queryKey: ['group-grantable-skills'] }),
+      ])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t('profile.deleteFailed')
+      window.alert(msg)
+    } finally {
+      setRevokingGrantKey(null)
     }
   }
 
@@ -435,6 +535,32 @@ export default function MyProfilePage() {
             >
               <Puzzle className="h-[14px] w-[14px] text-[#191919]" aria-hidden />
               <span>{t('profile.sidebar.mySkills')}</span>
+            </Link>
+            <Link
+              to="/profile?tab=groups"
+              onClick={() => setSidebarOpen(false)}
+              aria-current={isGroupsTab ? 'page' : undefined}
+              className={
+                isGroupsTab
+                  ? 'flex h-10 w-[200px] items-center gap-2 rounded-lg bg-white px-3 text-[13px] font-normal leading-5 text-[#191919] shadow-[0_1px_2px_rgba(16,24,40,0.05)]'
+                  : 'flex h-10 w-[200px] items-center gap-2 rounded-lg px-3 text-[13px] font-normal leading-5 text-[#191919] transition-colors hover:bg-white hover:shadow-[0_1px_2px_rgba(16,24,40,0.05)]'
+              }
+            >
+              <Users className="h-[14px] w-[14px] text-[#191919]" aria-hidden />
+              <span>{t('profile.sidebar.myGroups')}</span>
+            </Link>
+            <Link
+              to="/profile?tab=group-skill"
+              onClick={() => setSidebarOpen(false)}
+              aria-current={isGroupSkillTab ? 'page' : undefined}
+              className={
+                isGroupSkillTab
+                  ? 'flex h-10 w-[200px] items-center gap-2 rounded-lg bg-white px-3 text-[13px] font-normal leading-5 text-[#191919] shadow-[0_1px_2px_rgba(16,24,40,0.05)]'
+                  : 'flex h-10 w-[200px] items-center gap-2 rounded-lg px-3 text-[13px] font-normal leading-5 text-[#191919] transition-colors hover:bg-white hover:shadow-[0_1px_2px_rgba(16,24,40,0.05)]'
+              }
+            >
+              <Users className="h-[14px] w-[14px] text-[#191919]" aria-hidden />
+              <span>{t('profile.sidebar.groupSkills')}</span>
             </Link>
             <Link
               to="/profile?tab=stars"
@@ -549,7 +675,11 @@ export default function MyProfilePage() {
                     <h2 className="text-[16px] font-semibold leading-6 text-[#191919]">
                       {isSkillTab
                         ? t('profile.skillsTitle')
-                        : isStarsTab
+                        : isGroupsTab
+                          ? t('profile.groupsTitle')
+                          : isGroupSkillTab
+                            ? t('profile.groupSkillsTitle')
+                            : isStarsTab
                           ? t('profile.starsTitle')
                           : isLikesTab
                             ? t('profile.likesTitle')
@@ -564,7 +694,11 @@ export default function MyProfilePage() {
                     <p className="mt-1 text-xs text-[#6B7280]">
                       {isSkillTab
                         ? t('profile.skillsSubtitle')
-                        : isStarsTab
+                        : isGroupsTab
+                          ? t('profile.groupsSubtitle')
+                          : isGroupSkillTab
+                            ? t('profile.groupSkillsSubtitle')
+                            : isStarsTab
                           ? t('profile.starsSubtitle')
                           : isLikesTab
                             ? t('profile.likesSubtitle')
@@ -597,8 +731,29 @@ export default function MyProfilePage() {
               </div>
             ) : null}
 
-            {(isSkillTab || isPendingTab || isStarsTab || isLikesTab) ? (
-              <div className="relative mt-4">
+            {(isSkillTab || isGroupsTab || isGroupSkillTab || isPendingTab || isStarsTab || isLikesTab) ? (
+              <div className="relative mt-4 space-y-3">
+                {isPendingTab ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="pending-type-filter" className="text-xs font-medium text-[#6B7280]">
+                      {t('profile.pendingTypeFilterLabel')}
+                    </label>
+                    <select
+                      id="pending-type-filter"
+                      value={pendingTypeFilter}
+                      onChange={e => setPendingTypeFilter(e.target.value as typeof pendingTypeFilter)}
+                      className="h-9 rounded-lg border border-[#E5E7EB] bg-white px-3 text-sm text-[#111827] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
+                    >
+                      <option value="all">{t('profile.pendingTypeFilterAll')}</option>
+                      {MARKET_TAB_PLUGIN_TYPES.map(type => (
+                        <option key={type} value={type}>
+                          {t(`plugins.marketTypeLabel.${type}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                <div className="relative">
                 <Search
                   className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
                   aria-hidden
@@ -610,6 +765,7 @@ export default function MyProfilePage() {
                   placeholder={t('profile.searchPlaceholder')}
                   className="h-10 w-full rounded-lg border border-[#E5E7EB] bg-white pl-10 pr-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
                 />
+                </div>
               </div>
             ) : null}
 
@@ -645,6 +801,19 @@ export default function MyProfilePage() {
                     ))}
                   </div>
                 )
+              ) : isGroupsTab ? (
+                <div className="flex flex-col gap-5">
+                  {filteredItems.length === 0 ? (
+                    <div className="flex flex-1 flex-col items-center justify-center py-12">
+                      <img src={emptyDataIllustration} alt="" aria-hidden className="h-32 w-32 select-none" draggable={false} />
+                      <div className="mt-4 text-sm text-[#6B7280]">{t('profile.emptyGroupsTitle')}</div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                      {(filteredItems as GroupItem[]).map(row => <GroupCard key={row.group_id} item={row} onOpen={() => navigate(`/groups/${encodeURIComponent(row.group_id)}`)} />)}
+                    </div>
+                  )}
+                </div>
               ) : filteredItems.length === 0 ? (
                 <div className="flex flex-1 flex-col items-center justify-center py-12">
                   <img
@@ -657,11 +826,15 @@ export default function MyProfilePage() {
                   <div className="mt-4 text-sm text-[#6B7280]">
                     {isSkillTab
                       ? t('profile.emptySkillsTitle')
-                      : isStarsTab
-                        ? t('profile.emptyStarsTitle')
-                        : isLikesTab
-                          ? t('profile.emptyLikesTitle')
-                          : t('profile.emptyPendingSkillsTitle')}
+                      : isGroupsTab
+                        ? t('profile.emptyGroupsTitle')
+                        : isGroupSkillTab
+                          ? t('profile.emptyGroupSkillsTitle')
+                          : isStarsTab
+                          ? t('profile.emptyStarsTitle')
+                          : isLikesTab
+                            ? t('profile.emptyLikesTitle')
+                            : t('profile.emptyPendingSkillsTitle')}
                   </div>
                   {isSkillTab ? (
                     <button
@@ -676,23 +849,52 @@ export default function MyProfilePage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                  {filteredItems.map((row: MarketplacePluginItem) => (
-                    <SkillCard
-                      key={row.asset_id}
-                      item={row}
-                      showDelete={isSkillTab}
-                      statusMode={isSkillTab ? 'publish' : 'moderation'}
-                      showModerationStatus={isSkillTab || isPendingTab}
-                      onOpen={() => openDetail(row)}
-                      onOpenReview={isPendingTab ? () => openReviewDetail(row) : undefined}
-                      onDelete={() => setDeleteTarget(row)}
-                    />
-                  ))}
+                  {isGroupSkillTab
+                    ? (filteredItems as MyGroupSkillItem[]).map(row => {
+                      const skillTitle = row.skill.display_name || row.skill.name || row.skill.asset_id
+                      const grantKey = `${row.group_id}:${row.skill.asset_id}`
+                      return (
+                      <SkillCard
+                        key={`${row.group_id}-${row.skill.asset_id}`}
+                        item={row.skill}
+                        groupName={row.group_name}
+                        showDelete={false}
+                        statusMode="publish"
+                        showModerationStatus
+                        accessSource={row.viewer_access_source ?? null}
+                        onRevoke={
+                          row.viewer_access_source === 'owner'
+                            ? () => handleRevokeGroupGrant(row.group_id, row.skill.asset_id, skillTitle)
+                            : undefined
+                        }
+                        revoking={revokingGrantKey === grantKey}
+                        onOpen={() => {
+                          const version = row.skill.latest_version?.trim()
+                          const query = version ? `?version=${encodeURIComponent(version)}` : ''
+                          navigate(`/skills/${encodeURIComponent(row.skill.asset_id)}${query}`)
+                        }}
+                        onDelete={() => undefined}
+                      />
+                      )
+                    })
+                    : (filteredItems as MarketplacePluginItem[]).map(row => (
+                      <SkillCard
+                        key={row.asset_id}
+                        item={row}
+                        showDelete={isSkillTab}
+                        statusMode={isSkillTab ? 'publish' : 'moderation'}
+                        showModerationStatus={isSkillTab || isPendingTab}
+                        showPluginType={isPendingTab}
+                        onOpen={() => openDetail(row)}
+                        onOpenReview={isPendingTab ? () => openReviewDetail(row) : undefined}
+                        onDelete={() => setDeleteTarget(row)}
+                      />
+                    ))}
                 </div>
               )}
             </div>
 
-            {total > 0 && data && !isGitTab && !isAuditLogTab ? (
+            {total > 0 && (data || isGroupSkillTab || isGroupsTab) && !isGitTab && !isAuditLogTab ? (
               <div className="mt-4 shrink-0 border-t border-[#e5e7eb] pt-4">
                 <Pagination
                   pager={{
@@ -844,11 +1046,19 @@ function AuditHistoryCard({ item, onOpenDetail }: AuditHistoryCardProps) {
 
 type SkillCardProps = {
   item: MarketplacePluginItem
+  groupName?: string
   /** 待审核队列中为 false，不展示删除 */
   showDelete?: boolean
   statusMode?: 'publish' | 'moderation'
   /** 收藏/点赞页不展示审核状态标签 */
   showModerationStatus?: boolean
+  /** 待审页展示资产类型（Skill / Agent 等） */
+  showPluginType?: boolean
+  /** 该授权对当前用户的可见来源（admin/owner/group/public） */
+  accessSource?: 'admin' | 'owner' | 'group' | 'public' | null
+  /** 撤销组群授权回调；传入则展示撤销按钮 */
+  onRevoke?: () => void
+  revoking?: boolean
   onOpen: () => void
   onOpenReview?: () => void
   onDelete: () => void
@@ -901,11 +1111,55 @@ function skillModerationUi(
   return { text: t('profile.card.moderationApproved'), dot: 'bg-emerald-500' }
 }
 
+function groupRoleLabel(role: GroupItem['viewer_role'], t: ReturnType<typeof useTranslation>['t']): string {
+  if (role === 'owner') return t('groups.role.owner')
+  if (role === 'member') return t('groups.role.member')
+  return '-'
+}
+
+function GroupCard({ item, onOpen }: { item: GroupItem; onOpen: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      className="group flex cursor-pointer flex-col gap-3 rounded-xl border border-[#E5E7EB] bg-white px-4 py-4 transition-all hover:border-[#CBD5E1] hover:shadow-[0_4px_12px_rgba(16,24,40,0.06)]"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-[#111827]" title={item.name}>{item.name}</div>
+          <div className="mt-1 line-clamp-2 text-xs leading-5 text-[#6B7280]">{item.description || t('groups.noDescription')}</div>
+        </div>
+        <span className="shrink-0 rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[11px] font-medium text-[#4F46E5]">{groupRoleLabel(item.viewer_role, t)}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-[#6B7280]">
+        <span>{t('groups.members')}: {item.member_count}</span>
+        <span className="text-[#D1D5DB]">·</span>
+        <span>{t('groups.grantedSkills')}: {item.skill_count}</span>
+        <span className="text-[#D1D5DB]">·</span>
+        <span>{t('groups.updatedAt')}: {formatTime(item.update_time)}</span>
+      </div>
+    </div>
+  )
+}
+
 function SkillCard({
   item,
+  groupName,
   showDelete = true,
   statusMode = 'publish',
   showModerationStatus = true,
+  showPluginType = false,
+  accessSource,
+  onRevoke,
+  revoking,
   onOpen,
   onOpenReview,
   onDelete,
@@ -919,6 +1173,12 @@ function SkillCard({
   const showUserIcon = Boolean(iconUrl) && !iconFailed
   const version = item.latest_version?.trim()
   const { text: statusText, dot: statusDot } = skillModerationUi(item, t, statusMode)
+  const isPrivate = String(item.visibility || 'public').toLowerCase() === 'private'
+  const pluginTypeKey = normalizePluginType(item.plugin_type)
+  const pluginTypeLabel =
+    pluginTypeKey && MARKET_TAB_PLUGIN_TYPES.includes(pluginTypeKey as (typeof MARKET_TAB_PLUGIN_TYPES)[number])
+      ? t(`plugins.marketTypeLabel.${pluginTypeKey}`)
+      : pluginTypeKey || '—'
 
   return (
     <div
@@ -955,7 +1215,37 @@ function SkillCard({
         <div className="truncate text-sm font-semibold text-[#111827]" title={title}>
           {title}
         </div>
-        <div className="mt-1 flex items-center gap-2 text-xs text-[#6B7280]">
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#6B7280]">
+          {showPluginType ? (
+            <>
+              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                {pluginTypeLabel}
+              </span>
+              <span className="text-[#D1D5DB]">·</span>
+            </>
+          ) : null}
+          {groupName ? (
+            <>
+              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                {t('profile.card.groupGranted')}
+              </span>
+              <span>{t('profile.card.fromGroup', { group: groupName })}</span>
+              {accessSource ? (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                    accessSource === 'owner'
+                      ? 'bg-amber-50 text-amber-700'
+                      : accessSource === 'admin'
+                        ? 'bg-sky-50 text-sky-700'
+                        : 'bg-[#F3F4F6] text-[#6B7280]'
+                  }`}
+                >
+                  {t(`groups.grantAccessSource.${accessSource}`)}
+                </span>
+              ) : null}
+              <span className="text-[#D1D5DB]">·</span>
+            </>
+          ) : null}
           <span className="tabular-nums">
             {version
               ? formatSkillVersionLabel(version, {
@@ -973,9 +1263,17 @@ function SkillCard({
               <span>{statusText}</span>
             </>
           ) : null}
+          <span className="text-[#D1D5DB]">·</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+              isPrivate ? 'bg-slate-100 text-slate-700' : 'bg-emerald-50 text-emerald-700'
+            }`}
+          >
+            {isPrivate ? t('profile.card.visibilityPrivate') : t('profile.card.visibilityPublic')}
+          </span>
         </div>
       </div>
-      {showDelete || onOpenReview ? (
+      {showDelete || onOpenReview || onRevoke ? (
         <div className="flex shrink-0 items-center gap-3">
           {onOpenReview ? (
             <button
@@ -987,6 +1285,21 @@ function SkillCard({
               className="text-xs font-medium text-[#0950DE] transition-colors hover:text-[#0741B8]"
             >
               {t('profile.viewReviewDetail')}
+            </button>
+          ) : null}
+          {onRevoke ? (
+            <button
+              type="button"
+              disabled={revoking}
+              onClick={e => {
+                e.stopPropagation()
+                if (!revoking) onRevoke()
+              }}
+              className="rounded-lg p-2 text-red-600 opacity-80 transition-colors hover:bg-red-50 hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label={t('groups.revoke')}
+              title={t('groups.revoke')}
+            >
+              <Trash2 className="h-4 w-4" aria-hidden />
             </button>
           ) : null}
           {showDelete ? (

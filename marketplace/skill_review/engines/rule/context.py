@@ -7,6 +7,18 @@ from skill_review.engines.rule.patterns import RulePattern
 
 DOCUMENTATION_EXTENSIONS = {".md", ".mdx", ".txt", ".rst", ".adoc"}
 REFERENCE_PATH_PATTERN = re.compile(r"(^|/)(references?|docs?|examples?|samples?|guides?|tutorials?)(/|$)", re.I)
+REFERENCE_FILE_NAMES = {
+    "readme",
+    "guide",
+    "guides",
+    "usage",
+    "tutorial",
+    "tutorials",
+    "reference",
+    "references",
+    "examples",
+    "security",
+}
 PLACEHOLDER_CONTEXT_PATTERN = re.compile(
     r"\b(mock|fake|dummy|placeholder|sample|demo|fixture|test(?:ing)?|sandbox)\b|示例|演示|占位|样例|模拟",
     re.I,
@@ -40,11 +52,12 @@ def resolve_rule_severity(
         return "low"
     if pattern.requires_external_endpoint and not has_external_endpoint_near(lines, line_index):
         return "low"
+    weight = context_weight(file_path, lines, line_index)
     if pattern.check_id == "destructive_operation" and is_project_local_cleanup_command(line):
-        return downgrade_severity("medium", context_weight(file_path, lines, line_index))
+        return downgrade_severity("medium", weight)
     if not pattern.allow_context_downgrade:
         return pattern.severity
-    return downgrade_severity(pattern.severity, context_weight(file_path, lines, line_index))
+    return downgrade_severity(pattern.severity, weight)
 
 
 def context_weight(file_path: str, lines: list[str], line_index: int) -> str:
@@ -65,7 +78,9 @@ def context_weight(file_path: str, lines: list[str], line_index: int) -> str:
 
 
 def downgrade_severity(severity: Severity, weight: str) -> Severity:
-    if weight in {"reference", "optional"}:
+    if weight == "reference":
+        return "medium" if severity == "high" else severity
+    if weight == "optional":
         return "low"
     if weight == "bootstrap":
         return "medium" if severity == "high" else severity
@@ -78,7 +93,12 @@ def downgrade_severity(severity: Severity, weight: str) -> Severity:
 
 def is_reference_documentation(file_path: str) -> bool:
     normalized = normalize_path(file_path)
-    return bool(REFERENCE_PATH_PATTERN.search(normalized) and path_extension(normalized) in DOCUMENTATION_EXTENSIONS)
+    extension = path_extension(normalized)
+    if extension not in DOCUMENTATION_EXTENSIONS:
+        return False
+    file_name = normalized.rsplit("/", 1)[-1]
+    stem = file_name[: -len(extension)] if extension else file_name
+    return stem in REFERENCE_FILE_NAMES or bool(REFERENCE_PATH_PATTERN.search(normalized))
 
 
 def is_executable_script(file_path: str) -> bool:

@@ -36,16 +36,16 @@
     "progressive_selection_mode": "generate",
 
     "progressive_scoring_backend": "vllm",
-    "progressive_scoring_backend_model_path": "/data/xt/codes/FineTune/models/qwen3_30b_a3b_instruct",
-    "progressive_scoring_backend_tokenizer_path": "/data/xt/codes/FineTune/models/qwen3_30b_a3b_instruct",
+    "progressive_scoring_backend_model_path": "",
+    "progressive_scoring_backend_tokenizer_path": "",
     "progressive_scoring_backend_device": "auto",
     "progressive_scoring_backend_dtype": "auto",
     "progressive_scoring_backend_enable_prefix_caching": true,
     "progressive_scoring_backend_vllm_kwargs": {
         "tensor_parallel_size": 2,
         "gpu_memory_utilization": 0.8,
-        "base_url": "http://10.50.91.126:37000/v1",
-        "api_key": "haha",
+        "base_url": "",
+        "api_key": "",
         "request_model": "qwen3.5_35b_a3b_instruct"
     },
     "progressive_scoring_backend_batching_enabled": true,

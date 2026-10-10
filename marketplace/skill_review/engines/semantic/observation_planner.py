@@ -136,6 +136,18 @@ def dimensions_for_behavior_fact(fact: dict[str, Any]) -> list[str]:
         return ["external_boundary"]
     if kind == "package_or_artifact_fetch":
         return ["external_boundary", "supply_chain"]
+    if kind == "bulk_remote_requests":
+        return ["external_boundary", "execution_or_mutation"]
+    if kind == "query_or_template_construction":
+        return ["execution_or_mutation"]
+    if kind == "resource_exhaustion":
+        return ["execution_or_mutation"]
+    if kind == "filesystem_boundary_access":
+        return ["local_secret_or_state", "execution_or_mutation"]
+    if kind == "unsafe_object_loading":
+        return ["execution_or_mutation"]
+    if kind == "execution_amplification_chain":
+        return ["external_boundary", "execution_or_mutation"]
     if kind in {"process_execution", "dynamic_code_execution", "filesystem_access", "remote_state_mutation"}:
         return ["execution_or_mutation"]
     if kind == "analyzability_gap":

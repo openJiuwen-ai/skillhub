@@ -44,10 +44,14 @@ from plugins_market.core.errors import (
 )
 from plugins_market.core.http_error_logging import register_exception_handlers, response_with_error_logging
 from plugins_market.core.logging import setup_logging
+from plugins_market.core.middleware.rate_limit import RateLimitMiddleware
 from plugins_market.core.middleware.request_id import RequestIDMiddleware
 from plugins_market.models.base import Base
 import plugins_market.models.site_notifications  # noqa: F401  # register table for create_all
 import plugins_market.models.git_sources  # noqa: F401  # register git_sources for create_all
+from plugins_market.models import groups as group_models
+
+_REGISTERED_MODEL_MODULES = (group_models,)
 from plugins_market.routers.register import router_register
 from plugins_market.core.s3_storage_client import close_storage_client_if_initialized
 from plugins_market.validation.constants import MAX_FILE_SIZE
@@ -116,6 +120,11 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     setup_logging(debug=settings.debug)
+    # playground_usage 表仅在 Playground 开启时建（关闭时不建这张空表）。
+    # 须在 create_all 之前注册模型，故在此条件导入。
+    if settings.playground_enabled:
+        import importlib
+        importlib.import_module("plugins_market.models.playground_usage")  # register for create_all
     Base.metadata.create_all(bind=engine)
 
     # ── retrieval startup ──────────────────────────────────────────────────
@@ -131,18 +140,25 @@ async def lifespan(app: FastAPI):
         _git_orphan_db.close()
     from plugins_market.core.s3_storage_client import get_storage_client
     from plugins_market.retrieval.daily_rebuild import (
+        AgentTagRefreshOptions,
         SkillTagRefreshOptions,
         _storage_uri_scheme,
         list_index_dirs,
         rebuild_all,
+        refresh_agent_tags,
         refresh_skill_tags,
     )
     from plugins_market.retrieval.index_manager import get_index_manager
+    from plugins_market.retrieval.groups import AGENT_RETRIEVAL_GROUPS
     from plugins_market.retrieval.reload_consumer import run_reload_consumer
 
     index_manager = get_index_manager()
     skill_prefix = settings.retrieval_skill_index_obs_prefix
     plugin_prefix = settings.retrieval_plugin_index_obs_prefix
+    agent_prefixes = {
+        spec.asset_type: getattr(settings, f"retrieval_{spec.setting_suffix}_index_obs_prefix")
+        for spec in AGENT_RETRIEVAL_GROUPS
+    }
 
     from common.security.security_utils import SecurityUtils
     from openai import OpenAI
@@ -268,6 +284,10 @@ async def lifespan(app: FastAPI):
                 password=redis_password,
                 decode_responses=False,
                 socket_connect_timeout=3,
+                # 须大于 reload_consumer 的 xreadgroup block=5s，否则正常轮询被误判超时；
+                # 坏连接限时报错后由消费者循环自行重试恢复
+                socket_timeout=10,
+                health_check_interval=30,
             )
             redis_client.ping()
             logger.info("retrieval: Redis connected %s:%s", settings.redis_host, settings.redis_port)
@@ -277,12 +297,12 @@ async def lifespan(app: FastAPI):
 
     uri_scheme = _storage_uri_scheme(storage)
 
-    async def _warm_start_one_group(group: str, prefix: str) -> None:
+    async def _warm_start_one_group(group: str, prefix: str, direct_path: str = "") -> None:
         """后台加载单个分组的检索索引。阻塞的下载/加载放线程池，避免卡住事件循环；
         wait_for 给每个分组一个时间上限，超时只跳过该组、不影响服务与其它组。"""
         index_load_timeout = 600  # 每个分组最多等 10 分钟
         try:
-            direct_path = getattr(settings, f"retrieval_{group}_index_path", "").strip()
+            direct_path = direct_path.strip()
             if direct_path:
                 target = direct_path
             else:
@@ -311,9 +331,21 @@ async def lifespan(app: FastAPI):
             logger.warning("retrieval warm-start unexpected error group=%s: %s", group, exc, exc_info=True)
 
     async def _warm_start_indexes() -> None:
-        # 两个分组串行加载（共用下载/解析资源，串行更稳）；整体在后台跑，不阻塞服务启动。
-        for group, prefix in (("skill", skill_prefix), ("plugin", plugin_prefix)):
-            await _warm_start_one_group(group, prefix)
+        # 各分组串行加载（共用下载/解析资源，串行更稳）；整体在后台跑，不阻塞服务启动。
+        groups = [
+            ("skill", skill_prefix, settings.retrieval_skill_index_path),
+            ("plugin", plugin_prefix, settings.retrieval_plugin_index_path),
+        ]
+        groups.extend(
+            (
+                spec.asset_type,
+                agent_prefixes[spec.asset_type],
+                getattr(settings, f"retrieval_{spec.setting_suffix}_index_path"),
+            )
+            for spec in AGENT_RETRIEVAL_GROUPS
+        )
+        for group, prefix, direct_path in groups:
+            await _warm_start_one_group(group, prefix, direct_path)
         logger.info("retrieval warm-start: background warm-up finished")
 
     # 不阻塞 yield：索引就绪前检索接口自动降级（search.py 的 is_ready 守卫），服务立即可用。
@@ -341,6 +373,7 @@ async def lifespan(app: FastAPI):
             run_skill_tag=False,
             max_index_versions=settings.retrieval_index_max_versions,
             skip_lock=skip_lock,
+            agent_prefixes=agent_prefixes,
         )
         elapsed = time.monotonic() - started
         logger.info("retrieval index rebuild run end [skip_lock=%s elapsed=%.1fs]", skip_lock, elapsed)
@@ -352,6 +385,17 @@ async def lifespan(app: FastAPI):
             SkillTagRefreshOptions(
                 db_factory=SessionLocal,
                 skill_prefix=skill_prefix,
+                storage=storage,
+                redis_client=redis_client,
+                build_config=_index_build_config,
+                skill_tag_build_config=_skill_tag_build_config,
+                skip_lock=skip_lock,
+            )
+        )
+        refresh_agent_tags(
+            AgentTagRefreshOptions(
+                db_factory=SessionLocal,
+                agent_prefixes=agent_prefixes,
                 storage=storage,
                 redis_client=redis_client,
                 build_config=_index_build_config,
@@ -377,6 +421,28 @@ async def lifespan(app: FastAPI):
         except asyncio.TimeoutError:
             logger.error("retrieval skill-tag refresh timed out after 39.2 minutes")
 
+    def _run_hot_score_recompute() -> None:
+        started = time.monotonic()
+        logger.info("hot_score recompute run begin")
+        from plugins_market.services.hot_score import recompute_hot_scores
+
+        result = recompute_hot_scores(SessionLocal)
+        elapsed = time.monotonic() - started
+        logger.info(
+            "hot_score recompute run end [updated=%s elapsed=%.1fs]",
+            result.get("updated"),
+            elapsed,
+        )
+
+    async def _hot_score_job() -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(loop.run_in_executor(None, _run_hot_score_recompute), timeout=2350)
+        except asyncio.TimeoutError:
+            logger.error("hot_score recompute timed out after 39.2 minutes")
+        except Exception as exc:
+            logger.exception("hot_score recompute failed: %s", exc)
+
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         _index_rebuild_job,
@@ -393,13 +459,21 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
             misfire_grace_time=60,
         )
+    scheduler.add_job(
+        _hot_score_job,
+        CronTrigger.from_crontab(settings.hot_score_recompute_cron),
+        id="hot_score_recompute",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
     scheduler.start()
     app.state.retrieval_scheduler = scheduler
     app.state.retrieval_redis = redis_client
     logger.info(
-        "retrieval startup complete — index_cron=%s skill_tag_cron=%s",
+        "retrieval startup complete - index_cron=%s skill_tag_cron=%s hot_score_cron=%s",
         settings.retrieval_rebuild_cron,
         settings.retrieval_skill_tag_cron,
+        settings.hot_score_recompute_cron,
     )
 
     if settings.retrieval_rebuild_on_startup:
@@ -446,6 +520,155 @@ async def lifespan(app: FastAPI):
 
         app.state.startup_skill_tag_task = asyncio.create_task(_startup_skill_tag_refresh())
 
+    if settings.hot_score_recompute_on_startup:
+        logger.info("hot_score: RECOMPUTE_ON_STARTUP=true, scheduling immediate recompute")
+
+        async def _startup_hot_score_recompute() -> None:
+            logger.info("hot_score startup recompute begin")
+            loop = asyncio.get_running_loop()
+            started = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, _run_hot_score_recompute),
+                    timeout=2350,
+                )
+            except asyncio.TimeoutError:
+                logger.error("hot_score startup recompute timed out after 39.2 minutes")
+            except Exception as exc:
+                logger.exception("hot_score startup recompute failed: %s", exc)
+            finally:
+                elapsed = time.monotonic() - started
+                logger.info("hot_score startup recompute end [elapsed=%.1fs]", elapsed)
+
+        app.state.startup_hot_score_task = asyncio.create_task(_startup_hot_score_recompute())
+
+    if settings.recommender_enabled:
+        from plugins_market.recommender.bootstrap import apply_recommender_settings_to_env
+        from plugins_market.recommender.jobs import (
+            run_rec_milvus_full,
+            run_rec_milvus_incremental,
+            run_rec_package_sync,
+            run_rec_redis_sync,
+        )
+
+        apply_recommender_settings_to_env()
+
+        async def _rec_job(name: str, fn) -> None:
+            loop = asyncio.get_running_loop()
+            started = time.monotonic()
+            logger.info("recommender job begin name=%s", name)
+            try:
+                await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=2350)
+            except asyncio.TimeoutError:
+                logger.error("recommender job timed out name=%s", name)
+            except Exception as exc:
+                logger.exception("recommender job failed name=%s: %s", name, exc)
+            finally:
+                logger.info(
+                    "recommender job end name=%s elapsed=%.1fs",
+                    name,
+                    time.monotonic() - started,
+                )
+
+        async def _rec_package_sync_job() -> None:
+            await _rec_job("package_sync", run_rec_package_sync)
+
+        async def _rec_milvus_incremental_job() -> None:
+            await _rec_job("milvus_incremental", run_rec_milvus_incremental)
+
+        async def _rec_milvus_full_job() -> None:
+            await _rec_job("milvus_full", run_rec_milvus_full)
+
+        async def _rec_redis_sync_job() -> None:
+            await _rec_job("redis_sync", run_rec_redis_sync)
+
+        scheduler.add_job(
+            _rec_package_sync_job,
+            CronTrigger.from_crontab(settings.rec_package_sync_cron),
+            id="rec_package_sync",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            _rec_milvus_incremental_job,
+            CronTrigger.from_crontab(settings.rec_milvus_incremental_cron),
+            id="rec_milvus_incremental",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            _rec_milvus_full_job,
+            CronTrigger.from_crontab(settings.rec_milvus_full_cron),
+            id="rec_milvus_full",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            _rec_redis_sync_job,
+            CronTrigger.from_crontab(settings.rec_redis_sync_cron),
+            id="rec_redis_sync",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        logger.info(
+            "recommender enabled — package_cron=%s milvus_inc=%s milvus_full=%s redis=%s "
+            "list_top_k=%s rebuild_on_startup=%s",
+            settings.rec_package_sync_cron,
+            settings.rec_milvus_incremental_cron,
+            settings.rec_milvus_full_cron,
+            settings.rec_redis_sync_cron,
+            settings.rec_list_top_k,
+            settings.rec_rebuild_on_startup,
+        )
+
+        if settings.rec_rebuild_on_startup:
+            logger.info("recommender: REBUILD_ON_STARTUP=true, scheduling immediate offline jobs")
+
+            async def _startup_rec_redis_sync() -> None:
+                await _rec_job("redis_sync(startup)", run_rec_redis_sync)
+
+            app.state.startup_rec_redis_sync_task = asyncio.create_task(_startup_rec_redis_sync())
+
+            async def _startup_rec_rebuild() -> None:
+                # Redis first (fast cold-start fallback), then Milvus full (creates collection).
+                await app.state.startup_rec_redis_sync_task
+                await _rec_job("milvus_full(startup)", run_rec_milvus_full)
+
+            app.state.startup_rec_rebuild_task = asyncio.create_task(_startup_rec_rebuild())
+
+        async def _await_startup_task(task, label: str) -> None:
+            if task is None:
+                return
+            try:
+                await task
+            except Exception as exc:
+                logger.warning("recommender online warm-start wait %s failed: %s", label, exc)
+
+        async def _warm_recommend_online() -> None:
+            from plugins_market.recommender.service import warm_recommend_online
+
+            # Avoid overlapping DB/Redis with hot_score recompute and redis_sync.
+            # Do not wait for milvus_full — it can run for tens of minutes.
+            await _await_startup_task(
+                getattr(app.state, "startup_hot_score_task", None),
+                "hot_score",
+            )
+            await _await_startup_task(
+                getattr(app.state, "startup_rec_redis_sync_task", None),
+                "redis_sync",
+            )
+            started = time.monotonic()
+            try:
+                await asyncio.to_thread(warm_recommend_online)
+                logger.info(
+                    "recommender online warm-start done elapsed=%.1fs",
+                    time.monotonic() - started,
+                )
+            except Exception as exc:
+                logger.warning("recommender online warm-start failed: %s", exc)
+
+        app.state.rec_online_warmup_task = asyncio.create_task(_warm_recommend_online())
+
     # ── yield (app runs) ───────────────────────────────────────────────────
     yield
 
@@ -462,6 +685,9 @@ async def lifespan(app: FastAPI):
     _warmup_task = getattr(app.state, "warmup_task", None)
     if _warmup_task is not None:
         _warmup_task.cancel()
+    _rec_online_warmup = getattr(app.state, "rec_online_warmup_task", None)
+    if _rec_online_warmup is not None:
+        _rec_online_warmup.cancel()
     _redis = getattr(app.state, "retrieval_redis", None)
     if _redis is not None:
         try:
@@ -476,6 +702,12 @@ async def lifespan(app: FastAPI):
         engine.dispose()
     except Exception as e:
         logger.warning("shutdown cleanup: failed to dispose db engine: %s", e)
+    # 关闭 GitHub 代理共享 httpx 客户端
+    try:
+        from plugins_market.core.github_proxy import close_shared_client
+        await close_shared_client()
+    except Exception as e:
+        logger.warning("shutdown cleanup: failed to close github proxy client: %s", e)
 
 
 def create_app() -> FastAPI:
@@ -488,6 +720,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # 统一速率限制与请求上下文中间件。
+    # 注意 Starlette add_middleware 为 insert(0)：后注册者更外层。
+    # 故 RateLimitMiddleware 先注册、RequestIDMiddleware 后注册，
+    # 使 RequestID 外层于 RateLimit —— 请求上下文（request_id/start_time）
+    # 在限流判定前就绪，429 响应经 RequestID 的 send_wrapper 仍会写入
+    # interface.log 并附带 x-request-id。已有限流端点（ClawHub 兼容层、
+    # skill-import、git-source sync、Playground）由策略表豁免。
+    fastapi_app.add_middleware(RateLimitMiddleware)
     fastapi_app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(fastapi_app, logger=logger)

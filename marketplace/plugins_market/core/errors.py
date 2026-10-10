@@ -48,6 +48,7 @@ _REGISTERED_ERROR_METADATA: dict[str, ErrorMetadata] = {
     "invalid_file_format": ErrorMetadata("SKILLHUB_PLUGIN_FILE_FORMAT_INVALID", "validation"),
     "file_too_large": ErrorMetadata("SKILLHUB_PLUGIN_FILE_TOO_LARGE", "validation"),
     "invalid_plugin_config": ErrorMetadata("SKILLHUB_PLUGIN_CONFIG_INVALID", "validation"),
+    "dangerous_content": ErrorMetadata("SKILLHUB_DANGEROUS_CONTENT", "validation"),
     "plugin_not_found": ErrorMetadata("SKILLHUB_PLUGIN_NOT_FOUND", "not_found"),
     "permission_denied": ErrorMetadata("SKILLHUB_PERMISSION_DENIED", "permission"),
     "plugin_id_mismatch": ErrorMetadata("SKILLHUB_PLUGIN_ID_MISMATCH", "validation"),
@@ -57,6 +58,8 @@ _REGISTERED_ERROR_METADATA: dict[str, ErrorMetadata] = {
     "plugin_name_exists": ErrorMetadata("SKILLHUB_PLUGIN_NAME_EXISTS", "conflict"),
     "storage_error": ErrorMetadata("SKILLHUB_STORAGE_ERROR", "upstream"),
     "skill_limit_exceeded": ErrorMetadata("SKILLHUB_SKILL_LIMIT_EXCEEDED", "conflict"),
+    "group_limit_exceeded": ErrorMetadata("SKILLHUB_GROUP_LIMIT_EXCEEDED", "conflict"),
+    "group_member_limit_exceeded": ErrorMetadata("SKILLHUB_GROUP_MEMBER_LIMIT_EXCEEDED", "conflict"),
     "skill_name_immutable": ErrorMetadata("SKILLHUB_PLUGIN_SKILL_NAME_IMMUTABLE", "validation"),
     "plugin_type_immutable": ErrorMetadata("SKILLHUB_PLUGIN_TYPE_IMMUTABLE", "validation"),
     "skill_review_model_not_configured": ErrorMetadata("SKILLHUB_REVIEW_MODEL_NOT_CONFIGURED", "upstream"),
@@ -101,11 +104,28 @@ _REGISTERED_ERROR_METADATA: dict[str, ErrorMetadata] = {
     "no_skills_in_repo": ErrorMetadata("SKILLHUB_GIT_SYNC_NO_SKILLS_FOUND", "validation"),
     "git_external_id_conflict": ErrorMetadata("SKILLHUB_GIT_SYNC_EXTERNAL_ID_CONFLICT", "conflict"),
     "git_source_has_assets": ErrorMetadata("SKILLHUB_GIT_SOURCE_HAS_ASSETS", "conflict"),
+    "git_source_cascade_delete_partial": ErrorMetadata(
+        "SKILLHUB_GIT_SOURCE_CASCADE_DELETE_PARTIAL", "conflict"
+    ),
     "git_repo_already_registered": ErrorMetadata("SKILLHUB_GIT_SOURCE_ALREADY_REGISTERED", "conflict"),
     "git_sync_failed": ErrorMetadata("SKILLHUB_GIT_SYNC_FAILED", "upstream"),
     "forbidden": ErrorMetadata("SKILLHUB_PERMISSION_FORBIDDEN", "permission"),
     "internal_error": ErrorMetadata("SKILLHUB_INTERNAL_UNEXPECTED", "internal"),
     "validation_error": ErrorMetadata("SKILLHUB_VALIDATION_FAILED", "validation"),
+    # Playground 在线体验
+    "session_conflict": ErrorMetadata("SKILLHUB_PLAYGROUND_SESSION_CONFLICT", "conflict"),
+    "quota_exceeded": ErrorMetadata("SKILLHUB_PLAYGROUND_QUOTA_EXCEEDED", "conflict"),
+    "not_your_session": ErrorMetadata("SKILLHUB_PLAYGROUND_NOT_YOUR_SESSION", "permission"),
+    # Recommender
+    "recommender_disabled": ErrorMetadata("SKILLHUB_RECOMMENDER_DISABLED", "upstream"),
+    "recommend_failed": ErrorMetadata("SKILLHUB_RECOMMEND_FAILED", "internal"),
+    "recommend_user_mismatch": ErrorMetadata("SKILLHUB_RECOMMEND_USER_MISMATCH", "permission"),
+    # GitHub 一键标星
+    "github_forbidden": ErrorMetadata("SKILLHUB_GITHUB_FORBIDDEN", "permission"),
+    "github_not_found": ErrorMetadata("SKILLHUB_GITHUB_NOT_FOUND", "not_found"),
+    "github_upstream_error": ErrorMetadata("SKILLHUB_GITHUB_UPSTREAM_ERROR", "upstream"),
+    "github_proxy_rate_limited": ErrorMetadata("SKILLHUB_GITHUB_PROXY_RATE_LIMITED", "conflict"),
+    "feature_disabled": ErrorMetadata("SKILLHUB_FEATURE_DISABLED", "not_found"),
 }
 
 
@@ -126,6 +146,28 @@ def resolve_registered_error_metadata(error: str) -> tuple[Optional[str], Option
     if metadata is None:
         return None, None
     return metadata.error_code, metadata.error_class
+
+
+def _json_safe(value: Any) -> Any:
+    """递归把可能不可 JSON 序列化的值转为可序列化形式。
+
+    FastAPI/Pydantic 的 ``RequestValidationError`` 中 ``input`` 等字段可能持有原始
+    body 的 ``bytes``（例如请求未带 ``Content-Type: application/json``，被当作
+    form-urlencoded 解析失败时）。直接放入响应会让 ``json.dumps`` 抛
+    ``TypeError``，从而被全局兜底处理器转成 500；此处清洗后保证 422 响应可正常序列化。
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return repr(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(v) for v in value]
+    return str(value)
 
 
 def build_error_payload(
@@ -302,7 +344,7 @@ def validation_error_payload(*, message: str, details: Any) -> ErrorPayload:
         error="validation_error",
         message=message,
         error_class="validation",
-        details=details,
+        details=_json_safe(details),
         data=None,
     )
 

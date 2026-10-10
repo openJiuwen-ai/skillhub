@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Sequence
+from typing import Any, List
 
 from ..service.retriever import Retriever
 from ..service.models import SearchResult
@@ -31,7 +31,7 @@ class ExperienceAwareRetriever:
         self,
         wrapped: Retriever,
         experience_retriever: ExperienceRetriever,
-        experience_collector: ExperienceCollector,
+        experience_collector: SkillKnowledgeBuilder,
     ) -> None:
         self._wrapped = wrapped
         self._exp_retriever = experience_retriever
@@ -52,10 +52,6 @@ class ExperienceAwareRetriever:
         # 2. Fall through to tree search
         result = self._wrapped.search(query, search_config=search_config)
 
-        # 3. Record success for experience collector
-        if result:
-            self._collector.record_success(query, result)
-
         return result
 
     def search_details(self, query, *, search_config=None) -> SearchResult:
@@ -68,10 +64,6 @@ class ExperienceAwareRetriever:
 
         # 2. Fall through to tree search
         result = self._wrapped.search_details(query, search_config=search_config)
-
-        # 3. Record success
-        if result.payloads:
-            self._collector.record_success(query, result.payloads)
 
         return result
 
@@ -142,7 +134,6 @@ class ExperienceAwareRetriever:
 
         # Build the experience collector (slow path feedback)
         # Reuse the same LLM client for pattern extraction if available
-        from ..llm import ProgressiveLLMClient
         llm_for_patterns = None
         if llm_openai_client is not None and llm_model:
             from ..llm import coerce_generation_client

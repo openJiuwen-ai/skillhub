@@ -27,7 +27,7 @@ CREATE TABLE `market_assets` (
   `public_latest_version` varchar(32) DEFAULT NULL,
   `star_count` int NOT NULL DEFAULT '0',
   PRIMARY KEY (`asset_id`),
-  UNIQUE KEY `uk_publisher_name` (`publisher_id`,`name`),
+  UNIQUE KEY `uk_publisher_asset_type_name` (`publisher_id`,`asset_type`,`name`),
   KEY `idx_name` (`name`),
   KEY `idx_install_count` (`install_count`),
   KEY `idx_certification` (`certification`),

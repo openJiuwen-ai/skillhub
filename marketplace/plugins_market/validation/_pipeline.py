@@ -7,12 +7,16 @@ Called by services/plugin.py::publish().
 
 from __future__ import annotations
 
-import io
 import zipfile
 from typing import Any
 
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
+    MARKET_ASSET_DETAIL_DESC_MAX_BYTES,
+    RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_MCP,
+    RUNTIME_AGENT_GROUP,
+    RUNTIME_AGENT_TEMPLATE,
     RUNTIME_MCP_STDIO,
     RUNTIME_RESTFUL_API,
     RUNTIME_SKILL,
@@ -26,6 +30,7 @@ from plugins_market.validation.plugin_yaml import (
 )
 from plugins_market.validation.zip_utils import (
     DecompressCounter,
+    open_zip_bytes,
     safe_read_zip_member,
     validate_zip_safety,
 )
@@ -43,18 +48,30 @@ from plugins_market.validation.types.restful_api import (
     extract_restful_api_contract,
     validate_restful_api_layout,
 )
+from plugins_market.validation.types.agent_asset import (
+    AgentAssetOuterRef,
+    validate_agent_asset_layout,
+)
+from plugins_market.validation.types.agent_mcp import validate_agent_mcp_layout
 
 
 def _find_plugin_yaml_path(zf: zipfile.ZipFile) -> str | None:
     """Accept only the standard layout: <top>/plugin.yaml (exactly 2 path segments)."""
+    matches: list[str] = []
     for name in zf.namelist():
         normalized = name.replace("\\", "/").strip("/")
         if not normalized:
             continue
         parts = normalized.split("/")
         if len(parts) == 2 and parts[-1] == "plugin.yaml":
-            return name
-    return None
+            matches.append(name)
+    if len(matches) > 1:
+        raise PublishError(
+            code=400,
+            error="invalid_plugin_structure",
+            message="插件包只能包含一个市场外层 plugin.yaml",
+        )
+    return matches[0] if matches else None
 
 
 def _plugin_prefix(plugin_yaml_path: str) -> str:
@@ -63,6 +80,23 @@ def _plugin_prefix(plugin_yaml_path: str) -> str:
     if "/" not in path:
         return ""
     return path.rsplit("/", 1)[0] + "/"
+
+
+def _merge_agent_market_fields(
+    public: PluginYamlPublicFields,
+    layout: dict[str, Any],
+) -> PluginYamlPublicFields:
+    """Outer plugin.yaml (form/import overrides) wins; manifest layout fills gaps."""
+    yaml_tags = list(public.tags or [])
+    layout_tags = layout.get("tags") or []
+    return PluginYamlPublicFields(
+        name=public.name,
+        display_name=public.display_name or layout.get("display_name") or public.name,
+        short_desc=public.short_desc or layout.get("short_desc") or "",
+        publisher_name=public.publisher_name,
+        tags=yaml_tags if yaml_tags else layout_tags,
+        runtime_type=public.runtime_type,
+    )
 
 
 def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
@@ -82,14 +116,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # Open zip (magic bytes already verified before this call)
     # ------------------------------------------------------------------
-    try:
-        zf_obj = zipfile.ZipFile(io.BytesIO(content))
-    except zipfile.BadZipFile as exc:
-        raise PublishError(
-            code=400,
-            error="invalid_plugin_config",
-            message="上传文件不是有效的 ZIP 格式，请检查文件是否损坏或格式是否正确",
-        ) from exc
+    zf_obj = open_zip_bytes(content)
 
     with zf_obj as zf:
         # ----------------------------------------------------------------
@@ -149,7 +176,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
 
             # Read SKILL.md and validate frontmatter
             skill_md_raw = safe_read_zip_member(zf, layout["skill_md_path"], counter)
-            fm, _ = parse_skill_frontmatter(skill_md_raw)
+            fm, body = parse_skill_frontmatter(skill_md_raw)
             validate_skill_frontmatter(
                 fm, dir_name=public.name, yaml_name=public.name
             )
@@ -159,7 +186,8 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             if kind_norm in ("team-skill", "swarm-skill"):
                 derived_plugin_type = "swarmskill"
 
-            detail_desc = skill_md_raw.decode("utf-8")
+            # 全文含超大 frontmatter 会超过 MySQL TEXT；详情只持久化正文
+            detail_desc = body
 
             icon_bytes = layout["icon_bytes"]
 
@@ -187,6 +215,38 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             detail_desc = readme_raw.decode("utf-8", errors="replace")
             icon_bytes = layout["icon_bytes"]
 
+        elif rt in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
+            layout = validate_agent_asset_layout(
+                zf,
+                AgentAssetOuterRef(
+                    prefix=prefix,
+                    name=public.name,
+                    version=version,
+                    runtime_type=rt,
+                ),
+                counter,
+            )
+            extra_meta = {"asset_type": layout["asset_type"]}
+            detail_desc = layout["detail_desc"]
+            icon_bytes = layout["icon_bytes"]
+            public = _merge_agent_market_fields(public, layout)
+
+        elif rt == RUNTIME_AGENT_MCP:
+            layout = validate_agent_mcp_layout(
+                zf,
+                prefix,
+                public.name,
+                counter,
+                outer_version=version,
+            )
+            extra_meta = {
+                "asset_type": layout["asset_type"],
+                "integration_type": layout["integration_type"],
+            }
+            detail_desc = layout["detail_desc"]
+            icon_bytes = layout["icon_bytes"]
+            public = _merge_agent_market_fields(public, layout)
+
         else:
             # Should not reach here; validate_plugin_yaml_public already guards this
             raise PublishError(
@@ -194,6 +254,20 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
                 error="invalid_plugin_config",
                 message=f"不支持的 runtime.type: {rt!r}",
             )
+
+        if isinstance(detail_desc, str):
+            detail_bytes = len(detail_desc.encode("utf-8"))
+            if detail_bytes > MARKET_ASSET_DETAIL_DESC_MAX_BYTES:
+                raise PublishError(
+                    code=400,
+                    error="invalid_plugin_config",
+                    message=(
+                        "详情描述超过数据库字段上限"
+                        f"（最大 {MARKET_ASSET_DETAIL_DESC_MAX_BYTES} 字节）"
+                    ),
+                    error_code="SKILLHUB_PLUGIN_CONFIG_INVALID",
+                    error_class="validation",
+                )
 
     result = {
         "name": public.name,

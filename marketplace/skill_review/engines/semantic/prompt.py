@@ -42,6 +42,7 @@ AI Agent Skill 是一种会被 AI Agent 加载和使用的能力包，通常包�
 - package.sampled_files：本轮进入语义审查的原文片段，通常带文件名和行号，是最重要的 grounding 证据。
 - package.warnings：包读取、截断或覆盖率问题；只能在这里明确出现时才判断分析不完整。
 - rule_findings：规则层产出的候选风险；其中 source_context 展示 heading_path、in_code_block、before、after 和 evidence_line，帮助判断证据角色。
+- rule_findings.policy 表示规则层给出的语义裁决权限约束；当 allow_semantic_downgrade=false 时，不能建议低于规则候选原始 severity/gate 的降级结果。
 - rule_findings 中的 related_finding_refs 和 occurrence_count 表示同一风险机制被合并成代表候选；审查代表 finding_ref 即可，但 reasoning 要覆盖该组证据的共同角色、采纳路径和影响边界。
 - scanner_findings：扫描器发现的事实或风险候选；需要结合上下文判断，不要自动采纳或自动否定。
 - observations：行为事实压缩，不是风险结论；observations.behavior_chains 是跨文件或跨步骤的事实链提示。
@@ -102,6 +103,7 @@ needs_manual_review 只用于审查已完成但单条业务语义确实无法判
 - 每条 finding 必须填写 reasoning：action 说明证据动作，role 说明证据角色，path 说明 Agent 采纳或不采纳路径，impact 说明影响边界，decision 说明为什么选择该 severity 和 gate。
 - 每条 finding 必须填写 gate：gate.path 表示真实激活路径是否成立，gate.impact 表示是否高影响边界，gate.confirm 表示执行前具体确认是否充分；gate 是解释字段，不会替代 gate_recommendation。
 - 每条 candidate_review 必须填写 reasoning：action 说明证据动作，role 说明证据角色，path 说明 Agent 采纳或不采纳路径，impact 说明影响边界，decision 说明为什么选择该 disposition、severity 和 gate。
+- 对 policy.allow_semantic_downgrade=false 的 candidate_review，不要建议低于原规则候选的 final_severity 或 final_gate_recommendation。
 - check_id 必须来自输入 check_catalog 中同一 section_key 下的 check_id；如果没有精确匹配，选择最接近的既有 check_id，不要发明新的 check_id。
 - related_files 与 source_location.file 只能引用 package.files 中的包内相对路径；不要输出 /tmp、绝对路径、URL 或输入中不存在的文件。
 - 如果无法确认具体文件，不要编造 file 或 line；可以省略 source_location 或将 file 设为 null。
@@ -200,6 +202,9 @@ def build_prompt_rule_findings(
                 "description": finding.description,
                 "recommendation": finding.recommendation,
                 "gate_recommendation": finding.gate_recommendation,
+                "policy": {
+                    "allow_semantic_downgrade": finding.metadata.get("allow_semantic_downgrade") is not False,
+                },
                 "evidence": sanitize_evidence_for_prompt(collect_group_evidence(group, finding)),
                 "source_context": build_rule_finding_source_context(finding, semantic_context),
                 "related_finding_refs": related_finding_refs,

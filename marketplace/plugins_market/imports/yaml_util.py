@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,25 @@ def load_plugin_yaml(path: str) -> dict[str, Any]:
         raise ve from e
     if not isinstance(data, dict):
         raise ValueError("plugin.yaml must be a mapping")
+    return data
+
+
+def load_json_object_file(
+    path: Path, *, label: str, max_bytes: int | None = None
+) -> dict[str, Any]:
+    """Read one bounded UTF-8 JSON object from an extracted import directory."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{label} cannot be read: {exc}") from exc
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise ValueError(f"{label} exceeds {max_bytes} bytes")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{label} root must be an object")
     return data
 
 

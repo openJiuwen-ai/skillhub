@@ -87,8 +87,12 @@ def cluster_traces(
     return result
 
 
-def populate_cluster(cluster_id_counter: int, embeddings: list[list[float]], indices: list[int],
-                         members: list[TraceRecord]) -> ClusteredQuery:
+def populate_cluster(
+    cluster_id_counter: int,
+    embeddings: list[list[float]],
+    indices: list[int],
+    members: list[TraceRecord],
+) -> ClusteredQuery:
     success_traces = [t for t in members if t.outcome == "success"]
     failure_traces = [t for t in members if t.outcome != "success"]
 
@@ -146,6 +150,9 @@ def _faiss_cluster(
     else:
         k = max(2, min(n_clusters, n))
     k = min(k, n)
+    if k < 2:
+        # Too few points for meaningful clustering — treat as single cluster
+        return [0] * n
 
     # FAISS K-Means with cosine distance (via inner product on normalized vectors)
     dim = arr.shape[1]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -10,15 +11,29 @@ from pathlib import Path
 from typing import Any
 
 from plugins_market.core.errors import PublishError
-from plugins_market.imports.yaml_util import dump_plugin_yaml, load_plugin_yaml, split_skill_frontmatter
+from plugins_market.imports.yaml_util import (
+    dump_plugin_yaml,
+    load_json_object_file,
+    load_plugin_yaml,
+    split_skill_frontmatter,
+)
 from plugins_market.validation.constants import (
     MARKET_VERSION_MAX_LEN,
     NAME_PATTERN,
     PLUGIN_YAML_DESCRIPTION_MAX_LEN,
+    RUNTIME_AGENT_MCP,
+    RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_GROUP,
+    RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_SKILL,
     SKILL_DESC_MAX_LEN,
     SKILL_NAME_MAX_LEN,
     SKILL_NAME_PATTERN,
     is_valid_market_version,
+)
+from plugins_market.validation.localized_manifest import (
+    localized_manifest_tags,
+    localized_manifest_text,
 )
 from plugins_market.validation.zip_utils import validate_png_icon_bytes
 
@@ -72,17 +87,202 @@ def _render_skill_md(name: str, description: str, body: str) -> str:
     )
 
 
+_ADMIN_IMPORT_RUNTIME_TYPES = {
+    RUNTIME_SKILL,
+    RUNTIME_AGENT_PLUGIN,
+    RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_AGENT_GROUP,
+    RUNTIME_AGENT_MCP,
+}
+
+
+def _validate_wrapped_asset_name(name: str) -> None:
+    if not name or not NAME_PATTERN.match(name):
+        raise ValueError("asset name must match ^[a-z][a-z0-9-]*$")
+
+
+def _resolved_override_text(overrides: dict[str, Any], key: str, fallback: str) -> str:
+    value = overrides.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
+def _is_raw_agent_mcp_entry(entry: Path) -> bool:
+    manifest_path = entry / "manifest.json"
+    if not manifest_path.is_file():
+        return False
+    package_type = load_json_object_file(manifest_path, label="manifest.json").get("package_type")
+    return package_type == "mcp"
+
+
+def _patch_native_agent_manifest(
+    payload_dir: Path,
+    *,
+    runtime_type: str,
+    name: str,
+    version: str,
+) -> None:
+    manifest_path = payload_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = load_json_object_file(manifest_path, label="manifest.json")
+    manifest["version"] = version
+    if runtime_type == RUNTIME_AGENT_PLUGIN:
+        manifest["id"] = name
+    elif runtime_type in (RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
+        manifest["name"] = name
+    elif runtime_type == RUNTIME_AGENT_MCP:
+        manifest["id"] = name
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _build_native_agent_staging(
+    entry: Path,
+    staging: Path,
+    *,
+    runtime_type: str,
+    entry_overrides: dict[str, Any],
+    version_fallback: str,
+    default_author: str,
+    default_tags: list[str],
+    manifest: dict[str, Any] | None = None,
+    allow_publish_overrides: bool = False,
+) -> tuple[str, str]:
+    if runtime_type in (
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    ):
+        if manifest is None:
+            manifest = load_json_object_file(
+                entry / "manifest.json", label="manifest.json"
+            )
+        plugin_manifest = runtime_type == RUNTIME_AGENT_PLUGIN
+        mcp_manifest = runtime_type == RUNTIME_AGENT_MCP
+        if mcp_manifest:
+            identity = manifest.get("id")
+        else:
+            identity = manifest.get("id") if plugin_manifest else manifest.get("name")
+        name = str(identity or "").strip()
+        version = str(manifest.get("version") or "").strip()
+        fallback_name = manifest.get("name")
+        fallback_desc = manifest.get("description")
+        display_name = localized_manifest_text(
+            manifest.get("display_name")
+        ) or localized_manifest_text(fallback_name)
+        description = localized_manifest_text(
+            manifest.get("display_description")
+        ) or localized_manifest_text(fallback_desc)
+        manifest_tags = localized_manifest_tags(manifest.get("tags"))
+        override_name = (
+            _resolved_override_text(entry_overrides, "name", "")
+            if allow_publish_overrides
+            else ""
+        )
+        override_version = entry_overrides.get("version")
+        if allow_publish_overrides and override_name:
+            name = override_name
+        if allow_publish_overrides and override_version not in (None, ""):
+            version = str(override_version).strip()
+    else:
+        name = _resolved_override_text(entry_overrides, "name", entry.name)
+        raw_version = entry_overrides.get("version")
+        version = str(raw_version).strip() if raw_version is not None else version_fallback
+        display_name = name
+        description = ""
+        manifest_tags = []
+
+    _validate_wrapped_asset_name(name)
+    if not _is_valid_market_version_within_length(version):
+        raise ValueError("resolved asset version must be semver x.y.z or git commit hex")
+
+    display_name = _resolved_override_text(entry_overrides, "display_name", display_name or name)
+    description = _resolved_override_text(entry_overrides, "description", description)
+    override_tags = entry_overrides.get("tags")
+    if isinstance(override_tags, list) and override_tags:
+        tags = [str(tag).strip() for tag in override_tags if str(tag).strip()]
+    else:
+        tags = list(default_tags) or manifest_tags
+
+    staging.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(entry, staging / name, dirs_exist_ok=True)
+    if runtime_type in (
+        RUNTIME_AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP,
+        RUNTIME_AGENT_MCP,
+    ):
+        _patch_native_agent_manifest(
+            staging / name,
+            runtime_type=runtime_type,
+            name=name,
+            version=version,
+        )
+    plugin_data: dict[str, Any] = {
+        "name": name,
+        "version": version,
+        "display_name": display_name,
+        "description": description[:PLUGIN_YAML_DESCRIPTION_MAX_LEN],
+        "runtime": {"type": runtime_type},
+        "metadata": {"author": default_author.strip(), "tags": tags},
+    }
+    (staging / "plugin.yaml").write_text(dump_plugin_yaml(plugin_data), encoding="utf-8")
+    return name, version
+
+
+def detect_import_entry_type(entry: Path) -> str | None:
+    """Identify one standard or raw admin-import entry without validating its payload."""
+    plugin_yaml = entry / "plugin.yaml"
+    if plugin_yaml.is_file():
+        data = load_plugin_yaml(str(plugin_yaml))
+        runtime = data.get("runtime")
+        runtime_type = (
+            str(runtime.get("type") or "").strip().lower()
+            if isinstance(runtime, dict)
+            else ""
+        )
+        return runtime_type if runtime_type in _ADMIN_IMPORT_RUNTIME_TYPES else f"unsupported:{runtime_type}"
+    manifest_path = entry / "manifest.json"
+    if manifest_path.is_file():
+        package_type = load_json_object_file(manifest_path, label="manifest.json").get(
+            "package_type"
+        )
+        manifest_type = {
+            "plugin": RUNTIME_AGENT_PLUGIN,
+            "agent_template": RUNTIME_AGENT_TEMPLATE,
+            "agent_group": RUNTIME_AGENT_GROUP,
+            "mcp": RUNTIME_AGENT_MCP,
+        }.get(package_type)
+        if manifest_type is not None:
+            return manifest_type
+    return RUNTIME_SKILL if is_simple_skill_entry(entry) else None
+
+
+# 固定 ZIP 成员时间戳，避免克隆后 mtime 波动导致同一内容多次同步产生不同 zip 字节
+_DETERMINISTIC_ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
+
 def build_skill_plugin_zip_to_path(
     staging_root: Path, plugin_name: str, version: str, out_path: Path
 ) -> None:
     """将 staging 打成 `{name}-{version}/...` 布局的 skill 插件 ZIP，写入 ``out_path``（流式写入，不落整包于内存）。"""
     prefix = f"{plugin_name}-{version}"
+    members = sorted(
+        (fpath for fpath in staging_root.rglob("*") if fpath.is_file()),
+        key=lambda p: p.relative_to(staging_root).as_posix(),
+    )
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fpath in staging_root.rglob("*"):
-            if not fpath.is_file():
-                continue
-            rel = fpath.relative_to(staging_root)
-            zf.write(fpath, f"{prefix}/{rel.as_posix()}")
+        for fpath in members:
+            rel = fpath.relative_to(staging_root).as_posix()
+            info = zipfile.ZipInfo(f"{prefix}/{rel}", date_time=_DETERMINISTIC_ZIP_DATE_TIME)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, fpath.read_bytes())
 
 
 def is_standard_skill_entry(entry: Path) -> bool:
@@ -182,6 +382,7 @@ def build_simple_skill_staging(
     default_author: str,
     default_tags: list[str],
     display_name: str | None = None,
+    preserve_frontmatter: bool = False,
 ) -> tuple[str, str]:
     """简单包：根 SKILL.md -> 补全为标准包目录树（生成 plugin.yaml；无占位 icon）。"""
     text = (entry / "SKILL.md").read_text(encoding="utf-8")
@@ -201,10 +402,8 @@ def build_simple_skill_staging(
     skill_dir = staging / name
     skill_dir.mkdir(parents=True, exist_ok=True)
 
-    (skill_dir / "SKILL.md").write_text(
-        _render_skill_md(name, description, body),
-        encoding="utf-8",
-    )
+    skill_md = text if preserve_frontmatter else _render_skill_md(name, description, body)
+    (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
     for child in entry.iterdir():
         if child.name.startswith("."):
@@ -254,6 +453,9 @@ def entry_to_publish_zip(
     version_fallback: str,
     default_author: str,
     default_tags: list[str],
+    entry_name_hint: str | None = None,
+    allow_multi_asset: bool = False,
+    allow_publish_overrides: bool = False,
 ) -> tuple[Path, str, str]:
     """归一化条目并打成临时 ZIP。返回 ``(zip_path, name, version)``；调用方须在完成后 ``unlink`` 该路径。
 
@@ -267,7 +469,15 @@ def entry_to_publish_zip(
         staging = tmp / "staging"
         staging.mkdir()
 
-        if is_standard_skill_entry(entry):
+        entry_type = detect_import_entry_type(entry) if allow_multi_asset else None
+        if entry_type and entry_type.startswith("unsupported:"):
+            raise ValueError(
+                f"asset_type_not_supported: {entry_type.removeprefix('unsupported:') or 'missing'}"
+            )
+
+        if is_standard_skill_entry(entry) and (
+            not allow_multi_asset or entry_type == RUNTIME_SKILL
+        ):
             shutil.copytree(entry, staging, dirs_exist_ok=True)
             name, version = validate_standard_skill_staging(staging)
             vo = entry_overrides.get("version")
@@ -286,6 +496,7 @@ def entry_to_publish_zip(
             v = manifest_ver or fm_ver or version_fallback
             if not _is_valid_market_version_within_length(v):
                 raise ValueError("resolved simple skill version must be semver x.y.z or git commit hex")
+            simple_options = {"preserve_frontmatter": True} if allow_multi_asset else {}
             name, version = build_simple_skill_staging(
                 entry,
                 staging,
@@ -293,9 +504,82 @@ def entry_to_publish_zip(
                 default_author=default_author,
                 default_tags=default_tags,
                 display_name=None,
+                **simple_options,
             )
-        else:
+        elif not allow_multi_asset:
             raise ValueError("skill_layout_unrecognized")
+        else:
+            if (entry / "plugin.yaml").is_file():
+                if entry_type is None:
+                    raise ValueError("asset_layout_unrecognized")
+                if entry_type != RUNTIME_SKILL and entry_overrides.get("version") not in (
+                    None,
+                    "",
+                ):
+                    raise ValueError(
+                        "manifest entries.version 仅支持 Skill 和裸 agent-mcp 条目"
+                    )
+                shutil.copytree(entry, staging, dirs_exist_ok=True)
+                if entry_type == RUNTIME_SKILL:
+                    name, version = validate_standard_skill_staging(staging)
+                else:
+                    data = load_plugin_yaml(str(staging / "plugin.yaml"))
+                    name = str(data.get("name") or "").strip()
+                    version = str(data.get("version") or "").strip()
+                    _validate_wrapped_asset_name(name)
+                    if not _is_valid_market_version_within_length(version):
+                        raise ValueError(
+                            "plugin.yaml version must be semver x.y.z or git commit hex"
+                        )
+                vo = entry_overrides.get("version")
+                if vo and entry_type == RUNTIME_SKILL:
+                    ov = str(vo).strip()
+                    if _is_valid_market_version_within_length(ov):
+                        py = staging / "plugin.yaml"
+                        data = load_plugin_yaml(str(py))
+                        data["version"] = ov
+                        py.write_text(dump_plugin_yaml(data), encoding="utf-8")
+                        version = ov
+            elif entry_type in (
+                RUNTIME_AGENT_PLUGIN,
+                RUNTIME_AGENT_TEMPLATE,
+                RUNTIME_AGENT_GROUP,
+            ):
+                if entry_overrides.get("version") not in (None, ""):
+                    if not allow_publish_overrides:
+                        raise ValueError(
+                            "manifest entries.version 仅支持 Skill 和裸 agent-mcp 条目"
+                        )
+                manifest = load_json_object_file(
+                    entry / "manifest.json", label="manifest.json"
+                )
+                name, version = _build_native_agent_staging(
+                    entry,
+                    staging,
+                    runtime_type=entry_type,
+                    entry_overrides=entry_overrides,
+                    version_fallback=version_fallback,
+                    default_author=default_author,
+                    default_tags=default_tags,
+                    manifest=manifest,
+                    allow_publish_overrides=allow_publish_overrides,
+                )
+            elif entry_type == RUNTIME_AGENT_MCP:
+                mcp_overrides = entry_overrides
+                if entry_name_hint and not mcp_overrides.get("name"):
+                    mcp_overrides = {**entry_overrides, "name": entry_name_hint}
+                name, version = _build_native_agent_staging(
+                    entry,
+                    staging,
+                    runtime_type=RUNTIME_AGENT_MCP,
+                    entry_overrides=mcp_overrides,
+                    version_fallback=version_fallback,
+                    default_author=default_author,
+                    default_tags=default_tags,
+                    allow_publish_overrides=allow_publish_overrides,
+                )
+            else:
+                raise ValueError("asset_layout_unrecognized")
 
         build_skill_plugin_zip_to_path(staging, name, version, zip_path)
         return zip_path, name, version

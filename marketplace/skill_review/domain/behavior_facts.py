@@ -10,6 +10,12 @@ ReviewBehaviorFactKind = Literal[
     "network_access",
     "package_or_artifact_fetch",
     "remote_state_mutation",
+    "resource_exhaustion",
+    "filesystem_boundary_access",
+    "unsafe_object_loading",
+    "bulk_remote_requests",
+    "query_or_template_construction",
+    "execution_amplification_chain",
     "analyzability_gap",
 ]
 ReviewBehaviorFactSource = Literal["command", "code", "documentation", "coverage"]

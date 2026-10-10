@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from 'react-query'
 import { Check, ChevronRight, Copy, X as XIcon } from 'lucide-react'
 import { getAuditLogDetail, type AuditLogDetail } from '@/api/audit'
+import { assetDetailPath } from '@/utils/pluginType'
 import { getObjectTypeLabel, pickObjectDisplay } from './badges'
 
 interface AuditLogDetailDrawerProps {
@@ -187,7 +188,11 @@ function DetailBody({ detail }: { detail: AuditLogDetail }) {
       version && version.toLowerCase() !== 'all'
         ? `?version=${encodeURIComponent(version)}`
         : ''
-    window.open(`/skills/${encodeURIComponent(obj.slug)}${query}`, '_blank', 'noopener')
+    window.open(
+      `${assetDetailPath(obj.slug, obj.pluginType || detail.asset_plugin_type || detail.resource_type)}${query}`,
+      '_blank',
+      'noopener',
+    )
   }
 
   return (

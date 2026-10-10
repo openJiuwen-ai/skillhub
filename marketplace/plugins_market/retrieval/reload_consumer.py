@@ -17,6 +17,27 @@ RELOAD_STREAM = "index:reload"
 _CONSUMER_GROUP_PREFIX = "reload"
 
 
+def _ensure_consumer_group(redis_client, group: str) -> None:
+    """Create stream + consumer group if missing (Redis restart / empty DB)."""
+    try:
+        redis_client.xgroup_create(RELOAD_STREAM, group, id="$", mkstream=True)
+        logger.info("reload_consumer: created group=%s stream=%s", group, RELOAD_STREAM)
+    except Exception as exc:
+        # BUSYGROUP = already exists; anything else is unexpected but non-fatal here
+        msg = str(exc)
+        if "BUSYGROUP" in msg:
+            return
+        # Some redis builds raise ResponseError with this text for existing groups
+        if "already exists" in msg.lower():
+            return
+        logger.warning("reload_consumer: xgroup_create failed group=%s: %s", group, exc)
+
+
+def _is_nogroup_error(exc: BaseException) -> bool:
+    msg = str(exc)
+    return "NOGROUP" in msg or "No such key" in msg
+
+
 async def run_reload_consumer(index_manager, redis_client) -> None:
     """Read index:reload stream forever and hot-reload on each message.
 
@@ -31,11 +52,7 @@ async def run_reload_consumer(index_manager, redis_client) -> None:
     group = f"{_CONSUMER_GROUP_PREFIX}-{instance_id}"
     consumer = instance_id
 
-    try:
-        redis_client.xgroup_create(RELOAD_STREAM, group, id="$", mkstream=True)
-    except Exception:
-        pass  # group already exists
-
+    _ensure_consumer_group(redis_client, group)
     logger.info("reload_consumer started group=%s", group)
 
     loop = asyncio.get_running_loop()
@@ -65,7 +82,15 @@ async def run_reload_consumer(index_manager, redis_client) -> None:
             logger.info("reload_consumer cancelled, stopping")
             break
         except Exception as exc:
-            logger.error("reload_consumer error: %s", exc)
+            if _is_nogroup_error(exc):
+                logger.warning(
+                    "reload_consumer: stream/group missing, recreating group=%s (%s)",
+                    group,
+                    exc,
+                )
+                await loop.run_in_executor(None, lambda: _ensure_consumer_group(redis_client, group))
+            else:
+                logger.error("reload_consumer error: %s", exc)
             await asyncio.sleep(5)
 
 

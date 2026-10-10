@@ -139,6 +139,7 @@ def build_catalog_records_from_existing(
                 category=record.category,
                 retrieval_text=record.retrieval_text,
                 metadata=dict(record.metadata),
+                tags=record.tags,
             )
         )
     return sorted(records, key=lambda item: item.cid)

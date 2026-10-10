@@ -8,9 +8,12 @@ import { API_CONFIG, API_ENDPOINTS } from './config'
 export type MarketplacePluginOrderBy =
   | 'install_count'
   | 'like_count'
+  | 'view_count'
   | 'create_time'
   | 'update_time'
   | 'review_count'
+  | 'recommend'
+  | 'hot_score'
 
 export interface MarketplacePluginListRequest {
   page?: number
@@ -20,6 +23,8 @@ export interface MarketplacePluginListRequest {
   publisher_id?: string
   /** 与后端 `asset_id` 一致 */
   asset_id?: string
+  /** 资产主类型；四类 Agent 资产与 plugin_type 同值，用于检索与存储分组 */
+  asset_type?: string
   /** 与后端 Query 一致：`plugin_type`（如 tools / mcp-stdio / restful-api / skill） */
   plugin_type?: string
   /** 与后端一致：PENDING | APPROVED | REJECTED，常配合 plugin_type=skill */
@@ -28,8 +33,14 @@ export interface MarketplacePluginListRequest {
   plugin_type_exclude?: string
   /** 与后端 `category_id`：按类别筛选（如 software-development / office-productivity） */
   category_id?: string
+  /** 与后端 `tags`：逗号分隔多标签精确过滤 */
+  tags?: string
+  /** 与后端 `tags_match`：all=同时包含全部标签，any=包含任一标签 */
+  tags_match?: 'all' | 'any'
   order_by?: MarketplacePluginOrderBy
   desc?: boolean
+  /** 热门 tab 截断：只返回前 top_k 条，total 同步封顶 */
+  top_k?: number
 }
 
 export interface MarketplacePluginItem {
@@ -46,9 +57,12 @@ export interface MarketplacePluginItem {
   icon_uri?: string | null
   publisher_id: string
   publisher_name: string
+  /** 发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official */
+  publisher_official?: boolean
   tags?: string[] | null
   certification?: string | null
   plugin_type?: string | null
+  visibility?: 'public' | 'private' | string | null
   publish_result?: 'reviewing' | 'pending_moderation' | 'publish_success' | 'publish_failed' | string | null
   /** 旧字段名，仅作兼容 */
   run_time?: string | null
@@ -69,6 +83,7 @@ export interface MarketplacePluginItem {
   star_count?: number
   review_count: number
   average_rating: number
+  hot_score?: number
   create_time?: number | null
   update_time?: number | null
   createTime?: number | null
@@ -81,6 +96,7 @@ export interface MarketplacePluginItem {
   moderation_reject_reason?: string | null
   /** 服务端根据当前登录态计算，优先用于展示审核按钮 */
   viewer_is_market_moderation_admin?: boolean
+  access_source?: 'public' | 'owner' | 'group' | 'admin' | string | null
   /** Git 且无 SKILL 声明版本时，列表 latest 行展示 commit 短码（与 latest_version 对齐） */
   git_version_display_as_commit?: boolean
   resolved_commit_sha?: string | null
@@ -128,6 +144,69 @@ export interface MarketplacePluginListResponse {
   code: number
   message: string
   data: MarketplacePluginListData
+}
+
+/** GET /plugins/tags 返回的标签选项 */
+export interface PluginTagOption {
+  tag: string
+  count: number
+}
+
+export interface PluginTagOptionsResponse {
+  code: number
+  message: string
+  data: PluginTagOption[]
+}
+
+/** 拉取市场标签筛选选项：热门标签自动推荐 + 运营配置优先展示 */
+export async function getPluginTagOptions(
+  request: { plugin_type?: string; limit?: number; keyword?: string } = {}
+): Promise<PluginTagOption[]> {
+  const client = getApiClient()
+  const { data } = await client.get<PluginTagOptionsResponse>(API_ENDPOINTS.PLUGINS.TAGS, {
+    params: {
+      plugin_type: request.plugin_type || undefined,
+      limit: request.limit ?? 20,
+      keyword: request.keyword || undefined,
+    },
+  })
+  if (data == null || typeof data !== 'object') {
+    throw new MarketplaceApiError('标签选项响应无效')
+  }
+  if (data.code !== 200 || !Array.isArray(data.data)) {
+    throw new MarketplaceApiError(data.message || '标签选项拉取失败', data.code)
+  }
+  return data.data
+}
+
+/** GET /plugins/category-totals 返回的分类计数聚合 */
+export interface PluginCategoryTotals {
+  /** category_id -> 可见资产数（未分类不计入） */
+  totals: Record<string, number>
+  /** 全部可见资产总数（含未分类），与不带 category_id 的列表 total 同口径 */
+  all: number
+}
+
+/** 一次返回所有市场 tab 类型的分类计数（key 为 tab 的 plugin_type） */
+export type PluginCategoryTotalsByType = Record<string, PluginCategoryTotals>
+
+export interface PluginCategoryTotalsResponse {
+  code: number
+  message: string
+  data: PluginCategoryTotalsByType
+}
+
+/** 拉取市场侧栏分类计数：一次返回全部类型，切 tab 不再重新请求 */
+export async function getPluginCategoryTotals(): Promise<PluginCategoryTotalsByType> {
+  const client = getApiClient()
+  const { data } = await client.get<PluginCategoryTotalsResponse>(API_ENDPOINTS.PLUGINS.CATEGORY_TOTALS)
+  if (data == null || typeof data !== 'object' || data.data == null) {
+    throw new MarketplaceApiError('分类计数响应无效')
+  }
+  if (data.code !== 200) {
+    throw new MarketplaceApiError(data.message || '分类计数拉取失败', data.code)
+  }
+  return data.data
 }
 
 /** GET /api/v1/artifacts/{id} 响应 data */
@@ -182,12 +261,14 @@ export async function getPluginArtifactDownload(assetId: string, version?: strin
 export class MarketplaceApiError extends Error {
   readonly code?: number
   readonly errorType?: string
+  readonly details?: unknown
 
-  constructor(message: string, code?: number, errorType?: string) {
+  constructor(message: string, code?: number, errorType?: string, details?: unknown) {
     super(message)
     this.name = 'MarketplaceApiError'
     this.code = code
     this.errorType = errorType
+    this.details = details
   }
 }
 
@@ -201,12 +282,19 @@ export class GitSourceDuplicateError extends Error {
 
 /** DELETE /git-sources/{id} 业务拒绝时抛出，便于前端展示 i18n 说明。 */
 export class GitSourceDeleteError extends Error {
-  readonly reason: 'git_source_has_assets' | 'git_source_sync_in_progress'
+  readonly reason: 'git_source_sync_in_progress' | 'git_source_cascade_delete_partial'
+  readonly deletedSkillCount?: number
+  readonly failedSkillCount?: number
 
-  constructor(reason: 'git_source_has_assets' | 'git_source_sync_in_progress') {
+  constructor(
+    reason: 'git_source_sync_in_progress' | 'git_source_cascade_delete_partial',
+    opts?: { deletedSkillCount?: number; failedSkillCount?: number },
+  ) {
     super(reason)
     this.name = 'GitSourceDeleteError'
     this.reason = reason
+    this.deletedSkillCount = opts?.deletedSkillCount
+    this.failedSkillCount = opts?.failedSkillCount
   }
 }
 
@@ -287,12 +375,16 @@ export async function getPlugins(
       search_keyword: request.search_keyword || undefined,
       publisher_id: request.publisher_id || undefined,
       asset_id: request.asset_id || undefined,
+      asset_type: request.asset_type || undefined,
       plugin_type: request.plugin_type || undefined,
       moderation_status: request.moderation_status || undefined,
       plugin_type_exclude: request.plugin_type_exclude || undefined,
       category_id: request.category_id || undefined,
+      tags: request.tags || undefined,
+      tags_match: request.tags_match || undefined,
       order_by: request.order_by ?? 'install_count',
       desc: request.desc ?? true,
+      top_k: request.top_k || undefined,
     },
   })
 
@@ -415,6 +507,26 @@ export async function togglePluginInteract(
 }
 
 /** GET /api/v1/plugins/{asset_id}/versions/{version} 响应 data */
+export interface AgentPackageCapabilityItem {
+  kind: string
+  id: string
+  name: string
+  description?: string | null
+}
+
+export interface AgentPackageProfileData {
+  package_type?: string | null
+  category?: string | null
+  source?: string | null
+  integration_type?: string | null
+  credentials_type?: string | null
+  default_init_input?: string | null
+  quick_inputs?: string[]
+  persona_markdown?: string | null
+  capabilities?: AgentPackageCapabilityItem[]
+  manifest_tags?: string[]
+}
+
 export interface PluginVersionDetailData {
   asset_id: string
   version: string
@@ -426,6 +538,8 @@ export interface PluginVersionDetailData {
   detail_desc?: string | null
   publisher_id: string
   publisher_name: string
+  /** 发布者是否为官方（system_admin）；由后端标记，前端据此渲染 官方/Official */
+  publisher_official?: boolean
   tags?: string[] | null
   certification?: string | null
   changelog?: string | null
@@ -433,8 +547,15 @@ export interface PluginVersionDetailData {
   icon_uri?: string | null
   publish_result?: 'reviewing' | 'pending_moderation' | 'publish_success' | 'publish_failed' | string | null
   publish_failed_reason?: string | null
+  review_status?: string | null
+  review_failed_reason?: string | null
   review_summary?: Record<string, unknown> | null
   review_sections?: Array<Record<string, unknown>> | null
+  semantic_review?: Record<string, unknown> | null
+  review_mode?: string | null
+  review_engine?: string | null
+  model_name?: string | null
+  trace_id?: string | null
   /** 资产累计下载次数；旧后端可能无此字段 */
   install_count?: number | null
   /** 资产累计浏览次数（版本详情成功返回时递增）；旧后端可能无此字段 */
@@ -447,10 +568,12 @@ export interface PluginVersionDetailData {
   version_moderation_status?: string | null
   version_moderation_reject_reason?: string | null
   viewer_is_market_moderation_admin?: boolean
+  access_source?: 'public' | 'owner' | 'group' | 'admin' | string | null
   git_version_display_as_commit?: boolean
   resolved_commit_sha?: string | null
   declared_skill_version?: string | null
   storage_mode?: string | null
+  agent_package_profile?: AgentPackageProfileData | null
 }
 
 export interface SkillModerationResultData {
@@ -590,6 +713,7 @@ export interface PluginPublishResultData {
   published_at: string
   storage_url: string
   publish_result?: 'reviewing' | 'pending_moderation' | 'publish_success' | 'publish_failed' | string | null
+  visibility?: 'public' | 'private' | string | null
 }
 
 export interface PluginPublishResponse {
@@ -618,6 +742,32 @@ function publishErrorMessage(err: unknown, fallback: string): string {
  * POST /api/v1/plugins，multipart/form-data。
  * 使用独立 axios 请求，避免带默认 `Content-Type: application/json` 的实例破坏 multipart。
  */
+function formatPublishErrorDetails(details: unknown): string {
+  if (details == null) return ''
+  if (typeof details === 'string') return details.trim()
+  if (Array.isArray(details)) {
+    return details
+      .map(item => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object') {
+          const rec = item as Record<string, unknown>
+          return String(rec.message || rec.msg || rec.error || JSON.stringify(item))
+        }
+        return String(item)
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+  if (typeof details === 'object') {
+    try {
+      return JSON.stringify(details, null, 2)
+    } catch {
+      return String(details)
+    }
+  }
+  return String(details)
+}
+
 export async function publishPlugin(params: {
   file: File
   checksumSha256Hex: string
@@ -625,6 +775,11 @@ export async function publishPlugin(params: {
   pluginVersion?: string
   versionDesc?: string
   force?: boolean
+  visibility?: 'public' | 'private'
+  assetName?: string
+  displayName?: string
+  description?: string
+  tags?: string
 }): Promise<PluginPublishResultData> {
   const token = getStoredGitCodeToken()
   const provider = getStoredOAuthProvider()
@@ -637,7 +792,12 @@ export async function publishPlugin(params: {
   if (params.pluginId?.trim()) form.append('plugin_id', params.pluginId.trim())
   if (params.pluginVersion?.trim()) form.append('plugin_version', params.pluginVersion.trim())
   if (params.versionDesc?.trim()) form.append('version_desc', params.versionDesc.trim())
+  if (params.assetName?.trim()) form.append('asset_name', params.assetName.trim())
+  if (params.displayName?.trim()) form.append('display_name', params.displayName.trim())
+  if (params.description?.trim()) form.append('description', params.description.trim())
+  if (params.tags?.trim()) form.append('tags', params.tags.trim())
   if (params.force) form.append('force', 'true')
+  if (params.visibility) form.append('visibility', params.visibility)
 
   try {
     const { data } = await axios.post<PluginPublishResponse>(`${base}${API_ENDPOINTS.PLUGINS.LIST}`, form, {
@@ -655,10 +815,18 @@ export async function publishPlugin(params: {
   } catch (e) {
     if (e instanceof MarketplaceApiError) throw e
     if (axios.isAxiosError(e)) {
-      const detail = (e.response?.data as { detail?: { message?: string; error?: string } })?.detail
+      const detail = (e.response?.data as {
+        detail?: { message?: string; error?: string; details?: unknown }
+      })?.detail
       const msg = detail?.message || e.message || '发布失败'
       const errorType = detail?.error
-      throw new MarketplaceApiError(msg, e.response?.status, errorType)
+      const detailsText = formatPublishErrorDetails(detail?.details)
+      throw new MarketplaceApiError(
+        detailsText ? `${msg}\n${detailsText}` : msg,
+        e.response?.status,
+        errorType,
+        detail?.details,
+      )
     }
     throw new Error(publishErrorMessage(e, '发布失败'))
   }
@@ -877,27 +1045,43 @@ export async function syncGitSource(sourceId: string, fail_fast?: boolean): Prom
   }
 }
 
-export async function deleteGitSource(sourceId: string): Promise<void> {
+export async function deleteGitSource(
+  sourceId: string,
+): Promise<{ deleted: boolean; deleted_skill_count?: number }> {
   const client = getApiClient()
   try {
-    const { data } = await client.delete<ApiResponse<{ deleted: boolean }>>(
-      API_ENDPOINTS.PLUGINS.gitSourceDetail(sourceId),
-    )
-    if (data.code !== 200) {
+    const { data } = await client.delete<
+      ApiResponse<{ deleted: boolean; deleted_skill_count?: number }>
+    >(API_ENDPOINTS.PLUGINS.gitSourceDetail(sourceId))
+    if (data.code !== 200 || !data.data) {
       throw new MarketplaceApiError(data.message || '删除 Git 源失败', data.code)
     }
+    return data.data
   } catch (e) {
     if (e instanceof MarketplaceApiError) throw e
     if (axios.isAxiosError(e)) {
-      const detail = e.response?.data as { detail?: { error?: string; message?: string } } | undefined
+      const detail = e.response?.data as {
+        detail?: {
+          error?: string
+          message?: string
+          data?: {
+            deleted_skill_count?: number
+            failed_skill_count?: number
+          }
+        }
+      } | undefined
       const block = detail?.detail
       if (block && typeof block === 'object') {
         const code = (block.error ?? '').trim()
-        if (code === 'git_source_has_assets') {
-          throw new GitSourceDeleteError('git_source_has_assets')
-        }
         if (code === 'git_source_sync_in_progress') {
           throw new GitSourceDeleteError('git_source_sync_in_progress')
+        }
+        if (code === 'git_source_cascade_delete_partial') {
+          const payload = block.data
+          throw new GitSourceDeleteError('git_source_cascade_delete_partial', {
+            deletedSkillCount: Number(payload?.deleted_skill_count ?? 0),
+            failedSkillCount: Number(payload?.failed_skill_count ?? 0),
+          })
         }
       }
     }

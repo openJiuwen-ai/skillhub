@@ -38,8 +38,8 @@ export function AppHeader({
   const handlePublishClick = onPublish ?? (() => openPublish(getPrimarySkillPluginType()))
 
   return (
-    <header className="sticky top-0 z-30 w-full shrink-0 border-b border-slate-200/80 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 pt-[env(safe-area-inset-top,0px)]">
-      <div className="mx-auto flex h-14 w-full min-w-0 items-center justify-between gap-2 px-3 sm:gap-3 sm:px-4 md:px-[8.33%]">
+    <header className="sticky top-0 z-30 w-full shrink-0 border-b border-[#EDEDED] bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 pt-[env(safe-area-inset-top,0px)]">
+      <div className="mx-auto flex h-14 w-full min-w-0 items-center justify-between gap-2 px-3 sm:gap-3 sm:px-4 md:h-16 md:max-w-[1600px] md:px-0">
         <Link
           to="/"
           className="inline-flex min-w-0 max-w-[55%] items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] sm:max-w-none sm:gap-2"
@@ -63,9 +63,9 @@ export function AppHeader({
             <button
               type="button"
               onClick={handlePublishClick}
-              className="inline-flex h-8 min-w-[5.25rem] items-center justify-center gap-1 rounded-full bg-[linear-gradient(99.61deg,#1E54F9_0%,#852EFE_100%)] px-2.5 text-xs font-medium text-white shadow-sm transition-opacity hover:opacity-90 sm:w-24 sm:px-0 sm:text-sm"
+              className="inline-flex h-8 min-w-[5.25rem] items-center justify-center gap-1 rounded-full bg-[linear-gradient(99.61deg,#1E54FA_0%,#842EFD_100%)] px-2.5 text-xs font-medium text-white shadow-[0_4px_12px_rgba(81,64,246,0.18)] transition-opacity hover:opacity-90 sm:h-9 sm:w-[116px] sm:px-0 sm:text-sm"
             >
-              <Plus className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <Plus className="h-4 w-4 shrink-0" aria-hidden />
               <span className="truncate">{publishLabel ?? t('appHeader.publish')}</span>
             </button>
           ) : null}
@@ -89,6 +89,7 @@ export function AppHeader({
               primaryLabel={user.name || user.login}
               secondaryLabel={`@${user.login}`}
               onProfile={() => navigate('/profile')}
+              onGroups={() => navigate('/groups')}
               onLogout={() => logout()}
             />
           ) : (
@@ -111,6 +112,7 @@ type HeaderAccountMenuProps = {
   primaryLabel: string
   secondaryLabel?: string
   onProfile: () => void
+  onGroups: () => void
   onLogout: () => void
 }
 
@@ -120,6 +122,7 @@ function HeaderAccountMenu({
   primaryLabel,
   secondaryLabel,
   onProfile,
+  onGroups,
   onLogout,
 }: HeaderAccountMenuProps) {
   const { t } = useTranslation()
@@ -171,6 +174,7 @@ function HeaderAccountMenu({
 
   const items: Array<{ id: string; label: string; onClick: () => void; danger?: boolean }> = [
     { id: 'profile', label: t('appHeader.profile'), onClick: onProfile },
+    { id: 'groups', label: t('appHeader.groups'), onClick: onGroups },
     { id: 'logout', label: t('appHeader.logout'), onClick: onLogout },
   ]
 
@@ -184,7 +188,7 @@ function HeaderAccountMenu({
           right: coords.right,
           zIndex: 1400,
         }}
-        className="min-w-[184px] overflow-hidden rounded-lg border border-slate-200/90 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.12)]"
+        className="min-w-[160px] overflow-hidden rounded-[12px] border border-transparent bg-white shadow-[0_4px_40px_rgba(0,0,0,0.10)]"
         role="menu"
       >
         <div className="border-b border-slate-100 px-3 py-2.5">

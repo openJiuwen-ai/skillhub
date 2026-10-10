@@ -30,6 +30,7 @@ def load_catalog_records(path: Path) -> List[CatalogRecord]:
                 category=str(payload.get("category") or ""),
                 retrieval_text=str(payload.get("retrieval_text") or ""),
                 metadata=dict(payload.get("metadata") or {}),
+                tags=tuple(str(item).strip() for item in payload.get("tags") or () if str(item).strip()),
             )
         )
     return records

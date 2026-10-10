@@ -4,7 +4,7 @@ const TOKEN_KEY = 'marketplace_oauth_access_token'
 const USER_KEY = 'marketplace_oauth_user'
 const PROVIDER_KEY = 'marketplace_oauth_provider'
 
-export type OAuthProvider = 'gitcode' | 'github'
+export type OAuthProvider = 'gitcode' | 'github' | 'agentos'
 
 export type OAuthUser = {
   id: string
@@ -41,7 +41,9 @@ export function getStoredOAuthUser(): OAuthUser | null {
 export function getStoredOAuthProvider(): OAuthProvider {
   try {
     const p = (sessionStorage.getItem(PROVIDER_KEY) || '').trim().toLowerCase()
-    return p === 'github' ? 'github' : 'gitcode'
+    if (p === 'github') return 'github'
+    if (p === 'agentos') return 'agentos'
+    return 'gitcode'
   } catch {
     return 'gitcode'
   }

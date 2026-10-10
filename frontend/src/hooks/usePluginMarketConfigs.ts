@@ -3,7 +3,7 @@
 import { useMemo } from 'react'
 import { usePluginListQuery, type MarketplacePluginItem, type MarketplacePluginListRequest } from '@/api'
 import { resolvePluginIconUrl } from '@/utils/resolvePluginIconUrl'
-import { isSkillLikePluginType } from '@/utils/pluginType'
+import { isAgentAssetPluginType, isModeratedMarketAssetType } from '@/utils/pluginType'
 
 export interface MarketPlugin {
   assetId: string
@@ -15,6 +15,8 @@ export interface MarketPlugin {
   iconUri: string
   publisherId: string
   publisherName: string
+  /** 发布者是否为官方（system_admin），后端标记位；渲染时据此显示 官方/Official */
+  publisherOfficial: boolean
   tags: string[]
   certification: string
   runTime: string
@@ -27,6 +29,7 @@ export interface MarketPlugin {
   starCount: number
   reviewCount: number
   averageRating: number
+  hotScore: number
   createTime?: number | null
   updateTime?: number | null
   /** 与后端 pin_order 一致；非空表示置顶 */
@@ -37,6 +40,7 @@ export interface MarketPlugin {
   resolvedCommitSha?: string | null
   declaredSkillVersion?: string | null
   storageMode?: string | null
+  accessSource?: string | null
 }
 
 export interface UsePluginMarketConfigsParams {
@@ -47,8 +51,14 @@ export interface UsePluginMarketConfigsParams {
   pluginTypeExclude?: string
   /** 类别 ID（如 software-development / office-productivity） */
   categoryId?: string
+  /** 逗号分隔多标签精确过滤（与后端 tags 参数一致） */
+  tags?: string
+  /** 标签匹配模式：all=同时包含全部，any=任一命中 */
+  tagsMatch?: 'all' | 'any'
   orderBy?: MarketplacePluginListRequest['order_by']
   desc?: boolean
+  /** 热门 tab 截断：只返回前 top_k 条（total 同步封顶） */
+  topK?: number
 }
 
 export interface UsePluginMarketConfigsReturn {
@@ -75,7 +85,19 @@ function normalizeModerationStatus(raw: string | null | undefined): 'APPROVED' |
   return 'APPROVED'
 }
 
+// 后端用 publisher_official 标记 system_admin 发布的资产（publisher_name 本身原样下发，
+// 避免与恰好叫 official/官方 的真实用户名冲突），这里按当前语言渲染为 官方/Official。
+export function displayPublisherName(
+  name: string | null | undefined,
+  isOfficial: boolean | undefined,
+  t: (key: string) => string,
+): string {
+  if (isOfficial) return t('plugins.publisher.official')
+  return name || ''
+}
+
 function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
+  const accessSource = item.access_source || 'public'
   return {
     assetId: item.asset_id,
     assetType: item.asset_type,
@@ -86,11 +108,14 @@ function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
     iconUri: resolvePluginIconUrl(item.icon_uri || ''),
     publisherId: item.publisher_id,
     publisherName: item.publisher_name,
+    publisherOfficial: Boolean(item.publisher_official),
     tags: item.tags || [],
     certification: item.certification || '',
     runTime: firstString(item.plugin_type, item.run_time),
-    latestVersion: isSkillLikePluginType(item.plugin_type)
-      ? firstString(item.public_latest_version, item.latest_version)
+    latestVersion: isModeratedMarketAssetType(item.plugin_type)
+      ? (accessSource === 'group' || accessSource === 'owner' || accessSource === 'admin'
+        ? firstString(item.latest_version, item.public_latest_version)
+        : firstString(item.public_latest_version, item.latest_version))
       : item.latest_version || '',
     allVersions: Array.isArray(item.all_versions) ? item.all_versions : [],
     viewCount: item.view_count,
@@ -99,6 +124,7 @@ function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
     starCount: item.star_count ?? 0,
     reviewCount: item.review_count,
     averageRating: item.average_rating,
+    hotScore: item.hot_score ?? 0,
     createTime: item.create_time ?? item.createTime ?? null,
     updateTime: item.update_time ?? item.updateTime ?? null,
     pinOrder: item.pin_order ?? item.pinOrder ?? null,
@@ -107,6 +133,7 @@ function mapPlugin(item: MarketplacePluginItem): MarketPlugin {
     resolvedCommitSha: item.resolved_commit_sha ?? null,
     declaredSkillVersion: item.declared_skill_version ?? null,
     storageMode: item.storage_mode ?? null,
+    accessSource,
   }
 }
 
@@ -115,11 +142,15 @@ export function usePluginMarketConfigs(params: UsePluginMarketConfigsParams): Us
     page: params.page,
     page_size: params.pageSize,
     search_keyword: params.searchKeyword || undefined,
+    asset_type: isAgentAssetPluginType(params.pluginType) ? params.pluginType : undefined,
     plugin_type: params.pluginType || undefined,
     plugin_type_exclude: params.pluginTypeExclude || undefined,
     category_id: params.categoryId || undefined,
+    tags: params.tags || undefined,
+    tags_match: params.tags ? (params.tagsMatch ?? 'all') : undefined,
     order_by: params.orderBy ?? 'install_count',
     desc: params.desc ?? true,
+    top_k: params.topK || undefined,
   })
 
   const listPayload = query.data?.data

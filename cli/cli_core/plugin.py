@@ -7,8 +7,6 @@ import posixpath
 import re
 import shutil
 import stat
-import subprocess
-import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -16,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
 from cli_core.logging_config import get_logger
 from cli_core.market import PublishError, plugin_upload
@@ -47,11 +44,26 @@ PACK_IGNORE_SUFFIXES = (".pyc", ".pyo", ".egg-info")
 SKILL_IMPORT_BUNDLE_MAX_BYTES = 512 * 1024 * 1024
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
-TOOL_NAME_PATTERN = re.compile(r'@tool\([^)]*name\s*=\s*["\']([a-z][a-z0-9-]*)["\']', re.DOTALL)
 
-TOOLS_SCHEMA_PATH = "schemas/tools.json"
-SUPPORTED_PLUGIN_TYPES = {"tools", "mcp-stdio", "restful-api", "skill", "swarmskill"}
+SUPPORTED_PLUGIN_TYPES = {
+    "skill",
+    "swarmskill",
+    "agent-plugin",
+    "agent-mcp",
+    "agent-template",
+    "agent-group",
+}
 SKILL_LIKE_RUNTIME_TYPES = frozenset({"skill", "swarmskill"})
+AGENT_ASSET_RUNTIME_TYPES = frozenset({"agent-plugin", "agent-mcp", "agent-template", "agent-group"})
+LEGACY_RUNTIME_TYPES = frozenset({"tools", "mcp-stdio", "restful-api"})
+_AGENT_MANIFEST_PACKAGE_TYPE = {
+    "agent-plugin": "plugin",
+    "agent-mcp": "mcp",
+    "agent-template": "agent_template",
+    "agent-group": "agent_group",
+}
+_AGENT_PLUGIN_FORBIDDEN_FIELDS = ("persona", "agent_card", "model", "subagents", "memories", "rubrics")
+_AGENT_MCP_INTEGRATION_TYPES = frozenset({"stdio-mcp", "remote-mcp", "cli", "skill-only"})
 
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_NAME_MAX_LEN = 64
@@ -415,6 +427,22 @@ def _infer_skill_like_runtime(root: Path) -> tuple[str | None, Path | None]:
     return "skill", nested
 
 
+def _read_skill_frontmatter_tags(skill_dir: Path, fallback_runtime: str | None = None) -> list[str]:
+    """Read tags from SKILL.md frontmatter; return fallback when absent."""
+    fm, fm_err = _parse_skill_frontmatter(skill_dir / "SKILL.md")
+    if fm is None or fm_err is not None:
+        return [fallback_runtime] if fallback_runtime else []
+    tags_val = fm.get("tags")
+    tags: list[str] = []
+    if isinstance(tags_val, list):
+        tags = [str(t).strip() for t in tags_val if isinstance(t, str) and str(t).strip()]
+    elif isinstance(tags_val, str) and tags_val.strip():
+        tags = [tags_val.strip()]
+    if not tags and fallback_runtime:
+        tags = [fallback_runtime]
+    return tags
+
+
 def _build_skill_like_plugin_yaml_for_publish(root: Path, plugin_version: str) -> dict[str, Any]:
     """Build a synthetic plugin.yaml for skill/swarmskill publish from SKILL.md + CLI version."""
     inferred_runtime, _ = _infer_skill_like_runtime(root)
@@ -439,14 +467,7 @@ def _build_skill_like_plugin_yaml_for_publish(root: Path, plugin_version: str) -
     author_raw = fm.get("author")
     author = author_raw.strip() if isinstance(author_raw, str) and author_raw.strip() else "unknown"
 
-    tags_val = fm.get("tags")
-    tags: list[str] = []
-    if isinstance(tags_val, list):
-        tags = [str(t).strip() for t in tags_val if isinstance(t, str) and str(t).strip()]
-    elif isinstance(tags_val, str) and tags_val.strip():
-        tags = [tags_val.strip()]
-    if not tags:
-        tags = [inferred_runtime]
+    tags = _read_skill_frontmatter_tags(skill_dir, fallback_runtime=inferred_runtime)
 
     return {
         "name": slug,
@@ -496,7 +517,189 @@ def _init_plugin_swarmskill(plugin_name: str, plugin_root: Path) -> Path:
     return plugin_root
 
 
-def plugin_init(plugin_name: str, base_path: Path, force: bool = False, plugin_type: str = "tools") -> Path:
+def _init_agent_asset(plugin_name: str, plugin_root: Path, plugin_type: str) -> Path:
+    """Scaffold a wrapped Agent asset: outer plugin.yaml plus inner manifest.json."""
+    plugin_root.mkdir(parents=True, exist_ok=True)
+    inner = plugin_root / plugin_name
+    inner.mkdir(parents=True, exist_ok=True)
+    package_type = _AGENT_MANIFEST_PACKAGE_TYPE[plugin_type]
+    manifest: dict[str, Any] = {
+        "version": "0.0.1",
+        "package_type": package_type,
+        "description": "TODO: describe this asset",
+    }
+    if plugin_type == "agent-plugin":
+        manifest["id"] = plugin_name
+        manifest["name"] = plugin_name
+        manifest["tools"] = [{"file": "tools/example.py", "class": "ExampleTool"}]
+        tools_dir = inner / "tools"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        (tools_dir / "example.py").write_text(
+            "class ExampleTool:\n    \"\"\"TODO: implement the tool.\"\"\"\n",
+            encoding="utf-8",
+        )
+    elif plugin_type == "agent-mcp":
+        manifest["id"] = plugin_name
+        manifest["name"] = plugin_name
+        manifest["integration"] = {"type": "remote-mcp", "file": "mcp.json"}
+        (inner / "mcp.json").write_text(
+            json.dumps(
+                {"mcpServers": {"example": {"url": "https://example.com/mcp"}}},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    elif plugin_type == "agent-template":
+        manifest["name"] = plugin_name
+        manifest["persona"] = {"dir": "persona"}
+        persona_dir = inner / "persona"
+        persona_dir.mkdir(parents=True, exist_ok=True)
+        (persona_dir / "persona.md").write_text("# Persona\n\nTODO: describe this expert.\n", encoding="utf-8")
+    else:
+        manifest["name"] = plugin_name
+        manifest["instruction"] = "TODO: how members collaborate"
+        manifest["agents"] = ["leader", "analyst"]
+    (inner / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (inner / "README.md").write_text(f"# {plugin_name}\n\nTODO: describe this asset.\n", encoding="utf-8")
+    (plugin_root / "README.md").write_text(f"# {plugin_name}\n\nTODO: describe this asset.\n", encoding="utf-8")
+    (plugin_root / "plugin.yaml").write_text(
+        yaml.safe_dump(
+            _default_plugin_yaml(plugin_name, plugin_type),
+            sort_keys=False,
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    return plugin_root
+
+
+def _validate_mcp_json_shape(path: Path, integration_type: str, errors: list[str]) -> None:
+    """Match marketplace agent-mcp: mcpServers object, first server matches integration.type."""
+    data = _load_json(path, errors)
+    if data is None:
+        return
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict) or not servers:
+        errors.append("mcp.json mcpServers must be a non-empty object")
+        return
+    first: dict[str, Any] | None = None
+    for server_name, config in servers.items():
+        if not isinstance(server_name, str) or not server_name.strip() or not isinstance(config, dict):
+            errors.append("mcp.json mcpServers entries must use a non-empty name and an object config")
+            return
+        if first is None:
+            first = config
+    if first is None:
+        errors.append("mcp.json mcpServers must be a non-empty object")
+        return
+    command = first.get("command")
+    url = first.get("url")
+    has_command = isinstance(command, str) and bool(command.strip())
+    has_url = isinstance(url, str) and bool(url.strip())
+    if has_command:
+        inferred = "stdio-mcp"
+    elif has_url:
+        inferred = "remote-mcp"
+    else:
+        errors.append("mcp.json first server must include command or url")
+        return
+    if inferred != integration_type:
+        errors.append(
+            f"manifest.integration.type is {integration_type!r}, but mcp.json content matches {inferred!r}"
+        )
+
+
+def _validate_agent_asset_directory(
+    root: Path,
+    plugin_data: dict[str, Any] | None,
+    runtime_type: str,
+    errors: list[str],
+) -> None:
+    if not isinstance(plugin_data, dict):
+        errors.append("agent asset requires plugin.yaml")
+        return
+    name = plugin_data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return
+    version = plugin_data.get("version")
+    manifest_rel = f"{name}/manifest.json"
+    manifest_path = root / name / "manifest.json"
+    if not manifest_path.is_file():
+        errors.append(f"missing required entry: {manifest_rel}")
+        return
+    manifest = _load_json(manifest_path, errors)
+    if manifest is None:
+        return
+    expected_package_type = _AGENT_MANIFEST_PACKAGE_TYPE[runtime_type]
+    package_type = manifest.get("package_type")
+    if package_type != expected_package_type:
+        errors.append(
+            f"manifest.package_type must be {expected_package_type!r}, got {package_type!r}"
+        )
+    if isinstance(version, str) and manifest.get("version") != version:
+        errors.append(
+            f"plugin.yaml version {version!r} must equal manifest.version {manifest.get('version')!r}"
+        )
+    if runtime_type in {"agent-plugin", "agent-mcp"}:
+        if manifest.get("id") != name:
+            errors.append(f"manifest.id {manifest.get('id')!r} must equal plugin.yaml name {name!r}")
+    elif manifest.get("name") != name:
+        errors.append(f"manifest.name {manifest.get('name')!r} must equal plugin.yaml name {name!r}")
+    if runtime_type == "agent-plugin":
+        for field in _AGENT_PLUGIN_FORBIDDEN_FIELDS:
+            if field in manifest:
+                errors.append(f"agent-plugin manifest must not declare {field}")
+    if runtime_type == "agent-mcp":
+        integration = manifest.get("integration")
+        if not isinstance(integration, dict) or not str(integration.get("type") or "").strip():
+            errors.append("manifest.integration.type is required")
+        else:
+            integration_type = str(integration.get("type") or "").strip()
+            if integration_type not in _AGENT_MCP_INTEGRATION_TYPES:
+                errors.append(
+                    "manifest.integration.type must be stdio-mcp, remote-mcp, cli, or skill-only"
+                )
+            file_rel = integration.get("file")
+            if integration_type != "skill-only":
+                if not isinstance(file_rel, str) or not file_rel.strip():
+                    errors.append("manifest.integration.file is required")
+                else:
+                    inner = (root / name).resolve()
+                    target = (inner / file_rel).resolve()
+                    try:
+                        target.relative_to(inner)
+                    except ValueError:
+                        errors.append("manifest.integration.file must stay inside the asset directory")
+                    else:
+                        if not target.is_file():
+                            errors.append(f"missing required entry: {name}/{file_rel.strip()}")
+                        elif integration_type in {"stdio-mcp", "remote-mcp"}:
+                            _validate_mcp_json_shape(target, integration_type, errors)
+        description = manifest.get("description")
+        if not isinstance(description, str) or not description.strip():
+            errors.append("manifest.description is required")
+    if runtime_type in {"agent-template", "agent-group"}:
+        description = manifest.get("description")
+        if not isinstance(description, str) or not description.strip():
+            errors.append("manifest.description is required")
+    if runtime_type == "agent-group":
+        agents = manifest.get("agents")
+        if agents is not None:
+            if not isinstance(agents, list):
+                errors.append("manifest.agents must be an array")
+            else:
+                for index, item in enumerate(agents):
+                    bad_name = not isinstance(item, str) or not item.strip()
+                    has_sep = isinstance(item, str) and ("/" in item or "\\" in item)
+                    if bad_name or has_sep:
+                        errors.append(f"manifest.agents[{index}] must be a name without path separators")
+
+
+def plugin_init(plugin_name: str, base_path: Path, force: bool = False, plugin_type: str = "skill") -> Path:
     if plugin_type not in SUPPORTED_PLUGIN_TYPES:
         supported = ", ".join(sorted(SUPPORTED_PLUGIN_TYPES))
         raise ValueError(f"plugin type must be one of: {supported}")
@@ -515,69 +718,14 @@ def plugin_init(plugin_name: str, base_path: Path, force: bool = False, plugin_t
         return _init_plugin_skill(plugin_name, plugin_root)
     if plugin_type == "swarmskill":
         return _init_plugin_swarmskill(plugin_name, plugin_root)
-
-    package_name = plugin_name.replace("-", "_")
-    package_dir = plugin_root / "src" / package_name
-    schemas_dir = plugin_root / "schemas"
-
-    dirs = [package_dir, schemas_dir]
-    for path in dirs:
-        path.mkdir(parents=True, exist_ok=True)
-
-    (plugin_root / "README.md").write_text(
-        _render_readme(plugin_name, plugin_type),
-        encoding="utf-8",
-    )
-    (package_dir / "__init__.py").write_text(
-        '"""Plugin package."""\n',
-        encoding="utf-8",
-    )
-    schema_filename = "tools.json"
-    schema_content = _default_restful_tools_schema() if plugin_type == "restful-api" else _default_tools_schema()
-    (schemas_dir / schema_filename).write_text(
-        json.dumps(schema_content, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    if plugin_type == "tools":
-        (package_dir / "plugin.py").write_text(
-            _render_plugin_impl(plugin_name),
-            encoding="utf-8",
-        )
-    elif plugin_type == "mcp-stdio":
-        (package_dir / "mcp_server.py").write_text(
-            _render_mcp_stdio_impl(plugin_name),
-            encoding="utf-8",
-        )
-    else:
-        # restful-api
-        (package_dir / "rest_api.py").write_text(
-            _render_rest_api_impl(plugin_name),
-            encoding="utf-8",
-        )
-    (plugin_root / "plugin.yaml").write_text(
-        yaml.safe_dump(
-            _default_plugin_yaml(plugin_name, plugin_type, package_name),
-            sort_keys=False,
-            allow_unicode=True,
-        ),
-        encoding="utf-8",
-    )
-    (plugin_root / "pyproject.toml").write_text(
-        _default_pyproject_toml(plugin_name, package_name, plugin_type),
-        encoding="utf-8",
-    )
-    return plugin_root
+    if plugin_type in AGENT_ASSET_RUNTIME_TYPES:
+        return _init_agent_asset(plugin_name, plugin_root, plugin_type)
+    supported = ", ".join(sorted(SUPPORTED_PLUGIN_TYPES))
+    raise ValueError(f"plugin type must be one of: {supported}")
 
 
-def plugin_validate(
-    plugin_path: Path,
-    *,
-    require_pyproject_for_tools: bool = True,
-) -> ValidationResult:
-    """Validate plugin or skill-like directory.
-
-    If ``require_pyproject_for_tools`` is False, tools may use ``dist/*.whl`` only.
-    """
+def plugin_validate(plugin_path: Path) -> ValidationResult:
+    """Validate a skill, swarmskill, or wrapped Agent asset directory."""
     errors: list[str] = []
     warnings: list[str] = []
     root = plugin_path.resolve()
@@ -607,35 +755,24 @@ def plugin_validate(
                 "skill/swarmskill: expected either root/SKILL.md (flat bundle) or exactly one "
                 "child directory containing SKILL.md"
             )
+    elif runtime_type in AGENT_ASSET_RUNTIME_TYPES:
+        if not plugin_yaml_path.exists():
+            errors.append("missing required entry: plugin.yaml")
+        _validate_agent_asset_directory(root, plugin_data, runtime_type, errors)
+    elif runtime_type in LEGACY_RUNTIME_TYPES:
+        errors.append(
+            f"runtime.type {runtime_type!r} is not an Agent asset type; "
+            "use skill, swarmskill, agent-plugin, agent-mcp, agent-template, or agent-group"
+        )
     elif not skill_like_diag:
         required_entries.extend(("plugin.yaml", "README.md"))
-
-    if runtime_type == "tools":
-        required_entries.append(TOOLS_SCHEMA_PATH)
-        if require_pyproject_for_tools:
-            required_entries.append("pyproject.toml")
-            required_entries.append("src")
-        else:
-            dist_dir = root / "dist"
-            if not dist_dir.is_dir() or not any(dist_dir.glob("*.whl")):
-                errors.append("missing required: dist/*.whl (tools wheel bundle)")
-    elif runtime_type == "restful-api":
-        required_entries.append(TOOLS_SCHEMA_PATH)
-        required_entries.append("src")
-    elif runtime_type is not None and runtime_type not in SKILL_LIKE_RUNTIME_TYPES:
-        required_entries.append("src")
 
     for rel in required_entries:
         if not (root / rel).exists():
             errors.append(f"missing required entry: {rel}")
 
-    tools_schema_path = root / TOOLS_SCHEMA_PATH
-    tools_schema_data: dict[str, Any] | None = None
-    if runtime_type in {"tools", "restful-api"} and tools_schema_path.exists():
-        tools_schema_data = _load_json(tools_schema_path, errors)
-
     if plugin_data is not None:
-        _validate_plugin_yaml(plugin_data, root, errors, warnings)
+        _validate_plugin_yaml(plugin_data, errors)
 
     if runtime_type in SKILL_LIKE_RUNTIME_TYPES:
         skill_ws = _find_skill_workspace(root)
@@ -679,19 +816,6 @@ def plugin_validate(
                 ts_errors, ts_warnings = teamskill_validate_directory(skill_dir)
                 errors.extend(ts_errors)
                 warnings.extend(ts_warnings)
-
-    if tools_schema_data is not None and runtime_type == "tools":
-        validated_tools = _validate_tools_json(tools_schema_data, errors)
-        _validate_tool_names_consistency(
-            plugin_data,
-            {"tools": [tool for _, tool in validated_tools]},
-            root,
-            errors,
-            warnings,
-        )
-
-    if tools_schema_data is not None and runtime_type == "restful-api":
-        _validate_restful_api_tools_json(tools_schema_data, errors)
 
     errors = list(dict.fromkeys(errors))
     warnings = list(dict.fromkeys(warnings))
@@ -754,9 +878,7 @@ def plugin_pack(plugin_path: Path, output_dir: Path | None = None) -> Path:
     zip_path = out / zip_name
     prefix = f"{name}-{version}" if version else name
 
-    if runtime_type == "tools":
-        _pack_plugin_tools(root, name, version, prefix, zip_path)
-    elif runtime_type in SKILL_LIKE_RUNTIME_TYPES:
+    if runtime_type in SKILL_LIKE_RUNTIME_TYPES:
         _pack_plugin_skill(root, name, prefix, zip_path)
     else:
         _pack_plugin_directory(root, prefix, zip_path)
@@ -765,36 +887,6 @@ def plugin_pack(plugin_path: Path, output_dir: Path | None = None) -> Path:
     sha256_path = zip_path.with_suffix(zip_path.suffix + ".sha256")
     sha256_path.write_text(f"{digest}  {zip_name}\n", encoding="utf-8")
     return zip_path
-
-
-def _pack_plugin_tools(root: Path, name: str, version: str, prefix: str, zip_path: Path) -> None:
-    """Pack tools type: build wheel first, then pack metadata and ``dist/*.whl``."""
-    pyproject = root / "pyproject.toml"
-    if not pyproject.exists():
-        raise ValueError("tools type requires pyproject.toml in plugin root")
-    wheel_dir = root / "dist"
-    wheel_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "wheel", ".", "-w", str(wheel_dir), "--no-deps"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise ValueError(f"wheel build failed: {e.stderr or e.stdout or str(e)}") from e
-    whls = list(wheel_dir.glob("*.whl"))
-    if not whls:
-        raise ValueError("wheel build produced no .whl files in dist/")
-
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel in ("plugin.yaml", "README.md", "icon.png", "schemas/tools.json"):
-            p = root / rel
-            if p.is_file():
-                zf.write(p, f"{prefix}/{rel}".replace("\\", "/"))
-        for whl in whls:
-            zf.write(whl, f"{prefix}/dist/{whl.name}".replace("\\", "/"))
 
 
 def _pack_plugin_skill(root: Path, name: str, prefix: str, zip_path: Path) -> None:
@@ -823,9 +915,14 @@ def _pack_plugin_skill(root: Path, name: str, prefix: str, zip_path: Path) -> No
 
 
 def _pack_plugin_directory(root: Path, prefix: str, zip_path: Path) -> None:
-    """mcp-stdio / restful-api: full directory pack with ignore rules."""
+    """Pack a wrapped Agent asset. The market outer layer is plugin.yaml, optional icon.png, and one inner directory."""
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        plugin_zip_write_directory_tree(zf, root, arcname_prefix=prefix)
+        plugin_zip_write_directory_tree(
+            zf,
+            root,
+            arcname_prefix=prefix,
+            skip_relative=frozenset({"README.md"}),
+        )
 
 
 def plugin_zip_write_directory_tree(
@@ -833,6 +930,7 @@ def plugin_zip_write_directory_tree(
     root: Path,
     *,
     arcname_prefix: str = "",
+    skip_relative: frozenset[str] = frozenset(),
 ) -> int:
     """Append files under ``root`` to ``zf``; return number of files written."""
     base = root.resolve()
@@ -856,6 +954,8 @@ def plugin_zip_write_directory_tree(
         if path.name == ".DS_Store":
             continue
         rel_posix = rel.as_posix()
+        if rel_posix in skip_relative:
+            continue
         arcname = f"{prefix}/{rel_posix}" if prefix else rel_posix
         zf.write(path, arcname)
         n += 1
@@ -895,7 +995,7 @@ def _prepare_publish_zip_for_upload(
         _safe_extractall(zf, stage)
 
     plugin_root = _find_plugin_root_in_extracted(stage)
-    validation = plugin_validate(plugin_root, require_pyproject_for_tools=False)
+    validation = plugin_validate(plugin_root)
     runtime_type = validation.runtime_type
     if expect_skill_like:
         skill_like_errors = [
@@ -1065,7 +1165,7 @@ def _find_plugin_root_in_extracted(extract_root: Path) -> Path:
         )
     raise ValueError(
         "cannot resolve plugin root: need a skill bundle (flat SKILL.md, or one top dir with <slug>/SKILL.md) "
-        "or a single plugin.yaml (e.g. tools/mcp/restful-api)"
+        "or a single plugin.yaml"
     )
 
 
@@ -1137,10 +1237,6 @@ def _install_skill_from_staging(
     return dest
 
 
-TOOLS_INSTALL_MAX_WHEELS = 10
-TOOLS_INSTALL_MAX_WHEEL_BYTES = 50 * 1024 * 1024
-
-
 def _copy_bundle_to_output(
     plugin_root: Path,
     dest_parent: Path,
@@ -1166,31 +1262,6 @@ def _copy_bundle_to_output(
     return bundle_dest
 
 
-def _pip_install_tools_wheels(bundle_dest: Path) -> None:
-    """``pip install`` on ``bundle_dest/dist/*.whl`` into the current Python environment."""
-    bd = bundle_dest.resolve()
-    whls = sorted((bd / "dist").glob("*.whl"))
-    if not whls:
-        raise ValueError("tools plugin zip has no dist/*.whl")
-    if len(whls) > TOOLS_INSTALL_MAX_WHEELS:
-        raise ValueError(
-            f"tools plugin has too many wheels ({len(whls)} > {TOOLS_INSTALL_MAX_WHEELS})"
-        )
-    for w in whls:
-        if w.name.startswith("-"):
-            raise ValueError(f"unsafe wheel filename (starts with '-'): {w.name!r}")
-        wheel_size = w.stat().st_size
-        if wheel_size > TOOLS_INSTALL_MAX_WHEEL_BYTES:
-            raise ValueError(
-                f"wheel too large: {w.name!r} ({wheel_size} bytes, "
-                f"limit {TOOLS_INSTALL_MAX_WHEEL_BYTES})"
-            )
-    wheel_paths = [str(w) for w in whls]
-    cmd: list[str] = [sys.executable, "-m", "pip", "install", "--"]
-    cmd.extend(wheel_paths)
-    subprocess.run(cmd, check=True)
-
-
 def plugin_install(
     zip_path: Path,
     *,
@@ -1199,7 +1270,7 @@ def plugin_install(
 ) -> Path:
     """Extract zip, validate, then install by ``runtime.type``.
 
-    Skill layout copies slug dir; tools runs pip on wheels.
+    Skill layout copies the slug directory. Wrapped Agent assets copy the bundle.
     """
     zpath = zip_path.resolve()
     if not zpath.is_file():
@@ -1214,7 +1285,7 @@ def plugin_install(
             _safe_extractall(zf, extract_root)
         plugin_root = _find_plugin_root_in_extracted(extract_root)
 
-        result = plugin_validate(plugin_root, require_pyproject_for_tools=False)
+        result = plugin_validate(plugin_root)
         for w in result.warnings:
             logger.warning("%s", w)
         if result.errors:
@@ -1234,19 +1305,10 @@ def plugin_install(
             force=force,
         )
 
-        try:
-            if runtime_type == "tools":
-                _pip_install_tools_wheels(bundle_dest)
-                logger.info("tools: installed wheels into the current Python environment")
-            elif runtime_type in ("mcp-stdio", "restful-api"):
-                logger.info(
-                    "%s: pip not run; install dependencies manually if required",
-                    runtime_type,
-                )
-            else:
-                raise ValueError(f"unexpected runtime type after bundle copy: {runtime_type}")
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"pip install failed (exit {e.returncode})") from e
+        if runtime_type in AGENT_ASSET_RUNTIME_TYPES:
+            logger.info("installed %s at %s", runtime_type, bundle_dest)
+        else:
+            raise ValueError(f"unexpected runtime type after bundle copy: {runtime_type}")
 
         return bundle_dest
 
@@ -1299,7 +1361,6 @@ def plugin_publish(
             user_token,
             system_token,
             req,
-            swarmskill=publish_input.expect_skill_like,
         )
 
 
@@ -1349,30 +1410,19 @@ def _runtime_type(plugin_data: dict[str, Any] | None) -> str | None:
         "skill": "skill",
         "swarmskill": "swarmskill",
         "teamskills": "swarmskill",
+        "agent-plugin": "agent-plugin",
+        "agent-mcp": "agent-mcp",
+        "agent-template": "agent-template",
+        "agent-group": "agent-group",
     }
     return canonical_map.get(rt)
 
 
-def _is_valid_requires_python(value: str) -> bool:
-    """Return True if ``value`` is a valid PEP 440 specifier set."""
-    s = value.strip()
-    if not s:
-        return False
-    try:
-        SpecifierSet(s)
-    except InvalidSpecifier:
-        return False
-    return True
-
-
 def _validate_plugin_yaml(
     plugin_data: dict[str, Any],
-    root: Path,
     errors: list[str],
-    warnings: list[str],
 ) -> None:
     runtime_type = _runtime_type(plugin_data)
-    expected_tools_path = TOOLS_SCHEMA_PATH
     name = plugin_data.get("name")
     if runtime_type in SKILL_LIKE_RUNTIME_TYPES:
         if not isinstance(name, str) or not name.strip():
@@ -1416,247 +1466,9 @@ def _validate_plugin_yaml(
         if not isinstance(tags, list) or not all(isinstance(t, str) and t.strip() for t in tags):
             errors.append("metadata.tags must be array of non-empty strings")
 
-    compatibility = plugin_data.get("compatibility")
-    if runtime_type not in SKILL_LIKE_RUNTIME_TYPES:
-        if not isinstance(compatibility, dict):
-            errors.append("plugin.yaml compatibility must be object")
-        else:
-            if "python" not in compatibility:
-                errors.append("compatibility.python is required")
-            else:
-                py_val = compatibility["python"]
-                if not isinstance(py_val, str):
-                    errors.append("compatibility.python must be a string")
-                elif not _is_valid_requires_python(py_val):
-                    errors.append(
-                        "compatibility.python must be PEP 440 version specifiers "
-                        "(e.g. '>=3.11' or '>=3.11, <3.14'), same idea as pyproject requires-python"
-                    )
-    else:
-        pass
 
-    if runtime_type == "tools":
-        tools_schema = plugin_data.get("tools_schema")
-        if tools_schema is None:
-            warnings.append(f"plugin.yaml tools_schema missing, defaulting to {expected_tools_path}")
-        elif not isinstance(tools_schema, str):
-            errors.append("plugin.yaml tools_schema must be string path")
-        elif tools_schema != expected_tools_path:
-            errors.append(f"plugin.yaml tools_schema must be '{expected_tools_path}'")
-    elif runtime_type == "mcp-stdio":
-        mcp_data = plugin_data.get("mcp")
-        if not isinstance(mcp_data, dict):
-            errors.append("plugin.yaml mcp must be object for mcp-stdio type")
-        else:
-            if mcp_data.get("transport") != "stdio":
-                errors.append("mcp.transport must be 'stdio'")
-            command = mcp_data.get("command")
-            if (
-                not isinstance(command, list)
-                or not command
-                or not all(isinstance(x, str) and x.strip() for x in command)
-            ):
-                errors.append("mcp.command must be non-empty string array")
-    elif runtime_type == "restful-api":
-        api_data = plugin_data.get("api")
-        if not isinstance(api_data, dict):
-            errors.append("plugin.yaml api must be object for restful-api type")
-        else:
-            if not isinstance(api_data.get("base_url"), str) or not api_data.get("base_url", "").strip():
-                errors.append("api.base_url must be non-empty string")
-    elif runtime_type in SKILL_LIKE_RUNTIME_TYPES:
-        pass
-
-
-def _validate_tools_json(tools_data: dict[str, Any], errors: list[str]) -> list[tuple[int, dict[str, Any]]]:
-    tools = tools_data.get("tools")
-    if not isinstance(tools, list) or not tools:
-        errors.append("tools.json tools must be non-empty array")
-        return []
-
-    seen_names: set[str] = set()
-    valid_tools: list[tuple[int, dict[str, Any]]] = []
-    for i, tool in enumerate(tools):
-        path = f"tools[{i}]"
-        if not isinstance(tool, dict):
-            errors.append(f"{path} must be object")
-            continue
-
-        valid_tools.append((i, tool))
-        name = tool.get("name")
-        if not isinstance(name, str) or not NAME_PATTERN.match(name):
-            errors.append(f"{path}.name must match ^[a-z][a-z0-9-]*$")
-        elif name in seen_names:
-            errors.append(f"duplicate tool name: {name}")
-        else:
-            seen_names.add(name)
-
-        description = tool.get("description")
-        if not isinstance(description, str) or not description.strip():
-            errors.append(f"{path}.description must be non-empty string")
-
-        for schema_key in ("input_schema", "output_schema"):
-            schema_obj = tool.get(schema_key)
-            if not isinstance(schema_obj, dict):
-                errors.append(f"{path}.{schema_key} must be object")
-                continue
-            if schema_obj.get("type") != "object":
-                errors.append(f"{path}.{schema_key}.type must be 'object'")
-
-    return valid_tools
-
-
-def _validate_restful_input_properties(
-    path: str,
-    tool_path: str,
-    input_schema: dict[str, Any],
-    errors: list[str],
-    allowed_send_methods: set[str],
-) -> None:
-    properties = input_schema.get("properties") if isinstance(input_schema.get("properties"), dict) else {}
-    for param_name, param in properties.items():
-        if not isinstance(param, dict):
-            errors.append(f"{path}.input_schema.properties.{param_name} must be object")
-            continue
-        send_method = param.get("send_method")
-        if send_method is not None and (
-            not isinstance(send_method, str) or send_method not in allowed_send_methods
-        ):
-            errors.append(
-                f"{path}.input_schema.properties.{param_name}.send_method "
-                f"must be one of: {', '.join(sorted(allowed_send_methods))}"
-            )
-        param_desc = param.get("description")
-        if param_desc is not None and (not isinstance(param_desc, str) or not param_desc.strip()):
-            errors.append(
-                f"{path}.input_schema.properties.{param_name}.description "
-                "must be non-empty string when provided"
-            )
-        if "{" + param_name + "}" in tool_path and send_method not in ("Path", "path"):
-            errors.append(f"{path}.input_schema.properties.{param_name}.send_method must be 'Path' when used in path")
-        if str(send_method or "") in ("Path", "path") and ("{" + param_name + "}" not in tool_path):
-            errors.append(
-                f"{path}.input_schema.properties.{param_name}.send_method "
-                f"is Path but {param_name} is not in path"
-            )
-
-    required = input_schema.get("required", [])
-    if not isinstance(required, list):
-        errors.append(f"{path}.input_schema.required must be array when provided")
-        return
-
-    for required_name in required:
-        if not isinstance(required_name, str):
-            errors.append(f"{path}.input_schema.required entries must be strings")
-            continue
-        if required_name not in properties:
-            errors.append(f"{path}.input_schema.required contains unknown property: {required_name}")
-
-
-def _validate_restful_output_properties(path: str, output_schema: dict[str, Any], errors: list[str]) -> None:
-    output_properties = output_schema.get("properties") if isinstance(output_schema.get("properties"), dict) else {}
-    for param_name, param in output_properties.items():
-        if not isinstance(param, dict):
-            errors.append(f"{path}.output_schema.properties.{param_name} must be object")
-            continue
-        param_desc = param.get("description")
-        if param_desc is not None and (not isinstance(param_desc, str) or not param_desc.strip()):
-            errors.append(
-                f"{path}.output_schema.properties.{param_name}.description "
-                "must be non-empty string when provided"
-            )
-
-
-def _validate_restful_headers(path: str, headers: Any, errors: list[str]) -> None:
-    if headers is None:
-        return
-    if not isinstance(headers, list):
-        errors.append(f"{path}.headers must be array")
-        return
-    for idx, header in enumerate(headers):
-        header_path = f"{path}.headers[{idx}]"
-        if not isinstance(header, dict):
-            errors.append(f"{header_path} must be object")
-            continue
-        if not isinstance(header.get("name"), str) or not str(header.get("name") or "").strip():
-            errors.append(f"{header_path}.name must be non-empty string")
-        if not isinstance(header.get("value"), str):
-            errors.append(f"{header_path}.value must be string")
-
-
-def _validate_restful_api_tools_json(restful_api_tools_data: dict[str, Any], errors: list[str]) -> None:
-    validated_tools = _validate_tools_json(restful_api_tools_data, errors)
-    _validate_restful_api_tools(validated_tools, errors)
-
-
-def _validate_restful_api_tools(
-    validated_tools: list[tuple[int, dict[str, Any]]],
-    errors: list[str],
-) -> None:
-    allowed_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
-    allowed_send_methods = {"None", "Header", "Query", "Body", "Path"}
-
-    for i, tool in validated_tools:
-        path = f"tools[{i}]"
-        tool_path = tool.get("path")
-        if not isinstance(tool_path, str) or not tool_path.strip():
-            errors.append(f"{path}.path must be non-empty string")
-            tool_path = ""
-
-        method = tool.get("method")
-        if not isinstance(method, str) or method.upper() not in allowed_methods:
-            errors.append(f"{path}.method must be one of: {', '.join(sorted(allowed_methods))}")
-
-        input_schema = tool.get("input_schema") if isinstance(tool.get("input_schema"), dict) else {}
-        output_schema = tool.get("output_schema") if isinstance(tool.get("output_schema"), dict) else {}
-        _validate_restful_input_properties(path, tool_path, input_schema, errors, allowed_send_methods)
-        _validate_restful_output_properties(path, output_schema, errors)
-        _validate_restful_headers(path, tool.get("headers"), errors)
-
-
-
-
-def _validate_tool_names_consistency(
-    plugin_data: dict[str, Any] | None,
-    tools_data: dict[str, Any],
-    root: Path,
-    errors: list[str],
-    warnings: list[str],
-) -> None:
-    if not isinstance(plugin_data, dict):
-        return
-    plugin_name = plugin_data.get("name")
-    if not isinstance(plugin_name, str) or not NAME_PATTERN.match(plugin_name):
-        return
-
-    package_path = root / "src" / plugin_name / "plugin.py"
-    fallback_path = root / "src" / plugin_name.replace("-", "_") / "plugin.py"
-    plugin_py = package_path if package_path.exists() else fallback_path
-    if not plugin_py.exists():
-        return
-
-    tools = tools_data.get("tools")
-    if not isinstance(tools, list):
-        return
-
-    schema_tool_names = {t["name"] for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)}
-
-    text = plugin_py.read_text(encoding="utf-8")
-    code_tool_names = set(TOOL_NAME_PATTERN.findall(text))
-    if not code_tool_names:
-        warnings.append(f"no @tool(name=...) found in {plugin_py.relative_to(root)}")
-        return
-
-    missing_in_schema = sorted(code_tool_names - schema_tool_names)
-    missing_in_code = sorted(schema_tool_names - code_tool_names)
-    if missing_in_schema:
-        errors.append(f"tools missing in schemas/tools.json: {', '.join(missing_in_schema)}")
-    if missing_in_code:
-        errors.append(f"tools in schemas/tools.json not found in plugin.py: {', '.join(missing_in_code)}")
-
-
-def _default_plugin_yaml(plugin_name: str, plugin_type: str, package_name: str) -> dict[str, Any]:
-    base: dict[str, Any] = {
+def _default_plugin_yaml(plugin_name: str, plugin_type: str) -> dict[str, Any]:
+    return {
         "name": plugin_name,
         "version": "0.0.1",
         "display_name": plugin_name.replace("-", " ").title(),
@@ -1669,162 +1481,6 @@ def _default_plugin_yaml(plugin_name: str, plugin_type: str, package_name: str) 
             "tags": ["demo"],
         },
     }
-    if plugin_type not in SKILL_LIKE_RUNTIME_TYPES:
-        base["compatibility"] = {"python": ">=3.11, <3.14"}
-    if plugin_type == "tools":
-        base["tools_schema"] = "schemas/tools.json"
-    elif plugin_type == "mcp-stdio":
-        base["mcp"] = {
-            "transport": "stdio",
-            "command": ["python", "-m", f"{package_name}.mcp_server"],
-        }
-    elif plugin_type in SKILL_LIKE_RUNTIME_TYPES:
-        pass
-    else:
-        # restful-api
-        base["api"] = {
-            "base_url": "TODO: your API base URL",
-        }
-    return base
-
-
-def _default_tools_schema() -> dict[str, Any]:
-    return {
-        "tools": [
-            {
-                "name": "example",
-                "description": "TODO: describe your tool",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                    "additionalProperties": False,
-                },
-                "output_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                    "additionalProperties": False,
-                },
-            }
-        ],
-    }
-
-
-def _default_restful_tools_schema() -> dict[str, Any]:
-    return {
-        "tools": [
-            {
-                "name": "example-api",
-                "description": "TODO: describe your REST endpoint",
-                "path": "/example",
-                "method": "GET",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                    "additionalProperties": False,
-                },
-                "output_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                    "additionalProperties": False,
-                },
-            }
-        ],
-    }
-
-
-def _render_plugin_impl(plugin_name: str) -> str:
-    return f'''"""Plugin implementation for {plugin_name}."""
-
-from openjiuwen.core.foundation.tool import tool
-
-
-@tool(
-    name="example",
-    description="TODO: describe your tool",
-    input_params={{}},
-)
-def example() -> dict:
-    return {{}}
-'''
-
-
-def _render_mcp_stdio_impl(plugin_name: str) -> str:
-    return f'''"""MCP stdio server for {plugin_name} (FastMCP)."""
-
-from fastmcp import FastMCP
-
-mcp = FastMCP("{plugin_name}")
-
-
-@mcp.tool
-def greet(name: str) -> str:
-    """Say hello to the given name."""
-    return f"Hello, {{name}}!"
-
-
-if __name__ == "__main__":
-    mcp.run()
-'''
-
-
-def _render_rest_api_impl(plugin_name: str) -> str:
-    return f'''"""REST API entry for {plugin_name} (optional placeholder)."""
-
-
-'''
-
-
-def _default_pyproject_toml(plugin_name: str, package_name: str, plugin_type: str) -> str:
-    dependencies: list[str] = []
-    if plugin_type == "mcp-stdio":
-        dependencies = ["fastmcp"]
-
-    deps_toml = ""
-    if dependencies:
-        deps_toml = "\ndependencies = [" + ", ".join(f"\"{d}\"" for d in dependencies) + "]\n"
-
-    return f"""[build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "{plugin_name}"
-version = "0.0.1"
-description = "openJiuwen plugin"
-readme = "README.md"
-requires-python = ">=3.11"
-{deps_toml}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["{package_name}*"]
-"""
-
-
-def _render_readme(plugin_name: str, plugin_type: str) -> str:
-    if plugin_type in SKILL_LIKE_RUNTIME_TYPES:
-        type_notes = (
-            f"- `{plugin_name}/SKILL.md`: skill instructions (Agent Skills layout)\n"
-            f"- `{plugin_name}/scripts|references|assets/`: optional payloads\n"
-        )
-    elif plugin_type == "mcp-stdio":
-        type_notes = "- `src/<package>/mcp_server.py`: MCP stdio entrypoint\n"
-    elif plugin_type == "restful-api":
-        type_notes = "- `schemas/tools.json`: REST tool contract\n- `src/<package>/rest_api.py`: REST API entry\n"
-    else:
-        type_notes = "- `schemas/tools.json`: tool definitions\n- `src/<package>/plugin.py`: tool implementation\n"
-    return f"""# {plugin_name}
-
-openjiuwen plugin scaffold.
-
-## Structure
-
-- `plugin.yaml`: plugin metadata and compatibility
-{type_notes}"""
 
 
 def plugin_describe_local(plugin_path: Path) -> dict[str, Any]:

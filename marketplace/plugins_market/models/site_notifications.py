@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-from sqlalchemy import BigInteger, Column, Index, String
+from sqlalchemy import BigInteger, Column, Index, Integer, String
 
 from .base import Base
 
@@ -10,7 +10,7 @@ class SiteNotificationDB(Base):
 
     __tablename__ = "site_notifications"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True, nullable=False)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True, nullable=False)
     # l:{login} 与审核管理员配置 MARKET_REVIEW_ADMIN_USERNAMES 对齐；u:{OAuth user id} 与 publisher_id 对齐
     inbox_key = Column(String(192), nullable=False)
     # admin_pending | user_review_done | user_manual_review_approved |

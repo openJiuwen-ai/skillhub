@@ -50,6 +50,21 @@ class GitSourceRepository(MarketBaseRepository[GitSourceDB]):
             .count()
         )
 
+    def list_linked_asset_ids(self, source_id: str) -> list[str]:
+        """返回该 Git 源关联的 skill asset_id 列表（按 create_time 升序）。"""
+        from plugins_market.models.market_assets import MarketAssetDB
+
+        sid = (source_id or "").strip()
+        if not sid:
+            return []
+        rows = (
+            self.db.query(MarketAssetDB.asset_id)
+            .filter(MarketAssetDB.git_source_id == sid)
+            .order_by(MarketAssetDB.create_time.asc())
+            .all()
+        )
+        return [str(r[0]).strip() for r in rows if r and r[0]]
+
     def delete_by_id(self, source_id: str) -> bool:
         row = self.get_by_id(source_id)
         if row is None:

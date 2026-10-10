@@ -20,6 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from plugins_market.core.errors import PublishError
+from plugins_market.core.auth import AuthContext
 from plugins_market.core.publish_result import PUBLISH_RESULT_REVIEWING
 from plugins_market.core.audit import audit_log
 from plugins_market.core.audit_events import (
@@ -513,6 +514,26 @@ def _external_skill_id(*, source_id: str, entry_folder_name: str) -> str:
     return f"git:{source_id}:{entry_folder_name}"
 
 
+def _skill_entry_content_sha256(entry: Path) -> str:
+    """对 skill 条目目录做内容摘要（路径+字节），与 zip mtime/非确定性无关。"""
+    h = hashlib.sha256()
+    root = entry.resolve()
+    files = sorted(
+        (p for p in root.rglob("*") if p.is_file()),
+        key=lambda p: p.relative_to(root).as_posix(),
+    )
+    for fpath in files:
+        rel = fpath.relative_to(root).as_posix()
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        try:
+            h.update(fpath.read_bytes())
+        except OSError:
+            h.update(b"<unreadable>")
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def _git_entry_commit_unchanged(
     row: MarketAssetDB,
     *,
@@ -526,6 +547,76 @@ def _git_entry_commit_unchanged(
     if (row.git_source_id or "").strip() != (git_source_id or "").strip():
         return False
     return bool(prev_sha and cur_sha and prev_sha == cur_sha)
+
+
+def _try_reclaim_publisher_skill_for_git(
+    asset_repo: MarketAssetRepository,
+    gs_repo: GitSourceRepository,
+    *,
+    user_id: str,
+    skill_name: str,
+    current_source_id: str,
+) -> MarketAssetDB | None:
+    """同发布者同名 Skill：仅回收 Git 孤儿，避免覆盖手动上传或其它有效源下的条目。
+
+    可回收：storage_mode=git，且未绑定 / 绑当前源 / 所绑 Git 源已不存在。
+    不可回收：手动上传（非 git）或仍绑定其它有效 Git 源——调用方应报同名冲突。
+    """
+    name = (skill_name or "").strip()
+    if not name:
+        return None
+    current = (current_source_id or "").strip()
+    rows = asset_repo.list_by_publisher_name_and_type(user_id, name)
+    for row in rows:
+        gs = (row.git_source_id or "").strip()
+        mode = (row.storage_mode or "").strip().lower()
+        if gs and gs == current:
+            return row
+        if mode != "git":
+            continue
+        if not gs or gs_repo.get_by_id(gs) is None:
+            return row
+    return None
+
+
+def _raise_if_publisher_skill_name_blocks_git(
+    asset_repo: MarketAssetRepository,
+    *,
+    user_id: str,
+    skill_name: str,
+    entry_folder_name: str,
+) -> None:
+    """存在不可回收的同名资产时，提示改名或删除，而不是 force 覆盖。"""
+    name = (skill_name or "").strip()
+    if not name:
+        return
+    rows = asset_repo.list_by_publisher_name_and_type(user_id, name)
+    if not rows:
+        return
+    labels: list[str] = []
+    for row in rows[:5]:
+        nm = (row.name or "").strip() or name
+        disp = (row.display_name or "").strip()
+        aid = (row.asset_id or "").strip()
+        bits = [f"名称={nm}"]
+        if disp and disp != nm:
+            bits.append(f"显示名={disp}")
+        if aid:
+            bits.append(f"id={aid}")
+        labels.append("（" + "，".join(bits) + "）")
+    listed = "、".join(labels)
+    if len(rows) > 5:
+        listed = f"{listed} 等共 {len(rows)} 个"
+    folder = (entry_folder_name or "").strip() or name
+    raise PublishError(
+        code=409,
+        error="plugin_name_exists",
+        message=(
+            f"重名冲突：仓库条目「{folder}」→ Skill「{name}」，"
+            f"与您已发布的同名项冲突：{listed}。"
+            "请修改仓库中的 Skill 名称，或先在「我的 Skill」中删除上述同名项后再同步。"
+        ),
+    )
 
 
 def _list_skill_entry_dirs(skills_root: Path) -> list[Path]:
@@ -790,7 +881,7 @@ def run_git_source_sync(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> GitSyncRunResponse | None:
-    """克隆仓库、按字母序导入 skill；归一化 zip 的 SHA-256 与上次一致则跳过发布（commit 不变时亦跳过）。"""
+    """克隆仓库、按字母序导入 skill；条目目录内容摘要未变则跳过发布（commit 未变时亦跳过）。"""
     logger.info(
         "git sync",
         **operation_log_fields(
@@ -853,6 +944,7 @@ def run_git_source_sync(
             )
 
         prep_payload_sha256: dict[str, str] = {}
+        prep_content_sha256: dict[str, str] = {}
         manifest_entry_extra: dict[str, dict] = {}
         declared_semver_by_entry: dict[str, str | None] = {}
         prep_failures: list[SkillImportItemResult] = []
@@ -883,7 +975,10 @@ def run_git_source_sync(
                 if existing is not None:
                     eo["plugin_id"] = existing.asset_id
 
-                publish_zip, _nm, _v = entry_to_publish_zip(
+                # 内容摘要优先于 zip 字节：仓库其它路径变更导致 HEAD 前进时，未改动的 skill 应跳过
+                prep_content_sha256[name] = _skill_entry_content_sha256(entry)
+
+                publish_zip, skill_name, _v = entry_to_publish_zip(
                     entry,
                     entry_key=name,
                     entry_overrides=eo,
@@ -896,6 +991,33 @@ def run_git_source_sync(
                     prep_payload_sha256[name] = hashlib.sha256(raw).hexdigest()
                 finally:
                     publish_zip.unlink(missing_ok=True)
+
+                # Git 孤儿可回收 force；手动上传等同名不可覆盖，记入失败项提示用户改名或删除
+                if existing is None:
+                    reclaimed = _try_reclaim_publisher_skill_for_git(
+                        asset_repo,
+                        GitSourceRepository(db),
+                        user_id=user_id,
+                        skill_name=skill_name,
+                        current_source_id=source.id,
+                    )
+                    if reclaimed is not None:
+                        if reclaimed.publisher_id != user_id:
+                            raise PublishError(
+                                code=409,
+                                error="git_external_id_conflict",
+                                message=f"条目 {name} 已与另一发布者绑定，无法导入",
+                            )
+                        existing = reclaimed
+                        eo["force"] = True
+                        eo["plugin_id"] = reclaimed.asset_id
+                    else:
+                        _raise_if_publisher_skill_name_blocks_git(
+                            asset_repo,
+                            user_id=user_id,
+                            skill_name=skill_name,
+                            entry_folder_name=name,
+                        )
 
                 manifest_entry_extra[name] = eo
                 ready_entries.append(entry)
@@ -918,28 +1040,35 @@ def run_git_source_sync(
             row = asset_repo.get_by_external_id(ext_id)
             if not row:
                 return False, None
-            prev_s256 = (row.git_sync_payload_sha256 or "").strip().lower()
-            cur_s256 = prep_payload_sha256.get(name, "").strip().lower()
-            # 同一解析 commit：仓库树未变；ZIP 字节可能因打包非确定性波动，不能仅依赖 payload 摘要。
+            prev_digest = (row.git_sync_payload_sha256 or "").strip().lower()
+            cur_content = prep_content_sha256.get(name, "").strip().lower()
+            cur_zip = prep_payload_sha256.get(name, "").strip().lower()
+            # 1) 条目目录内容未变（即使仓库 HEAD 前进）
+            if prev_digest and cur_content and prev_digest == cur_content:
+                return True, "git_sync_content_unchanged"
+            # 2) 兼容旧数据：曾存 zip 字节摘要
+            if prev_digest and cur_zip and prev_digest == cur_zip:
+                return True, "git_sync_payload_unchanged"
+            # 3) 同一 commit：树未变（兜底；zip 非确定性时仍可靠）
             if _git_entry_commit_unchanged(
                 row,
                 git_source_id=source.id,
                 head_sha=head_sha,
             ):
                 return True, "git_sync_commit_unchanged"
-            if prev_s256 and cur_s256 and prev_s256 == cur_s256:
-                return True, "git_sync_payload_unchanged"
             return False, None
 
         def _after_ok(entry_name: str, pr):
             ext_id = _external_skill_id(source_id=source.id, entry_folder_name=entry_name)
+            # 优先持久化内容摘要，供后续同步在 HEAD 变化时仍可跳过
+            digest = prep_content_sha256.get(entry_name, "") or prep_payload_sha256.get(entry_name, "")
             _bind_git_asset(
                 db,
                 plugin_id=pr.plugin_id,
                 git_source_id=source.id,
                 external_id=ext_id,
                 resolved_sha=head_sha,
-                payload_sha256=prep_payload_sha256.get(entry_name, ""),
+                payload_sha256=digest,
                 declared_skill_version=declared_semver_by_entry.get(entry_name),
                 commit=True,
             )
@@ -1188,7 +1317,19 @@ def run_git_source_sync_background(
         db.close()
 
 
-def delete_git_source_for_user(*, db: Session, user_id: str, source_id: str) -> None:
+def delete_git_source_for_user(
+    *,
+    db: Session,
+    user_id: str,
+    source_id: str,
+    storage: S3StorageClient,
+    auth: AuthContext,
+) -> dict[str, object]:
+    """删除 Git 源注册，并级联删除该源导入的全部 Skill（版本、审核、存储）。"""
+    from fastapi import HTTPException
+
+    from plugins_market.services.plugin import delete_plugin_version_service
+
     gs_repo = GitSourceRepository(db)
     src = gs_repo.get_by_id(source_id)
     if src is None or (src.created_by_user_id or "").strip() != (user_id or "").strip():
@@ -1203,14 +1344,80 @@ def delete_git_source_for_user(*, db: Session, user_id: str, source_id: str) -> 
             error="git_source_sync_in_progress",
             message="同步进行中，请稍后再删除",
         )
-    if gs_repo.count_linked_assets(source_id) > 0:
+
+    asset_ids = gs_repo.list_linked_asset_ids(source_id)
+    deleted_skill_count = 0
+    failed_assets: list[dict[str, object]] = []
+    for asset_id in asset_ids:
+        try:
+            delete_plugin_version_service(
+                asset_id=asset_id,
+                version="all",
+                auth=auth,
+                db=db,
+                storage=storage,
+            )
+            deleted_skill_count += 1
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            failed_assets.append(
+                {
+                    "asset_id": asset_id,
+                    "error": str(detail.get("error") or "git_source_cascade_delete_failed"),
+                    "message": str(
+                        detail.get("message")
+                        or f"删除 Git 源关联 Skill 失败：{asset_id}"
+                    ),
+                    "status_code": int(exc.status_code or 500),
+                }
+            )
+            logger.warning(
+                "git source cascade delete skill failed: source_id=%s asset_id=%s status=%s error=%s",
+                source_id,
+                asset_id,
+                exc.status_code,
+                detail.get("error"),
+            )
+        except Exception:
+            failed_assets.append(
+                {
+                    "asset_id": asset_id,
+                    "error": "internal_error",
+                    "message": f"删除 Git 源关联 Skill 失败：{asset_id}",
+                    "status_code": 500,
+                }
+            )
+            logger.exception(
+                "git source cascade delete skill unexpected error: source_id=%s asset_id=%s",
+                source_id,
+                asset_id,
+            )
+
+    if failed_assets:
+        failed_skill_count = len(failed_assets)
         raise PublishError(
             code=409,
-            error="git_source_has_assets",
-            message="该 Git 源仍有关联 Skill，无法删除注册记录",
+            error="git_source_cascade_delete_partial",
+            message=(
+                f"级联删除未完成：成功 {deleted_skill_count} 个，失败 {failed_skill_count} 个；"
+                "Git 源已保留，可重试"
+            ),
+            data={
+                "deleted": False,
+                "deleted_skill_count": deleted_skill_count,
+                "failed_skill_count": failed_skill_count,
+                "failed_assets": failed_assets,
+            },
         )
-    gs_repo.delete_by_id(source_id)
+
+    if not gs_repo.delete_by_id(source_id):
+        raise PublishError(
+            code=404,
+            error="git_source_not_found",
+            message="Git 源不存在或已删除",
+        )
     db.commit()
+    return {"deleted": True, "deleted_skill_count": deleted_skill_count}
 
 
 def create_git_source(

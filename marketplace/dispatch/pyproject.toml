@@ -14,8 +14,17 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["indexing*", "models*", "orchestration*", "prompts*", "retrieval*", "shared*"]
+include = [
+    "agent*",
+    "indexing*",
+    "models*",
+    "orchestration*",
+    "prompts*",
+    "retrieval*",
+    "shared*",
+]
 exclude = ["tests*", "data*"]
 
 [tool.setuptools.package-data]
+"prompts" = ["*.yaml"]
 "retrieval.tree.render" = ["*.yaml"]

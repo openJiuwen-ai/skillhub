@@ -5,11 +5,17 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from plugins_market.core.context import now_bj_iso
+from plugins_market.core.logging import _get_log_backup_count, _get_log_max_bytes
 
 _interface_logger = logging.getLogger("interface")
+
+
+def get_interface_logger() -> logging.Logger:
+    return _interface_logger
 
 _SECRET_KEY_PATTERNS = [
     re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api_key|apikey|access_key|secret_key)\b\s*[:=]\s*[^\s,}\]]+"),
@@ -95,7 +101,12 @@ def setup_interface_logger(log_file: str = "interface.log") -> None:
     if str(os.getenv("INTERFACE_LOG_DISABLE_FILE", "")).strip().lower() in {"1", "true", "yes", "on"}:
         return
 
-    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler = RotatingFileHandler(
+        log_file,
+        maxBytes=_get_log_max_bytes(),
+        backupCount=_get_log_backup_count(),
+        encoding="utf-8",
+    )
     handler.setFormatter(logging.Formatter("%(message)s"))
     _interface_logger.addHandler(handler)
     _interface_logger.propagate = False

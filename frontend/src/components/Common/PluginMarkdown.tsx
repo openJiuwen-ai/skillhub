@@ -10,6 +10,8 @@ type PluginMarkdownProps = {
   /** Markdown 源码；非字符串会转为字符串 */
   source: string | null | undefined
   className?: string
+  /** 详情页阅读版式；默认保留既有紧凑版式。 */
+  variant?: 'detail'
   /** 是否启用 Mermaid 图表渲染（默认 false） */
   mermaid?: boolean
 }
@@ -132,9 +134,10 @@ function MermaidBlock({ code }: { code: string }) {
 /**
  * 插件市场详情等场景使用的 Markdown 渲染；使用显式 `source` 避免 JSX 子节点空白折叠问题。
  */
-export function PluginMarkdown({ source, className, mermaid: enableMermaid }: PluginMarkdownProps) {
+export function PluginMarkdown({ source, className, variant, mermaid: enableMermaid }: PluginMarkdownProps) {
   const raw = source == null ? '' : typeof source === 'string' ? source : String(source)
   const text = decodeEscapedMarkdown(raw)
+  const detailVariant = variant === 'detail'
 
   const preRenderer = ({ children, ...rest }: { children?: ReactNode }) => {
     if (enableMermaid) {
@@ -145,14 +148,32 @@ export function PluginMarkdown({ source, className, mermaid: enableMermaid }: Pl
         return <MermaidBlock code={code} />
       }
     }
-    return <pre className="overflow-x-auto rounded-md bg-slate-100 p-3 text-slate-800 my-3" {...rest}>{children}</pre>
+    return detailVariant
+      ? <pre className="my-4 overflow-x-auto rounded-[8px] border border-[#EEEEEE] bg-[#FAFAFA] p-4 text-[13px] leading-6 text-[#404040]" {...rest}>{children}</pre>
+      : <pre className="overflow-x-auto rounded-md bg-slate-100 p-3 text-slate-800 my-3" {...rest}>{children}</pre>
   }
 
   return (
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        components={{
+        components={detailVariant ? {
+          h1: props => <h1 className="my-5 text-[22px] font-semibold leading-8 text-[#191919] first:mt-0" {...props} />,
+          h2: props => <h2 className="my-5 text-[18px] font-semibold leading-7 text-[#191919] first:mt-0" {...props} />,
+          h3: props => <h3 className="my-4 text-[16px] font-semibold leading-6 text-[#262626] first:mt-0" {...props} />,
+          p: props => <p className="my-3 text-[14px] leading-[24px] text-[#4B5563] first:mt-0 last:mb-0" {...props} />,
+          ul: props => <ul className="my-3 list-disc space-y-1.5 pl-5" {...props} />,
+          ol: props => <ol className="my-3 list-decimal space-y-1.5 pl-5" {...props} />,
+          li: props => <li className="text-[14px] leading-[24px] text-[#4B5563]" {...props} />,
+          code: props => <code className="rounded-[3px] bg-[#F5F5F5] px-1.5 py-0.5 text-[0.85em] text-[#404040]" {...props} />,
+          blockquote: props => <blockquote className="my-4 border-l-2 border-[#B9C5FF] bg-[#F8F9FF] px-4 py-2 text-[#5F6475]" {...props} />,
+          table: props => <div className="my-4 overflow-x-auto rounded-[8px] border border-[#EDEDED]"><table className="w-full border-collapse text-left text-[13px]" {...props} /></div>,
+          th: props => <th className="border-b border-[#EDEDED] bg-[#FAFAFA] px-3 py-2 font-semibold text-[#404040]" {...props} />,
+          td: props => <td className="border-b border-[#F0F0F0] px-3 py-2 align-top leading-5 text-[#595959] last:border-b-0" {...props} />,
+          pre: preRenderer as never,
+          a: props => <MarkdownAnchor {...props} />,
+          img: props => <MarkdownImage {...props} />,
+        } : {
           h1: props => <h1 className="text-xl font-bold leading-7 text-gray-900 my-3 first:mt-0" {...props} />,
           h2: props => <h2 className="text-lg font-semibold leading-7 text-gray-900 my-3 first:mt-0" {...props} />,
           h3: props => <h3 className="text-base font-semibold leading-6 text-gray-900 my-2.5 first:mt-0" {...props} />,

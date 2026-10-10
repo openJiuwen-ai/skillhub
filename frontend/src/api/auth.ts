@@ -27,7 +27,7 @@ export function stringifyOAuthPending(payload: OAuthPendingPayload): string {
 export function parseOAuthPending(raw: string): OAuthPendingPayload | null {
   try {
     const d = JSON.parse(raw) as OAuthPendingPayload
-    if (!d || (d.provider !== 'gitcode' && d.provider !== 'github') || !d.session) {
+    if (!d || (d.provider !== 'gitcode' && d.provider !== 'github' && d.provider !== 'agentos') || !d.session) {
       return null
     }
     return d
