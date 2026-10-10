@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openjiuwen-agentichub"
+version = "0.0.1"
+description = "CLI for openJiuwen Agentic Hub"
+readme = "README.md"
+requires-python = ">=3.11.4"
+dependencies = [
+    "PyYAML>=6.0",
+    "requests>=2.28",
+    "packaging>=23.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+agentichub = "openjiuwen_agentichub.main:main"
+
+[tool.setuptools.packages.find]
+where = [".", ".."]
+include = ["openjiuwen_agentichub", "openjiuwen_agentichub.*", "cli_core", "cli_core.*"]
+exclude = ["openjiuwen_agentichub.tests*", "openjiuwen_agentichub.build*"]
+
+[tool.pytest.ini_options]
+pythonpath = [".."]
+testpaths = ["tests"]

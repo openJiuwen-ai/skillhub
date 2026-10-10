@@ -118,19 +118,19 @@ SwarmSkill 另须在 `SKILL.md` frontmatter 中设置 `kind: swarm-skill` 及 `r
 
 ```bash
 # 安装 CLI（示例）
-pip install jiuwen-teamskills
+pip install openjiuwen-agentichub
 
 # 搜索
-jiuwen-teamskills search pdf
+agentichub search pdf
 
 # 安装指定 Skill
-jiuwen-teamskills install my-demo-skill
+agentichub install my-demo-skill
 
 # 指定市场地址（自建实例）
-export TEAMSKILLS_HUB_URL=https://your-hub.example.com
+export OPENJIUWEN_MARKET_URL=https://your-hub.example.com
 ```
 
-详细命令与 ClawHub 兼容说明见 [cli/README.md](../../../cli/README.md) 与 [ClawHub 兼容层 API](../7.%20API参考/ClawHub兼容层.md)。
+详细命令见 [agentichub](../../../cli/openjiuwen_agentichub/README.md)。ClawHub 兼容说明见 [ClawHub 兼容层 API](../7.%20API参考/ClawHub兼容层.md)。
 
 ---
 
@@ -186,7 +186,7 @@ A：修改 Skill 内容后 **发布新版本**；若审核员认为驳回有误�
 A：预签名 URL 默认约 30 分钟有效（`MARKET_S3_PRESIGNED_EXPIRES`）；请重新点击下载。
 
 **Q：CLI 连不上市场？**
-A：检查 `TEAMSKILLS_HUB_URL` / CLI 配置文件中的 base URL；自建实例需 HTTPS 或网络可达。
+A：用 `--market-url` 或环境变量 `OPENJIUWEN_MARKET_URL` 指定市场根地址（不要带 `/api/v1`）。自建实例需网络可达。
 
 ### 互动
 

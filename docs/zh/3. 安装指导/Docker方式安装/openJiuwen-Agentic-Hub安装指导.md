@@ -476,6 +476,8 @@ REDIS_USER_SEQ_KEY_PREFIX=skill_rec:user
 
 ## 11 本机 CLI
 
+本机命令为 `agentichub`（发行包 `openjiuwen-agentichub`）。市场地址用 `--market-url` 或环境变量 `OPENJIUWEN_MARKET_URL`，命令说明见 [agentichub](../../../../cli/openjiuwen_agentichub/README.md)。
+
 CLI 通常直连 `http://127.0.0.1:8100` 调 API，再按返回的预签名 URL 访问 MinIO。若 Backend 启动时改了 `-p` 映射，把 8100 换成对应的宿主机端口。请保证 `MARKET_S3_ENDPOINT` 对 CLI 所在环境可达，判断逻辑与浏览器相同；公司代理可能影响 CLI 的 HTTP 请求，需与浏览器类似配置或绕过。
 
 示例：

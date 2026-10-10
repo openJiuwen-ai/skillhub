@@ -44,13 +44,13 @@ from cli_core.schemas import (
     SkillImportSummary,
 )
 
-from openjiuwen_plugin.main import main
-from openjiuwen_plugin.parsers import build_plugin_parser
+from openjiuwen_agentichub.main import main
+from openjiuwen_agentichub.parsers import build_parser
 
 
 class PluginCommandsTest(unittest.TestCase):
     def test_delete_short_v_maps_to_version(self) -> None:
-        parser = build_plugin_parser("openjiuwen-plugin")
+        parser = build_parser("agentichub")
         args = parser.parse_args(["delete", "demo-id", "-v", "1.0.0", "--token", "t", "--market-url", "http://x"])
         self.assertEqual(args.version, "1.0.0")
 
@@ -104,20 +104,36 @@ class PluginCommandsTest(unittest.TestCase):
 
     def test_init_and_validate_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-plugin", Path(tmp))
-            self.assertTrue((plugin_root / "schemas" / "tools.json").exists())
-            self.assertTrue((plugin_root / "src" / "demo_plugin" / "plugin.py").exists())
+            plugin_root = plugin_init("demo-plugin", Path(tmp), plugin_type="agent-plugin")
+            manifest = plugin_root / "demo-plugin" / "manifest.json"
+            self.assertTrue(manifest.is_file())
+            self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["package_type"], "plugin")
             result = plugin_validate(plugin_root)
             self.assertTrue(result.ok, msg=f"errors: {result.errors}")
+            self.assertEqual(result.runtime_type, "agent-plugin")
 
-    def test_init_and_validate_mcp_stdio_success(self) -> None:
+    def test_init_and_validate_agent_mcp_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-mcp", Path(tmp), plugin_type="mcp-stdio")
-            self.assertTrue((plugin_root / "schemas" / "tools.json").exists())
-            self.assertTrue((plugin_root / "src" / "demo_mcp" / "mcp_server.py").exists())
-            self.assertTrue((plugin_root / "pyproject.toml").exists())
+            plugin_root = plugin_init("demo-mcp", Path(tmp), plugin_type="agent-mcp")
+            mcp_path = plugin_root / "demo-mcp" / "mcp.json"
+            self.assertTrue(mcp_path.is_file())
+            mcp_data = json.loads(mcp_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                mcp_data,
+                {"mcpServers": {"example": {"url": "https://example.com/mcp"}}},
+            )
             result = plugin_validate(plugin_root)
             self.assertTrue(result.ok, msg=f"errors: {result.errors}")
+            self.assertEqual(result.runtime_type, "agent-mcp")
+
+    def test_validate_agent_mcp_rejects_bare_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root = plugin_init("demo-mcp", Path(tmp), plugin_type="agent-mcp")
+            mcp_path = plugin_root / "demo-mcp" / "mcp.json"
+            mcp_path.write_text('{"url": "https://example.com/mcp"}\n', encoding="utf-8")
+            result = plugin_validate(plugin_root)
+            self.assertFalse(result.ok)
+            self.assertTrue(any("mcpServers" in e for e in result.errors))
 
     def test_validate_fails_with_missing_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,54 +144,41 @@ class PluginCommandsTest(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertGreater(len(result.errors), 0)
 
-    def test_validate_detects_tool_mismatch(self) -> None:
+    def test_validate_rejects_agent_plugin_persona(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("mismatch-plugin", Path(tmp))
-            plugin_py = plugin_root / "src" / "mismatch_plugin" / "plugin.py"
-            plugin_py.write_text(
-                """from openjiuwen.core.foundation.tool import tool
-
-@tool(name="another-tool", description="x", input_params={})
-def another_tool() -> dict:
-    return {"ok": True}
-""",
-                encoding="utf-8",
-            )
+            plugin_root = plugin_init("mismatch-plugin", Path(tmp), plugin_type="agent-plugin")
+            manifest_path = plugin_root / "mismatch-plugin" / "manifest.json"
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data["persona"] = {"dir": "persona"}
+            manifest_path.write_text(json.dumps(data), encoding="utf-8")
             result = plugin_validate(plugin_root)
             self.assertFalse(result.ok)
-            self.assertTrue(any("another-tool" in e for e in result.errors))
+            self.assertTrue(any("persona" in e for e in result.errors))
 
     def test_validate_fails_with_invalid_compatibility_specifiers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("compat-plugin", Path(tmp))
+            plugin_root = plugin_init("compat-plugin", Path(tmp), plugin_type="agent-plugin")
             plugin_yaml = plugin_root / "plugin.yaml"
-            content = plugin_yaml.read_text(encoding="utf-8")
-            content = content.replace(">=3.11, <3.14", "3.11")
-            plugin_yaml.write_text(content, encoding="utf-8")
+            data = yaml.safe_load(plugin_yaml.read_text(encoding="utf-8"))
+            assert isinstance(data, dict)
+            data["version"] = "3.11"
+            plugin_yaml.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
             result = plugin_validate(plugin_root)
             self.assertFalse(result.ok)
-            self.assertTrue(any("compatibility.python" in e for e in result.errors))
+            self.assertTrue(any("x.y.z" in e for e in result.errors))
 
-    def test_validate_compatibility_extra_keys_not_validated(self) -> None:
-        """仅校验 compatibility.python；其它键（如 openjiuwen）CLI 不校验格式。"""
+    def test_validate_agent_assets_do_not_require_compatibility(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("compat-extra", Path(tmp))
-            plugin_yaml = plugin_root / "plugin.yaml"
-            data = yaml.safe_load(plugin_yaml.read_text(encoding="utf-8"))
-            assert isinstance(data, dict) and isinstance(data.get("compatibility"), dict)
-            data["compatibility"]["openjiuwen"] = "latest"
-            plugin_yaml.write_text(
-                yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
-                encoding="utf-8",
-            )
+            plugin_root = plugin_init("compat-extra", Path(tmp), plugin_type="agent-template")
             result = plugin_validate(plugin_root)
             self.assertTrue(result.ok, msg=f"errors: {result.errors}")
+            self.assertEqual(result.runtime_type, "agent-template")
 
     def test_validate_rejects_prerelease_version(self) -> None:
         """与 marketplace 一致：version 仅允许 x.y.z 三位数字。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("ver-demo", Path(tmp), plugin_type="mcp-stdio")
+            plugin_root = plugin_init("ver-demo", Path(tmp), plugin_type="agent-plugin")
             p = plugin_root / "plugin.yaml"
             data = yaml.safe_load(p.read_text(encoding="utf-8"))
             assert isinstance(data, dict)
@@ -192,8 +195,9 @@ def another_tool() -> dict:
 
     def test_cli_init_with_mcp_type(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            code = main(["init", "demo-mcp", "--path", tmp, "--type", "mcp-stdio"])
+            code = main(["init", "demo-mcp", "--path", tmp, "--type", "agent-mcp"])
             self.assertEqual(code, 0)
+            self.assertTrue((Path(tmp) / "demo-mcp" / "demo-mcp" / "manifest.json").is_file())
 
     def test_cli_init_with_swarmskill_type(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -203,22 +207,22 @@ def another_tool() -> dict:
             self.assertTrue((root / "SKILL.md").is_file())
 
     def test_pack_success(self) -> None:
-        """mcp-stdio 类型整目录打包，不依赖 wheel。"""
+        """agent-plugin 整目录打包，zip 内含 plugin.yaml 与 manifest.json。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("pack-demo", Path(tmp), plugin_type="mcp-stdio")
+            plugin_root = plugin_init("pack-demo", Path(tmp), plugin_type="agent-plugin")
             out_dir = Path(tmp) / "out"
             zip_path = plugin_pack(plugin_root, out_dir)
             self.assertTrue(zip_path.exists())
             self.assertEqual(zip_path.name, "pack-demo-0.0.1.zip")
             with zipfile.ZipFile(zip_path, "r") as zf:
                 names = zf.namelist()
-            self.assertTrue(any("plugin.yaml" in n for n in names))
-            self.assertTrue(any("pack-demo-0.0.1" in n for n in names))
+            self.assertTrue(any(n.replace("\\", "/").endswith("plugin.yaml") for n in names))
+            self.assertTrue(any(n.replace("\\", "/").endswith("pack-demo/manifest.json") for n in names))
 
     def test_pack_excludes_plugin_out_directory(self) -> None:
         """mcp/rest 整目录打包时不应包含插件根目录下的 out/（避免历史 zip 被打进新包）。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("skip-mcp", Path(tmp), plugin_type="mcp-stdio")
+            plugin_root = plugin_init("skip-mcp", Path(tmp), plugin_type="agent-mcp")
             (plugin_root / "out").mkdir(parents=True, exist_ok=True)
             (plugin_root / "out" / "stale.zip").write_bytes(b"dummy")
             zip_path = plugin_pack(plugin_root, Path(tmp) / "publish-out")
@@ -296,9 +300,7 @@ def another_tool() -> dict:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr("flat-bundle-0.0.1/SKILL.md", skill_md.encode("utf-8"))
             inst = Path(tmp) / "install_root"
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                out = plugin_install(zip_path, extract_dir=inst)
-            m_run.assert_not_called()
+            out = plugin_install(zip_path, extract_dir=inst)
             self.assertEqual(out, inst / "flat-skill")
             self.assertTrue((out / "SKILL.md").is_file())
 
@@ -335,9 +337,7 @@ def another_tool() -> dict:
 
             inst = Path(tmp) / "install_root"
             inst.mkdir(parents=True, exist_ok=True)
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                out = plugin_install(zip_path, extract_dir=inst)
-            m_run.assert_not_called()
+            out = plugin_install(zip_path, extract_dir=inst)
             self.assertEqual(out, inst / "manifest-skill")
             self.assertTrue((inst / "manifest-skill" / "SKILL.md").is_file())
             self.assertTrue((inst / "manifest-skill" / "scripts" / "run.py").is_file())
@@ -376,11 +376,9 @@ def another_tool() -> dict:
             inst.mkdir(parents=True, exist_ok=True)
             (inst / "manifest-skill").mkdir(parents=True, exist_ok=True)
             (inst / "manifest-skill" / "SKILL.md").write_text("old", encoding="utf-8")
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                with self.assertRaises(FileExistsError):
-                    plugin_install(zip_path, extract_dir=inst, force=False)
-                out = plugin_install(zip_path, extract_dir=inst, force=True)
-            m_run.assert_not_called()
+            with self.assertRaises(FileExistsError):
+                plugin_install(zip_path, extract_dir=inst, force=False)
+            out = plugin_install(zip_path, extract_dir=inst, force=True)
             self.assertEqual(out, inst / "manifest-skill")
             self.assertIn("manifest-skill", (inst / "manifest-skill" / "SKILL.md").read_text(encoding="utf-8"))
 
@@ -405,98 +403,79 @@ def another_tool() -> dict:
             self.assertFalse(any("README.md" in n for n in names))
             self.assertFalse(any(f"{prefix}/demo-skill/scripts/" in n.replace("\\", "/") for n in names))
             inst = Path(tmp) / "install_root"
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                skill_dir = plugin_install(zip_path, extract_dir=inst)
-            m_run.assert_not_called()
+            skill_dir = plugin_install(zip_path, extract_dir=inst)
             self.assertTrue((skill_dir / "SKILL.md").is_file())
             self.assertFalse((inst / "demo-skill-0.1.0").exists())
 
-    def test_init_restful_api_success(self) -> None:
+    def test_init_agent_template_and_group_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="restful-api")
-            self.assertTrue((plugin_root / "schemas" / "tools.json").exists())
-            self.assertTrue((plugin_root / "src" / "demo_api" / "rest_api.py").exists())
-            self.assertTrue((plugin_root / "pyproject.toml").exists())
-            result = plugin_validate(plugin_root)
-            self.assertTrue(result.ok, msg=f"errors: {result.errors}")
+            template_root = plugin_init("demo-api", Path(tmp), plugin_type="agent-template")
+            group_root = plugin_init("demo-group", Path(tmp), plugin_type="agent-group")
+            self.assertTrue((template_root / "demo-api" / "persona" / "persona.md").is_file())
+            self.assertTrue((group_root / "demo-group" / "manifest.json").is_file())
+            template_result = plugin_validate(template_root)
+            group_result = plugin_validate(group_root)
+            self.assertTrue(template_result.ok, msg=f"errors: {template_result.errors}")
+            self.assertTrue(group_result.ok, msg=f"errors: {group_result.errors}")
 
-    def test_validate_restful_api_requires_tools_schema(self) -> None:
+    def test_validate_agent_mcp_requires_integration_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="restful-api")
-            (plugin_root / "schemas" / "tools.json").unlink()
-            result = plugin_validate(plugin_root)
-            self.assertFalse(result.ok)
-            self.assertTrue(any("schemas/tools.json" in e for e in result.errors))
-
-    def test_validate_restful_api_rejects_invalid_tool_headers(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="restful-api")
-            tools_json = plugin_root / "schemas" / "tools.json"
-            data = json.loads(tools_json.read_text(encoding="utf-8"))
-            assert isinstance(data, dict)
-            tools = data.get("tools")
-            assert isinstance(tools, list) and tools
-            assert isinstance(tools[0], dict)
-            tools[0]["headers"] = [{"name": "Authorization", "value": 123}]
-            tools_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
+            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="agent-mcp")
+            (plugin_root / "demo-api" / "mcp.json").unlink()
             result = plugin_validate(plugin_root)
             self.assertFalse(result.ok)
-            self.assertTrue(any("headers[0].value must be string" in e for e in result.errors))
+            self.assertTrue(any("mcp.json" in e for e in result.errors))
+
+    def test_validate_agent_group_rejects_path_in_agent_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="agent-group")
+            manifest_path = plugin_root / "demo-api" / "manifest.json"
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data["agents"] = ["leader/hidden"]
+            manifest_path.write_text(json.dumps(data), encoding="utf-8")
+            result = plugin_validate(plugin_root)
+            self.assertFalse(result.ok)
+            self.assertTrue(any("agents[0]" in e for e in result.errors))
 
     def test_install_mcp_stdio_skips_pip_copies_bundle_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-mcp", Path(tmp), plugin_type="mcp-stdio")
+            plugin_root = plugin_init("demo-mcp", Path(tmp), plugin_type="agent-mcp")
             out_dir = Path(tmp) / "out"
             zip_path = plugin_pack(plugin_root, out_dir)
             inst = Path(tmp) / "install_root"
 
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                m_run.return_value = None
-                installed_root = plugin_install(zip_path, extract_dir=inst)
+            installed_root = plugin_install(zip_path, extract_dir=inst)
 
             self.assertTrue((installed_root / "plugin.yaml").exists())
-            m_run.assert_not_called()
 
-    def test_install_restful_api_skips_pip_copies_bundle_only(self) -> None:
+    def test_install_agent_template_skips_pip_copies_bundle_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="restful-api")
+            plugin_root = plugin_init("demo-api", Path(tmp), plugin_type="agent-template")
             out_dir = Path(tmp) / "out"
             zip_path = plugin_pack(plugin_root, out_dir)
             inst = Path(tmp) / "install_root"
 
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                m_run.return_value = None
-                installed_root = plugin_install(zip_path, extract_dir=inst)
+            installed_root = plugin_install(zip_path, extract_dir=inst)
 
             self.assertTrue((installed_root / "plugin.yaml").exists())
-            m_run.assert_not_called()
 
     def test_install_tools_wheel_only_zip_calls_pip_install_whl(self) -> None:
-        """tools 发布包仅含 dist/*.whl 时，install 应调用 pip 将 wheel 装入当前 Python 环境。"""
+        """agent-plugin 安装只解压目录，不调用 pip。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("demo-wheel", Path(tmp), plugin_type="tools")
+            plugin_root = plugin_init("demo-wheel", Path(tmp), plugin_type="agent-plugin")
             out_dir = Path(tmp) / "out"
             zip_path = plugin_pack(plugin_root, out_dir)
             inst = Path(tmp) / "install_root"
 
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                m_run.return_value = None
-                installed_root = plugin_install(zip_path, extract_dir=inst)
+            installed_root = plugin_install(zip_path, extract_dir=inst)
 
             self.assertTrue((installed_root / "plugin.yaml").exists())
-            self.assertEqual(m_run.call_count, 1)
-            pip_cmd = m_run.call_args[0][0]
-            self.assertIn("-m", pip_cmd)
-            self.assertIn("pip", pip_cmd)
-            i_install = pip_cmd.index("install")
-            self.assertEqual(pip_cmd[i_install + 1], "--")
-            self.assertTrue(any(str(x).endswith(".whl") for x in pip_cmd))
+            self.assertTrue((installed_root / "demo-wheel" / "manifest.json").is_file())
 
     def test_info_reads_readme_local(self) -> None:
         """本地插件目录读取（plugin_describe_local），非 CLI 市场接口。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("info-demo", Path(tmp))
+            plugin_root = plugin_init("info-demo", Path(tmp), plugin_type="agent-plugin")
             info = plugin_describe_local(plugin_root)
             self.assertEqual(info.get("name"), "info-demo")
             self.assertEqual(info.get("version"), "0.0.1")
@@ -848,7 +827,7 @@ def another_tool() -> dict:
 
     def test_publish_expect_skill_like_rejects_tools_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("publish-tools-mismatch", Path(tmp), plugin_type="tools")
+            plugin_root = plugin_init("publish-tools-mismatch", Path(tmp), plugin_type="agent-plugin")
             src_zip = plugin_pack(plugin_root, Path(tmp) / "out")
             with self.assertRaisesRegex(PublishError, "expected skill/swarmskill package"):
                 plugin_publish(
@@ -883,20 +862,19 @@ def another_tool() -> dict:
             m.assert_not_called()
 
     def test_pack_tools_wheel_zip(self) -> None:
-        """tools 类型：先 build wheel，zip 含元数据 + dist/*.whl，不含 src/ 源码树。"""
+        """agent-group 打包包含 manifest.json，不打 wheel。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("wheel-demo", Path(tmp))
+            plugin_root = plugin_init("wheel-demo", Path(tmp), plugin_type="agent-group")
             out_dir = Path(tmp) / "out"
             zip_path = plugin_pack(plugin_root, out_dir)
             self.assertTrue(zip_path.exists())
             with zipfile.ZipFile(zip_path, "r") as zf:
-                names = zf.namelist()
-            self.assertTrue(any("plugin.yaml" in n for n in names))
-            self.assertTrue(any("schemas/tools.json" in n for n in names))
-            self.assertTrue(any("README.md" in n for n in names))
-            self.assertTrue(any("dist/" in n and n.endswith(".whl") for n in names))
-            norm = [n.replace("\\", "/") for n in names]
-            self.assertFalse(any("/src/" in n for n in norm))
+                names = [n.replace("\\", "/") for n in zf.namelist()]
+            self.assertTrue(any(n.endswith("plugin.yaml") for n in names))
+            self.assertTrue(any(n.endswith("wheel-demo/manifest.json") for n in names))
+            self.assertTrue(any(n.endswith("wheel-demo/README.md") for n in names))
+            self.assertFalse(any(n.endswith("/README.md") and "/wheel-demo/" not in n for n in names))
+            self.assertFalse(any(n.endswith(".whl") for n in names))
 
     def test_pack_fails_when_plugin_yaml_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -956,6 +934,16 @@ def another_tool() -> dict:
             self.assertEqual(params["page_size"], 15)
             self.assertEqual(params["order_by"], "create_time")
             self.assertTrue(params["desc"])
+
+    def test_plugin_search_by_asset_id_includes_agent_types(self) -> None:
+        with patch("cli_core.market.requests.get") as m:
+            m.return_value.status_code = 200
+            m.return_value.headers = {"content-type": "application/json"}
+            m.return_value.json.return_value = {"code": 200, "message": "ok", "data": {"items": [], "total": 0}}
+            plugin_search("http://127.0.0.1:9", PluginListQuery(asset_id="asset-1"))
+            plugin_type = m.call_args[1]["params"]["plugin_type"]
+            for required in ("skill", "swarmskill", "agent-plugin", "agent-mcp", "agent-template", "agent-group"):
+                self.assertIn(required, plugin_type.split(","))
 
     def test_plugin_search_desc_true_by_default(self) -> None:
         with patch("cli_core.market.requests.get") as m:
@@ -1145,7 +1133,7 @@ def another_tool() -> dict:
 
     def test_validate_rejects_omitted_runtime_type(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("omit-rt", Path(tmp))
+            plugin_root = plugin_init("omit-rt", Path(tmp), plugin_type="agent-plugin")
             py = plugin_root / "plugin.yaml"
             data = yaml.safe_load(py.read_text(encoding="utf-8"))
             assert isinstance(data, dict) and isinstance(data.get("runtime"), dict)
@@ -1156,9 +1144,9 @@ def another_tool() -> dict:
             self.assertTrue(any("runtime.type" in e for e in result.errors))
 
     def test_validate_rejects_unknown_runtime_type(self) -> None:
-        """显式填写未知 runtime.type 须报错；未默认成 tools。"""
+        """显式填写未知 runtime.type 须报错。"""
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("rt-unknown", Path(tmp))
+            plugin_root = plugin_init("rt-unknown", Path(tmp), plugin_type="agent-plugin")
             py = plugin_root / "plugin.yaml"
             data = yaml.safe_load(py.read_text(encoding="utf-8"))
             assert isinstance(data, dict) and isinstance(data.get("runtime"), dict)
@@ -1228,25 +1216,20 @@ def another_tool() -> dict:
 
     def test_install_second_install_without_force_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("twice-mcp", Path(tmp), plugin_type="mcp-stdio")
+            plugin_root = plugin_init("twice-mcp", Path(tmp), plugin_type="agent-mcp")
             zip_path = plugin_pack(plugin_root, Path(tmp) / "out")
             inst = Path(tmp) / "install_root"
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                m_run.return_value = None
-                plugin_install(zip_path, extract_dir=inst)
-                m_run.reset_mock()
-                with self.assertRaises(FileExistsError):
-                    plugin_install(zip_path, extract_dir=inst, force=False)
+            plugin_install(zip_path, extract_dir=inst)
+            with self.assertRaises(FileExistsError):
+                plugin_install(zip_path, extract_dir=inst, force=False)
 
     def test_install_second_install_with_force_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = plugin_init("force-mcp", Path(tmp), plugin_type="mcp-stdio")
+            plugin_root = plugin_init("force-mcp", Path(tmp), plugin_type="agent-mcp")
             zip_path = plugin_pack(plugin_root, Path(tmp) / "out")
             inst = Path(tmp) / "install_root"
-            with patch("cli_core.plugin.subprocess.run") as m_run:
-                m_run.return_value = None
-                p1 = plugin_install(zip_path, extract_dir=inst)
-                p2 = plugin_install(zip_path, extract_dir=inst, force=True)
+            p1 = plugin_install(zip_path, extract_dir=inst)
+            p2 = plugin_install(zip_path, extract_dir=inst, force=True)
             self.assertEqual(p1, p2)
             self.assertTrue((p2 / "plugin.yaml").is_file())
 

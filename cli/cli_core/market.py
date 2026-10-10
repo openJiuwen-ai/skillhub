@@ -39,10 +39,14 @@ logger = logging.getLogger(__name__)
 MARKET_HTTP_DEFAULT_TIMEOUT_SEC = 60
 MARKET_HTTP_LONG_TRANSFER_TIMEOUT_SEC = 600
 SKILL_LIKE_PLUGIN_TYPES = frozenset({"skill", "swarmskill"})
+# 列表接口在未传 plugin_type 时只返回 skill/swarmskill。按 asset_id 精确查询要带上六类，否则四类 Agent 资产会被滤掉。
+_MARKET_LIST_ALL_PLUGIN_TYPES = (
+    "skill,swarmskill,agent-plugin,agent-mcp,agent-template,agent-group"
+)
 
 
-def _cli_user_agent(*, swarmskill: bool = False) -> str:
-    package_name = "jiuwen-teamskills" if swarmskill else "openjiuwen-plugin"
+def _cli_user_agent() -> str:
+    package_name = "openjiuwen-agentichub"
     try:
         package_version = version(package_name)
     except PackageNotFoundError:
@@ -55,10 +59,9 @@ def _cli_request_headers(
     checksum: str | None = None,
     system_token: str | None = None,
     user_token: str | None = None,
-    swarmskill: bool = False,
 ) -> dict[str, str]:
     headers: dict[str, str] = {
-        "User-Agent": _cli_user_agent(swarmskill=swarmskill),
+        "User-Agent": _cli_user_agent(),
     }
     if checksum is not None:
         headers["X-Checksum-SHA256"] = checksum
@@ -101,7 +104,7 @@ def _market_translate_message_for_cli(msg: str) -> str:
         rt = m_runtime.group(1)
         return (
             f"Unsupported runtime.type '{rt}'. "
-            "Supported values: mcp-stdio, restful-api, skill, tools."
+            "Supported values: skill, swarmskill, agent-plugin, agent-mcp, agent-template, agent-group."
         )
 
     if "invalid or expired access token" in lower:
@@ -378,14 +381,14 @@ def resolve_skill_like_asset_for_cli(
     market_url: str,
     asset_id: str,
 ) -> PluginListItem:
-    """Ensure ``asset_id`` resolves to a skill-like marketplace asset for ``jiuwen-teamskills``."""
+    """Ensure ``asset_id`` resolves to a skill-like marketplace asset."""
     item = resolve_market_asset(market_url, asset_id)
     plugin_type = _normalize_skill_like_plugin_type(item.plugin_type)
     if not _is_skill_like_plugin_type(plugin_type):
         display_type = plugin_type or "<empty>"
         raise ValueError(
             f"Asset '{asset_id}' is plugin_type='{display_type}', not a skill-like asset. "
-            "jiuwen-teamskills only supports skill or swarmskill assets."
+            "only skill or swarmskill assets are accepted."
         )
     if plugin_type == (item.plugin_type or ""):
         return item
@@ -450,7 +453,9 @@ def plugin_search(
     }
     if q.search_keyword:
         params["search_keyword"] = q.search_keyword
-    if q.plugin_type:
+    if q.asset_id and not (q.plugin_type or "").strip():
+        params["plugin_type"] = _MARKET_LIST_ALL_PLUGIN_TYPES
+    elif q.plugin_type:
         params["plugin_type"] = q.plugin_type
     if q.publisher_name:
         params["publisher_name"] = q.publisher_name
@@ -588,8 +593,6 @@ def plugin_upload(
     user_token: str | None,
     system_token: str | None,
     req: PublishRequest,
-    *,
-    swarmskill: bool = False,
 ) -> PluginPublishResult:
     """Publish: multipart zip upload; exactly one of Bearer or X-System-Token; no retries."""
     base = market_url.rstrip("/")
@@ -603,7 +606,6 @@ def plugin_upload(
         checksum=req.checksum_sha256,
         system_token=system_token if has_sys else None,
         user_token=user_token if has_user else None,
-        swarmskill=swarmskill,
     )
     data: dict[str, str] = {
         "force": "true" if req.force else "false",

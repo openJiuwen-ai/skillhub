@@ -23,7 +23,7 @@
 ## 核心能力
 
 - **市场服务（marketplace）**：发布与版本治理覆盖六类 Agent 资产（Skill、SwarmSkill、插件、连接器、专家、专家团）；列表、详情与预签名下载。「热门」按火爆值排序；系统管理员账号发布的资产显示官方标识。可按需启用 **ClawHub 兼容协议**。
-- **命令行工具（CLI）**：检索、解析与下载（详见 [`cli/README.md`](cli/README.md)）。
+- **命令行工具（CLI）**：`agentichub`（发行包 `openjiuwen-agentichub`），覆盖 Skill、SwarmSkill、插件、连接器、专家、专家团的脚手架、校验、打包、发布、检索与安装（详见 [`cli/README.md`](cli/README.md)）。
 - **Web 前端（frontend）**：浏览器中浏览、发布与审核（详见 [安装指导](docs/zh/3.%20安装指导/README.md)）。
 
 面向需要在团队或产品内集中管理 **Skill** 的开发者与平台运维，本仓库提供 **开源代码与自建方案**。

@@ -24,7 +24,7 @@
 ## Features
 
 - **Marketplace**: publish and version the six Agent asset types (Skill, SwarmSkill, plugin, connector, expert, expert group); list, detail, and presigned download. The **Hot** tab ranks by `hot_score`. Assets published by the system admin account show an official badge. Optional **ClawHub-compatible** API.
-- **CLI**: search, resolve, and download — [`cli/README.md`](cli/README.md).
+- **CLI**: `agentichub` (package `openjiuwen-agentichub`) scaffolds, validates, packs, publishes, searches, and installs the six Agent asset types. See [`cli/README.md`](cli/README.md).
 - **Web UI**: browse, publish, and review in the browser — see the [install docs](docs/zh/3.%20安装指导/README.md).
 
 **Hosted offering**: **[agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)**. Use this repository when you need on-premises data, isolation, or internal integration.
