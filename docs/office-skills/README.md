@@ -7,7 +7,7 @@
 | 技能 | 职责 | 关键脚本 |
 |---|---|---|
 | word-template-editor | Word 模板保真填充（跨 run 占位/编号保持/OPC 校验） | `fill_template.py` |
-| docx-review-redline | Word 原生批注 + 修订（w:ins/w:del + comments.xml） | `apply_review.py` |
+| docx-review-redline | Word 原生批注 + 修订（replace/insert/delete/comment，与既有批注/修订合并） | `apply_review.py` |
 | docx-version-diff | 两版 Word 结构级对比（段落/表格/页眉/分节） | `docx_diff.py` |
 | chinese-official-doc | 中文公文起草 + GB/T 9704 排版（复用 MIT 上游 2.0.33，见 NOTICE.md） | `gbt9704_layout.py` 等 |
 | meeting-minutes-actions | 会议纪要 + 待办追踪（ASR 存疑标记/跨期五态承接） | `minutes_actions.py` |
@@ -33,7 +33,7 @@
 
 ## 测试
 
-黑盒测试位于 `tests/office_skills/`（39 项，全部通过；金标准为手工推导值，不复用被测实现）：
+黑盒测试位于 `tests/office_skills/`（45 项，全部通过；金标准为手工推导值，不复用被测实现）：
 
 ```
 python -m pytest tests/office_skills -q
