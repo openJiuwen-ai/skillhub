@@ -31,7 +31,7 @@ python scripts/docx_diff.py --old v1.docx --new v2.docx --report diff.json [--ch
 
 - 段落按文本序列对齐（difflib），modified/added/removed 带原始定位
 - 表格按索引配对，输出单元格级差异（表N 行R 列C，旧值→新值）；行列数变化记 structural
-- 页眉页脚按节比较文本；分节变化（节数、页面尺寸、页边距）单独列出
+- 页眉页脚按节比较文本（计入 header_footer_changed）；分节变化（节数、页面尺寸、四边页边距，计入 section_changed）单独列出
 - 相同文件 → 空变更集，退出码 0
 
 ## 失败与降级

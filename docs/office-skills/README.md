@@ -33,7 +33,7 @@
 
 ## 测试
 
-黑盒测试位于 `tests/office_skills/`（45 项，全部通过；金标准为手工推导值，不复用被测实现）：
+黑盒测试位于 `tests/office_skills/`（49 项，全部通过；金标准为手工推导值，不复用被测实现）：
 
 ```
 python -m pytest tests/office_skills -q

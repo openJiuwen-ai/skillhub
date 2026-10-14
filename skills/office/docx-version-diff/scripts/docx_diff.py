@@ -53,8 +53,11 @@ def headers_footers(doc):
             entry["footer"] = "\n".join(p.text for p in sec.footer.paragraphs)
         except Exception:
             entry["footer"] = ""
-        pg = sec.page_width, sec.page_height, sec.left_margin, sec.top_margin
-        entry["page"] = [str(x) for x in pg]
+        entry["page"] = {
+            "page_width": str(sec.page_width), "page_height": str(sec.page_height),
+            "left_margin": str(sec.left_margin), "right_margin": str(sec.right_margin),
+            "top_margin": str(sec.top_margin), "bottom_margin": str(sec.bottom_margin),
+        }
         out.append(entry)
     return out
 
@@ -130,28 +133,30 @@ def diff_tables(old, new):
 
 
 def diff_headers(old, new):
+    """返回 (changes, 页眉页脚文本变更数, 分节/页面设置变更数)。"""
     changes = []
-    n = 0
+    n_hf = 0
+    n_sec = 0
     for idx in range(max(len(old), len(new))):
         o = old[idx] if idx < len(old) else None
         nw = new[idx] if idx < len(new) else None
         if o is None or nw is None:
             changes.append({"type": "section", "change": "added" if o is None else "removed",
                             "location": f"section {idx}"})
-            n += 1
+            n_sec += 1
             continue
         for key in ("header", "footer"):
             if o[key] != nw[key]:
                 changes.append({"type": key, "change": "modified",
                                 "location": f"section {idx} {key}",
                                 "before": o[key], "after": nw[key]})
-                n += 1
+                n_hf += 1
         if o["page"] != nw["page"]:
             changes.append({"type": "section", "change": "modified",
                             "location": f"section {idx} page setup",
                             "before": o["page"], "after": nw["page"]})
-            n += 1
-    return changes, n
+            n_sec += 1
+    return changes, n_hf, n_sec
 
 
 def write_changes_docx(changes, path, old_name, new_name):
@@ -201,10 +206,10 @@ def main():
     changes.extend(tc)
     summary["table_cell_modified"] = tcell
 
-    hc, hn = diff_headers(headers_footers(old_doc), headers_footers(new_doc))
+    hc, nhf, nsec = diff_headers(headers_footers(old_doc), headers_footers(new_doc))
     changes.extend(hc)
-    summary["header_footer_changed"] = hn
-    summary["section_changed"] = sum(1 for h in hc if h["type"] == "section")
+    summary["header_footer_changed"] = nhf
+    summary["section_changed"] = nsec
 
     identical = not changes
     report = {
