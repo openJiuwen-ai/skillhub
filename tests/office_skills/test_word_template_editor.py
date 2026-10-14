@@ -130,3 +130,35 @@ def test_abnormal_missing_data_and_corrupt(workspace):
                     ["--template", tpl, "--data", str(workspace / "bad.json"),
                      "--output", str(workspace / "o5.docx")])
     assert r3.returncode == 2
+
+
+def test_abnormal_nested_placeholder_syntax(workspace):
+    """异常: 嵌套/未闭合/空名占位语法按字面处理并记录, 不报错。"""
+    doc = Document()
+    doc.add_paragraph("嵌套：{{a{{b}} 后文")
+    doc.add_paragraph("未闭合：{{unclosed")
+    doc.add_paragraph("空名：{{}}")
+    doc.add_paragraph("正常键：{{ok}}")
+    tpl = str(workspace / "nested.docx")
+    doc.save(tpl)
+    data = {"b": "B值", "ok": "正常"}
+    (workspace / "nd.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    r = run_script("word-template-editor", "fill_template.py",
+                   ["--template", tpl, "--data", str(workspace / "nd.json"),
+                    "--output", str(workspace / "nested-out.docx"),
+                    "--report", str(workspace / "nested-report.json")])
+    assert r.returncode == 0, r.stderr + r.stdout
+    rep = json.loads((workspace / "nested-report.json").read_text(encoding="utf-8"))
+    # 内层完整占位 b 与正常键被替换; 其余语法按字面保留
+    assert set(rep["matched"]) == {"b", "ok"}
+    assert rep["replacements"] == 2
+    assert rep["residual_placeholders"] == []
+    assert rep["literal_brace_fragments"] == {"{{": 3, "}}": 1}
+    assert rep["opc_check"]["ok"] is True
+    # 独立验证: 输出文本保留字面片段, 内层值已替换
+    doc2 = Document(str(workspace / "nested-out.docx"))
+    texts = [p.text for p in doc2.paragraphs]
+    assert "嵌套：{{aB值 后文" in texts, texts
+    assert "未闭合：{{unclosed" in texts, texts
+    assert "空名：{{}}" in texts, texts
+    assert "正常键：正常" in texts, texts

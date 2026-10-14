@@ -24,6 +24,8 @@ python scripts/fill_template.py --template 模板.docx --data data.json --output
    - `matched`：已填充占位与替换次数
    - `unmatched`：模板中存在但数据未提供的占位（原样保留，交付时提醒用户）
    - `unused_data`：数据提供但模板没有的键
+   - `residual_placeholders`：填充后仍完整残留的占位名（即未匹配项）
+   - `literal_brace_fragments`：嵌套/未闭合/空名等非法占位语法的孤立 `{{`/`}}` 片段统计——这些内容按字面保留在文档中，同时记录在报告里提醒人工确认
    - `opc_check`：zip 结构 / XML 可解析性 / 关系完整性检查结果
 5. 向用户交付填充后文件 + 未匹配占位清单。存在未匹配项时明确说明，不要谎称全部填充。
 
@@ -39,6 +41,7 @@ python scripts/fill_template.py --template 模板.docx --data data.json --output
 - 模板损坏或不是合法 zip：退出码 2，报错，不产出文件
 - 数据 JSON 解析失败：退出码 2
 - 占位符数据缺失：不算失败，进 `unmatched` 清单，退出码仍为 0（交付完整性由报告承载）
+- 占位符语法嵌套（如 `{{a{{b}}`）、未闭合（`{{x`）或空名（`{{}}`）：按字面处理不报错——可匹配的内层完整占位正常替换，其余花括号片段原样留在文本中并计入 `literal_brace_fragments`
 
 ## 依赖
 

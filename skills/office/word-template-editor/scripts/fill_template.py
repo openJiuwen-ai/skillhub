@@ -18,6 +18,17 @@ from docx import Document
 from docx.oxml.ns import qn
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_\u4e00-\u9fff-]+)\s*\}\}")
+ORPHAN_BRACE_RE = re.compile(r"\{\{|\}\}")
+
+
+def find_orphan_braces(text):
+    """找出不属于完整 {{key}} 占位符的孤立花括号片段。
+
+    嵌套/未闭合/空名占位语法按字面保留在文本中，此处统计其残留，
+    满足"按字面处理并记录"。
+    """
+    stripped = PLACEHOLDER_RE.sub("", text)
+    return ORPHAN_BRACE_RE.findall(stripped)
 
 
 def iter_paragraphs(doc):
@@ -219,13 +230,17 @@ def main():
     try:
         doc2 = Document(args.output)
         residue = []
+        orphan_braces = {}
         for p in iter_paragraphs(doc2):
             runs = paragraph_runs(p)
             full = "".join((t.text or "") for _, ts in runs for t in ts)
             for m in PLACEHOLDER_RE.finditer(full):
                 residue.append(m.group(1))
+            for frag in find_orphan_braces(full):
+                orphan_braces[frag] = orphan_braces.get(frag, 0) + 1
     except Exception as e:
         residue = [f"<verify failed: {e}>"]
+        orphan_braces = {"<verify failed>": 1}
 
     report = {
         "template": args.template,
@@ -235,6 +250,7 @@ def main():
         "unmatched": stats["unmatched"],
         "unused_data": sorted(set(data) - set(stats["matched"])),
         "residual_placeholders": residue,
+        "literal_brace_fragments": orphan_braces,
         "numbering_xml_unchanged": numbering_unchanged,
         "opc_check": opc_validate(args.output),
     }
