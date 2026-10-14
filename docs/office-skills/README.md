@@ -14,7 +14,7 @@
 | sheet-consolidate-reconcile | 多源表格合并对账（合计行剔除/重复主键明细） | `consolidate.py` |
 | deck-delivery-qa | PPT 交付质检（确定性几何 lint，未渲染显式声明） | `deck_qa.py` |
 | pdf-structured-extract | PDF 结构化提取（表格/稀疏页渲染/数字两轮校验） | `extract_pdf.py` |
-| pdf-nl-edit | PDF 指定页局部编辑（底层删除+其余页不变验证） | `pdf_edit.py` |
+| pdf-nl-edit | PDF 指定页局部编辑（多命中全替换+其余页不变验证；普通编辑非脱敏） | `pdf_edit.py` |
 | doc-sensitive-redact | 敏感信息打码（双轨识别/PDF 真删除回提验证） | `redact.py` |
 | doc-translate-layout | 翻译保持版式（工作表回填/术语核对/超长回退） | `translate_layout.py` |
 | evidence-digest | 多源证据台账（来源定位/冲突清单/问题覆盖） | `evidence_ledger.py` |
