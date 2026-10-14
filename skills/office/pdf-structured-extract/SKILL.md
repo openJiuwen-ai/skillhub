@@ -20,22 +20,30 @@ python scripts/extract_pdf.py --input file.pdf --outdir out/
 ## 输出（outdir/）
 
 1. `extract.json`：
-   - `pages`: 每页文字层全文
-   - `tables`: 检测到的表格（页码 + bbox + 结构化行列数据）
+   - `pages`: 每页文字层全文（每页含 `sparse`/`needs_vision`/`rendered_image`/`tables` 行列）
+   - `tables`: 检测到的表格，每条含 `page`（页码）+ `bbox`（页面坐标 [x0,y0,x1,y1]）+ `rows`（结构化行列）+ `row_count`/`col_count`/`source`
+   - `uncertain_items` / `key_numbers.needs_review`: 关键数字中长度或形态有歧义的待核条目（如 15 位纯数字）
    - `sparse_pages`: 文字 < 20 字符的页（渲染为 `pages/page-N.png`，标注 `needs_vision: true`）
 2. `extract.md`：人读版（正文 + Markdown 表格）
 3. `verify-report.json`：关键数字两轮校验
    - 第一轮：正则形状提取（候选）
-   - 第二轮：独立算法校验（身份证校验位 / 手机号段 / 银行卡 Luhn / 邮箱语法）
-   - `pass2: valid|invalid|needs_review`；身份证形状对但校验位错 → `invalid`（显式标注，不静默丢弃）；15 位数字 → `needs_review`
-   - 校验不一致的条目单独列出 `mismatches`
+   - 第二轮：独立算法校验（身份证校验位 / 手机号段 / 银行卡 Luhn / 邮箱语法）——与正则不共享判定
+   - `pass2: valid|invalid|needs_review`；身份证形状对但校验位错 → `invalid`（显式标注，不静默丢弃）；15 位纯数字长度有歧义 → `needs_review`
+   - `mismatches` 汇总 `invalid`，`needs_review` 单列，`summary` 给出 total/valid/invalid/needs_review 计数；所有值以 `masked` 脱敏输出
 
 ## 诚实边界（脚本保证）
 
 - 无文字层且未渲染成功的页 → 标 `needs_vision`，不编造内容
 - 不调用外部 OCR/云服务；没有 API Key 也能完整走文字层路径
 - 加密 PDF：显式报错退出（退出码 2），不暴力破解
+- 15 位等有歧义长度的数字不臆断为卡号或旧身份证，统一进待核清单
 
 ## 依赖
 
-Python 3.9+，PyMuPDF（`pip install pymupdf`；AGPL/商业双许可——本包仅通过其公开 API 调用，不复制其源码，不分发其本体）。
+Python 3.9+，PyMuPDF（`pip install pymupdf`）。
+
+### 许可（区分原创与运行时依赖）
+
+- 本技能代码/SKILL.md/文档为原创，随本仓库按 `LICENSE`（Apache-2.0）分发。
+- 运行时依赖 **PyMuPDF 为 AGPL-3.0 或商业许可双许可**。本包只通过其公开 API 调用、不复制源码、不打包其本体，但**这并不免除宿主遵守 AGPL（若以 AGPL 方式分发需开放相应源码）或购买 Artifex 商业授权**的义务；不是"全链路宽松许可"。可替换为实现同等调用的其他 PDF 库以改变许可约束。
+- 竞品（doubao/word、workbuddy wps-office-suite、nano-pdf、pdf-image-text-extractor）均 `no_license_found`，仅功能对标，未复制任何代码或文档。
