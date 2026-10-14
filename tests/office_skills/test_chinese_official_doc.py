@@ -9,6 +9,7 @@ from helpers import run_script, skill_dir  # noqa: E402
 
 from docx import Document  # noqa: E402
 from docx.enum.text import WD_ALIGN_PARAGRAPH  # noqa: E402
+from docx.oxml.ns import qn  # noqa: E402
 
 DRAFT = """标题：关于开展2026年度内部审计工作的通知
 主送：各部门、各分子公司：
@@ -117,3 +118,113 @@ def test_abnormal(workspace):
     r2 = run_script("chinese-official-doc", "gbt9704_layout.py",
                     ["--draft", workspace / "noexist.txt", "--output", workspace / "y.docx"])
     assert r2.returncode == 2
+
+
+COMPLEX_DRAFT = """# 关于印发《集团差旅费管理办法（试行）》的通知
+主送：集团总部各部门、各子公司：
+
+一、总体要求
+为进一步规范差旅费管理，降低行政运行成本，现将《集团差旅费管理办法（试行）》印发给你们，请遵照执行。
+
+（一）适用范围
+本办法适用于集团总部及全资、控股子公司。
+
+（二）开支口径
+交通费、住宿费在标准以内凭票报销，超支部分自理。
+
+二、执行要求
+各单位应当自本办法印发之日起组织专题学习，并将执行中的问题及时反馈财务部。
+
+落款：九文科技（集团）有限公司
+日期：2026年10月14日
+"""
+
+
+def _east_asia(paragraph):
+    rPr = paragraph.runs[0]._element.find(qn("w:rPr"))
+    rf = rPr.find(qn("w:rFonts"))
+    return rf.get(qn("w:eastAsia"))
+
+
+def test_layout_complex_structure(workspace):
+    """复杂结构：markdown标题、黑体一级/楷体二级标题、落款右空2字。"""
+    (workspace / "complex.txt").write_text(COMPLEX_DRAFT, encoding="utf-8")
+    r = run_script("chinese-official-doc", "gbt9704_layout.py",
+                   ["--draft", workspace / "complex.txt", "--output", workspace / "c.docx",
+                    "--report", workspace / "c.json"])
+    assert r.returncode == 0, r.stderr + r.stdout
+    rep = json.loads((workspace / "c.json").read_text(encoding="utf-8"))
+    assert rep["draft_elements"]["title"] is True
+    assert rep["elements_complete"] is True, rep["missing"]
+
+    doc = Document(str(workspace / "c.docx"))
+    paras = [p for p in doc.paragraphs if p.text.strip()]
+    title = paras[0]
+    assert title.text.startswith("关于印发")
+    assert title.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert _east_asia(title) == "方正小标宋简体"
+    assert title.runs[0].font.size.pt == 22
+
+    h1 = next(p for p in paras if p.text.startswith("一、总体要求"))
+    assert _east_asia(h1) == "黑体"
+    assert h1.runs[0].font.size.pt == 16
+    assert (h1.paragraph_format.first_line_indent or 0) == 0
+
+    h2 = next(p for p in paras if p.text.startswith("（一）适用范围"))
+    assert _east_asia(h2) == "楷体_GB2312"
+    assert h2.runs[0].font.size.pt == 16
+
+    body = next(p for p in paras if p.text.startswith("为进一步规范"))
+    assert _east_asia(body) == "仿宋_GB2312"
+    assert abs(body.paragraph_format.first_line_indent.pt - 32) < 2  # 2字符 x 16pt
+
+    signoff = next(p for p in paras if p.text.startswith("九文科技"))
+    assert signoff.alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert abs(signoff.paragraph_format.right_indent.pt - 32) < 2  # 右空2字
+    date_para = next(p for p in paras if p.text.startswith("2026年10月14日"))
+    assert date_para.alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    assert abs(date_para.paragraph_format.right_indent.pt - 32) < 2
+
+    # 行距：标题固定31磅，正文固定28磅
+    assert abs(title.paragraph_format.line_spacing.pt - 31) < 0.1
+    assert abs(body.paragraph_format.line_spacing.pt - 28) < 0.1
+
+
+def test_layout_missing_elements_reported_not_fabricated(workspace):
+    """主送/落款/日期缺失时列为待补（missing），不编造发文要素。"""
+    partial = "标题：关于调整值班安排的说明\n\n各部门自下周起按新安排执行值班。\n"
+    (workspace / "partial.txt").write_text(partial, encoding="utf-8")
+    r = run_script("chinese-official-doc", "gbt9704_layout.py",
+                   ["--draft", workspace / "partial.txt", "--output", workspace / "p.docx",
+                    "--report", workspace / "p.json"])
+    assert r.returncode == 0, r.stderr + r.stdout  # 有标题+正文即可排版
+    rep = json.loads((workspace / "p.json").read_text(encoding="utf-8"))
+    assert rep["draft_elements"]["recipient"] is False
+    assert rep["draft_elements"]["signoff"] is False
+    assert rep["draft_elements"]["date"] is False
+    assert rep["elements_complete"] is False
+    assert "signoff_right_aligned" in rep["missing"]
+
+    doc = Document(str(workspace / "p.docx"))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "发字" not in text and "〔" not in text  # 不编造发文字号
+    assert "印发" not in text or "印发" in partial  # 不新增草稿外要素
+
+
+def test_prose_lint_report_only_no_ai_probability_wording(workspace):
+    """风险报告只报不改写；输出不得含'AI概率'类表述。"""
+    text = ("需要指出的是，本方案将全面提升管理水平。值得注意的是，"
+            "相关情况如下：大概就是这样，可能吧。")
+    src = workspace / "s2.txt"
+    src.write_text(text, encoding="utf-8")
+    before = src.read_bytes()
+    sdir = skill_dir("chinese-official-doc")
+    env = dict(os.environ, PYTHONUTF8="1")
+    p = subprocess.run([sys.executable, os.path.join(sdir, "scripts", "prose_lint.py"),
+                        "--json", str(src)],
+                       capture_output=True, text=True, encoding="utf-8", env=env)
+    assert p.returncode in (0, 1), p.stderr
+    assert "概率" not in p.stdout, p.stdout
+    assert not any(("AI" in (f.get("label") or "")) for f in json.loads(p.stdout))
+    assert len(json.loads(p.stdout)) >= 1  # 命中套话/口语规则
+    assert src.read_bytes() == before  # 只报告，不改写原稿
