@@ -10,10 +10,10 @@
 import argparse
 import json
 import math
+import shutil
 import sys
 
 from pptx import Presentation
-from pptx.util import Emu
 
 EMU_PER_PT = 12700
 EMU_PER_INCH = 914400
@@ -33,35 +33,54 @@ def est_text_width_pt(text, font_pt):
     return w
 
 
-def para_font_pt(para):
-    for run in para.runs:
-        if run.font.size is not None:
-            return run.font.size.pt
+def effective_run_font_pt(run, para):
+    """run 显式字号优先，其次段落默认字号（defRPr），最后全局默认。"""
+    if run.font.size is not None:
+        return run.font.size.pt
+    if para.font.size is not None:
+        return para.font.size.pt
     return DEFAULT_FONT_PT
 
 
 def est_shape_text_height_pt(shape):
-    """估算文本框所需高度（pt）。返回 (est_height, font_pt, n_paras)。"""
+    """逐 run 估算文本框所需高度（pt）。返回 (est_height, max_font_pt, n_paras)。
+
+    关键点：同一段落内不同 run 可有不同字号（如 10pt 前缀 + 72pt 正文），必须逐
+    run 累加宽度、按该段最大字号计行高，不能只取"第一个有显式字号的 run"，也不
+    能把段落级 defRPr 字号（para.font.size，run 自身 size 为 None）当成默认 18pt。
+    """
     if not shape.has_text_frame:
         return 0.0, DEFAULT_FONT_PT, 0
     tf = shape.text_frame
     usable_w_pt = max(10.0, shape.width / EMU_PER_PT - 0.3 * 72)  # 扣两侧默认内边距
     total_h = 0.0
-    font_pt = DEFAULT_FONT_PT
+    max_font_pt = 0.0
     n = 0
     for para in tf.paragraphs:
-        text = "".join(run.text for run in para.runs)
-        fp = para_font_pt(para)
-        font_pt = fp
+        runs = para.runs
+        text = "".join(run.text for run in runs)
+        para_default_pt = para.font.size.pt if para.font.size is not None else DEFAULT_FONT_PT
         if not text:
-            total_h += fp * 0.6
+            total_h += para_default_pt * 0.6
             n += 1
+            if para_default_pt > max_font_pt:
+                max_font_pt = para_default_pt
             continue
         n += 1
-        need_w = est_text_width_pt(text, fp)
+        need_w = 0.0
+        line_font_pt = 0.0
+        for run in runs:
+            fp = effective_run_font_pt(run, para)
+            if fp > line_font_pt:
+                line_font_pt = fp
+            need_w += est_text_width_pt(run.text, fp)
+        if line_font_pt <= 0.0:
+            line_font_pt = para_default_pt
         lines = max(1, math.ceil(need_w / usable_w_pt))
-        total_h += lines * fp * LINE_SPACING
-    return total_h, font_pt, n
+        total_h += lines * line_font_pt * LINE_SPACING
+        if line_font_pt > max_font_pt:
+            max_font_pt = line_font_pt
+    return total_h, (max_font_pt or DEFAULT_FONT_PT), n
 
 
 def check_slide(slide, slide_w_emu, slide_h_emu):
@@ -131,22 +150,36 @@ def main():
         slides_out.append({"index": idx, "issues": issues, "utilization": util,
                            "pass": not any(i["check"] in ("text_overflow", "shape_out_of_bounds")
                                            for i in issues)})
+    deck_issues = []
+    if len(slides_out) == 0:
+        deck_issues.append({"check": "empty_deck",
+                            "detail": "演示文稿包含 0 页，无可交付内容"})
+    engine = next((p for p in ("soffice", "libreoffice", "soffice.exe") if shutil.which(p)), None)
+    if engine:
+        render_note = (f"检测到渲染引擎（{engine}），但本次未执行渲染级像素检查；"
+                       "几何判定基于文本度量的确定性估算，rendered=false")
+    else:
+        render_note = ("未检测到 soffice/libreoffice 渲染引擎；几何判定基于文本度量的"
+                       "确定性估算，渲染级检查未执行，不冒充渲染结果")
     report = {
         "input": args.input,
         "mode": "estimated_geometry",
         "rendered": False,
-        "render_note": "本环境无渲染引擎（LibreOffice/soffice 未安装），几何检查基于文本度量"
-                       "的确定性估算；渲染级检查未执行，不冒充渲染结果",
+        "render_engine_detected": engine,
+        "render_note": render_note,
+        "slide_count": len(slides_out),
+        "deck_issues": deck_issues,
         "slides": slides_out,
-        "pass": not any_fail,
+        "pass": (not any_fail) and not deck_issues,
     }
     with open(args.report, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(json.dumps({"pass": report["pass"],
                       "slides": len(slides_out),
+                      "deck_issues": [i["check"] for i in deck_issues],
                       "failing_slides": [s["index"] for s in slides_out if not s["pass"]]},
                      ensure_ascii=False))
-    return 0 if not any_fail else 1
+    return 0 if (not any_fail and not deck_issues) else 1
 
 
 if __name__ == "__main__":
