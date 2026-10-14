@@ -35,7 +35,7 @@ python scripts/consolidate.py --config config.json --output merged.xlsx --report
 ## 输出
 
 - `merged.xlsx`
-  - Sheet「合并汇总」：每个主键一行，指标列按来源命名（如 `销售额@华东区`），附 `数据一致` 标记与各源缺失标注
+  - Sheet「合并汇总」：每个主键一行，指标列按来源命名（如 `销售额@华东区`），附 `数据一致` 标记（是/否/待核）与各源缺失标注
   - Sheet「源明细」：全部源行（来源/主键/指标值/行号），可回溯到源文件
 - `reconcile-report.json`：
   - `match_stats`：唯一主键数、各源齐全数、单源数、匹配率（=齐全主键/唯一主键）
@@ -43,6 +43,8 @@ python scripts/consolidate.py --config config.json --output merged.xlsx --report
   - `duplicates`：同源重复主键明细（不静默去重）
   - `source_missing`：各源缺失的主键清单
   - `skipped_total_rows`：被剔除的合计/小计/累计行（带行号）
+  - `pending_values`：无法数值化的值（无缓存公式/文本值），带来源与行号
+  - `formula_handling`：公式单元格处理——缓存值使用计数（`cached_cells_per_source`）与无缓存公式明细（`no_cache`，含公式文本与行号）
 
 ## 清洗规则（脚本保证）
 
@@ -50,6 +52,8 @@ python scripts/consolidate.py --config config.json --output merged.xlsx --report
 - 同名不同口径列在合并表以 `指标@来源` 命名，显式标注口径来源
 - 重复主键：保留全部值并列入 duplicates 明细；对账时逐值比较
 - 数字统一按 float 解析；无法解析的值保留原样并列出，不猜不补 0
+- 非有限值（文本 `nan`/`inf` 等可被 float 解析但非有限）不作为数值参与对账，按原值列入 `pending_values`，不静默丢弃、不输出非标准 JSON 的 `NaN`/`Infinity` 字面量
+- xlsx 公式单元格取来源文件保存时写入的缓存值（静态读值，不重算公式）；无缓存公式的值不参与数值对账，列入 `formula_handling.no_cache` 与 `pending_values`，合并表标记 `待核`/`(公式未算)`，不猜测不补 0
 
 ## 失败与降级
 

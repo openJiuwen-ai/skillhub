@@ -10,6 +10,7 @@
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import sys
@@ -19,10 +20,12 @@ from openpyxl import Workbook, load_workbook
 TOTAL_ROW_RE = re.compile(r"^(合计|总计|小计|累计)\s*$")
 
 
-def _num_or_str(v):
-    """整数浮点写成 int，保持表格可读且可直接比较。"""
-    if isinstance(v, float) and v == int(v):
-        return int(v)
+def _display_num(v):
+    try:
+        if v == int(v):
+            return int(v)
+    except (ValueError, OverflowError):
+        pass
     return v
 
 
@@ -30,86 +33,134 @@ def to_num(v):
     if v is None:
         return None
     if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip().replace(",", "").replace("，", "")
-    if not s:
+        f = float(v)
+    else:
+        s = str(v).strip().replace(",", "").replace("，", "")
+        if not s:
+            return None
+        try:
+            f = float(s)
+        except ValueError:
+            return None
+    # 非有限值(inf/nan/infinity 等文本)不作为数值参与对账，按原值保留走待核
+    return f if math.isfinite(f) else None
+
+
+def _cell(rowvals, col_idx, cmap, name):
+    std = cmap.get(name, name)
+    j = col_idx.get(std)
+    if rowvals is None or j is None or j >= len(rowvals):
         return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
+    return rowvals[j]
+
+
+def _is_formula(v):
+    return isinstance(v, str) and v.startswith("=")
 
 
 def read_source(spec, pk, metrics, base_dir):
-    """读取一个源 -> (rows, issues)。rows: [{pk, metrics{m: raw}, row_num}]"""
+    """读取一个源 -> (rows, issues)。
+
+    rows: [{pk, row_num, metrics{m: {raw, num, formula?}}}]
+    issues: 字符串=致命错误(该源failed); 元组=(kind, row, payload)，
+            kind in {total_row_skipped, formula_cached, formula_no_cache}
+    """
     path = spec["file"]
     if not os.path.isabs(path):
         path = os.path.join(base_dir, path)
     issues = []
     cmap = spec.get("column_map", {}) or {}
-    rows = []
+    data_rows = []  # [(行号, 值元组)]
+    f_map = {}      # 行号 -> 公式元组（仅xlsx，来自 data_only=False 遍）
     if path.lower().endswith(".csv"):
         with open(path, encoding="utf-8-sig", newline="") as f:
             table = list(csv.reader(f))
         header_idx = None
+        header = None
+        target_pk = cmap.get(pk, pk)
         for i, r in enumerate(table[:20]):
             vals = [c.strip() for c in r]
-            if cmap and all(any(cm in vals for cm in cmap.keys() if cm)):
-                pass
-            # 简化: 找包含主键目标列的行
-            target_pk = cmap.get(pk, pk)
             if target_pk in vals:
                 header_idx = i
                 header = vals
                 break
         if header_idx is None:
-            return [], [f"header not found (need column {cmap.get(pk, pk)!r})"]
+            return [], [f"header not found (need column {target_pk!r})"]
         col_idx = {name: j for j, name in enumerate(header)}
         for rn, r in enumerate(table[header_idx + 1:], header_idx + 2):
             if not r or all(not c.strip() for c in r):
                 continue
-            rows.append((rn, r, col_idx))
+            data_rows.append((rn, r))
     else:
         wb = load_workbook(path, data_only=True, read_only=True)
         ws = wb[spec.get("sheet")] if spec.get("sheet") else wb.active
         header_idx = None
         header = None
+        target_pk = cmap.get(pk, pk)
         for i, r in enumerate(ws.iter_rows(min_row=1, max_row=20, values_only=True)):
             vals = [str(c).strip() if c is not None else "" for c in r]
-            target_pk = cmap.get(pk, pk)
             if target_pk in vals:
                 header_idx = i
                 header = vals
                 break
         if header_idx is None:
             wb.close()
-            return [], [f"header not found (need column {cmap.get(pk, pk)!r})"]
+            return [], [f"header not found (need column {target_pk!r})"]
         col_idx = {name: j for j, name in enumerate(header) if name}
         for rn, r in enumerate(ws.iter_rows(min_row=header_idx + 2, values_only=True), header_idx + 2):
             if r is None or all(c is None or str(c).strip() == "" for c in r):
                 continue
-            rows.append((rn, r, col_idx))
+            data_rows.append((rn, r))
         wb.close()
+        # 公式识别遍：data_only=False 时公式单元格返回 "=..." 字符串
+        try:
+            wbf = load_workbook(path, data_only=False, read_only=True)
+            wsf = wbf[spec.get("sheet")] if spec.get("sheet") else wbf.active
+            for rn, fr in enumerate(wsf.iter_rows(min_row=header_idx + 2, values_only=True), header_idx + 2):
+                if fr is None or all(c is None or str(c).strip() == "" for c in fr):
+                    continue
+                f_map[rn] = fr
+            wbf.close()
+        except Exception:
+            f_map = {}
+        # 值遍全空但公式遍非空 => 整行公式且无任何缓存值
+        seen = {rn for rn, _ in data_rows}
+        for rn, fr in f_map.items():
+            if rn not in seen:
+                fs = [c for c in fr if _is_formula(c)]
+                if fs:
+                    issues.append(("formula_no_cache", rn,
+                                   {"pk": "", "metric": "(整行)",
+                                    "formula": "; ".join(str(x) for x in fs[:3])}))
 
     out = []
-    for rn, r, col_idx in rows:
-        def cell(name):
-            std = cmap.get(name, name)
-            j = col_idx.get(std)
-            if j is None or j >= len(r):
-                return None
-            return r[j]
-        pk_val = cell(pk)
+    for rn, r in data_rows:
+        fr = f_map.get(rn)
+        pk_val = _cell(r, col_idx, cmap, pk)
         pk_val = str(pk_val).strip() if pk_val is not None else ""
         if TOTAL_ROW_RE.match(pk_val):
             issues.append(("total_row_skipped", rn, pk_val))
             continue
         if not pk_val:
+            f_pk = _cell(fr, col_idx, cmap, pk)
+            if _is_formula(f_pk):
+                issues.append(("formula_no_cache", rn,
+                               {"pk": "", "metric": pk, "formula": f_pk}))
             continue
         rec = {"pk": pk_val, "row_num": rn, "metrics": {}}
         for m in metrics:
-            v = cell(m)
-            rec["metrics"][m] = {"raw": v, "num": to_num(v)}
+            v = _cell(r, col_idx, cmap, m)
+            f = _cell(fr, col_idx, cmap, m)
+            num = to_num(v)
+            entry = {"raw": v, "num": num}
+            if _is_formula(f):
+                entry["formula"] = f
+                if num is None:
+                    issues.append(("formula_no_cache", rn,
+                                   {"pk": pk_val, "metric": m, "formula": f}))
+                else:
+                    issues.append(("formula_cached", rn, m))
+            rec["metrics"][m] = entry
         out.append(rec)
     return out, issues
 
@@ -137,6 +188,8 @@ def main():
     per_source = {}
     failed = {}
     skipped_total = []
+    formula_no_cache = []
+    formula_cached = {}
     for spec in sources:
         name = spec.get("source_name") or spec["file"]
         try:
@@ -149,8 +202,15 @@ def main():
             per_source[name] = []
         else:
             per_source[name] = rows
-            for kind, rn, val in issues:
-                skipped_total.append({"source": name, "row": rn, "pk_value": val})
+            for kind, rn, payload in issues:
+                if kind == "total_row_skipped":
+                    skipped_total.append({"source": name, "row": rn, "pk_value": payload})
+                elif kind == "formula_cached":
+                    formula_cached[name] = formula_cached.get(name, 0) + 1
+                elif kind == "formula_no_cache":
+                    entry = {"source": name, "row": rn}
+                    entry.update(payload)
+                    formula_no_cache.append(entry)
 
     if all(not v for v in per_source.values()):
         print(f"ERROR: all sources failed: {failed}", file=sys.stderr)
@@ -182,11 +242,20 @@ def main():
         for m in metrics:
             vals = {}
             for n in names:
-                nums = [r["metrics"][m]["num"] for r in per_source[n] if r["pk"] == p]
-                nums = [x for x in nums if x is not None]
-                raws = [r["metrics"][m]["raw"] for r in per_source[n] if r["pk"] == p]
-                if raws and not nums:
-                    pending.append({"pk": p, "metric": m, "source": n, "raw": [str(x) for x in raws]})
+                nums = []
+                for r in per_source[n]:
+                    if r["pk"] != p:
+                        continue
+                    e = r["metrics"][m]
+                    if e["num"] is not None:
+                        nums.append(e["num"])
+                    elif e.get("formula") is not None:
+                        # 无缓存公式：显式列为待核，不猜不补0，不参与数值比较
+                        pending.append({"pk": p, "metric": m, "source": n,
+                                        "row": r["row_num"], "formula": e["formula"]})
+                    elif e.get("raw") is not None:
+                        pending.append({"pk": p, "metric": m, "source": n,
+                                        "row": r["row_num"], "raw": str(e["raw"])})
                 if nums:
                     vals[n] = nums
             if not vals:
@@ -213,6 +282,7 @@ def main():
     match_rate = round(n_present_all / n_unique, 4) if n_unique else 0.0
 
     # 写 merged.xlsx
+    pending_keys = {(e["pk"], e["metric"], e["source"]) for e in pending}
     wb = Workbook()
     ws = wb.active
     ws.title = "合并汇总"
@@ -221,16 +291,24 @@ def main():
     for p in all_pks:
         row = [p]
         all_consistent = True
+        has_pending = False
         missing = []
         for m in metrics:
             vals = []
             for n in names:
-                nums = [r["metrics"][m]["num"] for r in per_source[n] if r["pk"] == p]
+                nums = [r["metrics"][m]["num"] for r in per_source[n]
+                        if r["pk"] == p and r["metrics"][m]["num"] is not None]
                 if nums:
                     v = nums[0]
-                    vals.append(int(v) if v == int(v) else v)
+                    vals.append(_display_num(v))
                     if len(nums) > 1:
                         all_consistent = False
+                elif (p, m, n) in pending_keys:
+                    has_pending = True
+                    if any(r["metrics"][m].get("formula") for r in per_source[n] if r["pk"] == p):
+                        vals.append("(公式未算)")
+                    else:
+                        vals.append("")
                 else:
                     vals.append("")
             # 一致性判断
@@ -245,7 +323,12 @@ def main():
         for n in names:
             if per_source[n] and not any(r["pk"] == p for r in per_source[n]):
                 missing.append(n)
-        row.append("是" if all_consistent else "否")
+        if not all_consistent:
+            row.append("否")
+        elif has_pending:
+            row.append("待核")
+        else:
+            row.append("是")
         row.append("、".join(missing))
         ws.append(row)
     # 源明细
@@ -253,8 +336,14 @@ def main():
     ws2.append(["来源", pk, "行号"] + metrics)
     for n in names:
         for rec in per_source[n]:
-            ws2.append([n, rec["pk"], rec["row_num"]] +
-                       [rec["metrics"][m]["raw"] for m in metrics])
+            cells = []
+            for m in metrics:
+                e = rec["metrics"][m]
+                if e.get("formula") is not None and e["num"] is None:
+                    cells.append(f"(公式未算){e['formula']}")
+                else:
+                    cells.append(e["raw"])
+            ws2.append([n, rec["pk"], rec["row_num"]] + cells)
     # 重复主键
     ws3 = wb.create_sheet("重复主键")
     ws3.append(["来源", pk, "出现次数", "行号"])
@@ -283,13 +372,20 @@ def main():
         "source_missing": {k: v for k, v in source_missing.items() if v},
         "skipped_total_rows": skipped_total,
         "pending_values": pending,
+        "formula_handling": {
+            "note": "xlsx 公式单元格取来源文件保存时写入的缓存值（静态读值，本工具不重算公式）；无缓存公式的值不参与数值对账，不猜测不补0，逐条列于 no_cache",
+            "cached_cells_per_source": formula_cached,
+            "no_cache": formula_no_cache,
+        },
         "failed_sources": failed,
     }
     with open(args.report, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2, default=str)
     print(json.dumps({"match_stats": report["match_stats"],
                       "mismatch_count": len(mismatches),
-                      "duplicate_groups": len(duplicates)}, ensure_ascii=False))
+                      "duplicate_groups": len(duplicates),
+                      "formula_no_cache": len(formula_no_cache),
+                      "pending": len(pending)}, ensure_ascii=False))
     return 0
 
 
