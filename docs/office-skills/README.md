@@ -10,7 +10,7 @@
 | docx-review-redline | Word 原生批注 + 修订（replace/insert/delete/comment，与既有批注/修订合并） | `apply_review.py` |
 | docx-version-diff | 两版 Word 结构级对比（段落/表格/页眉/分节） | `docx_diff.py` |
 | chinese-official-doc | 中文公文起草 + GB/T 9704 排版（复用 MIT 上游 2.0.33，见 NOTICE.md） | `gbt9704_layout.py` 等 |
-| meeting-minutes-actions | 会议纪要 + 待办追踪（否定式引用不误计/未提及状态原样保留/数字冲突双方保留） | `minutes_actions.py` |
+| meeting-minutes-actions | 会议纪要 + 待办追踪（否定式引用不误计/未提及状态原样保留/数字冲突双方保留；横向 9 列表格+摘要前置） | `minutes_actions.py` |
 | sheet-consolidate-reconcile | 多源表格合并对账（合计行剔除/重复主键明细） | `consolidate.py` |
 | deck-delivery-qa | PPT 交付质检（确定性几何 lint，未渲染显式声明） | `deck_qa.py` |
 | pdf-structured-extract | PDF 结构化提取（表格/稀疏页渲染/数字两轮校验） | `extract_pdf.py` |
@@ -33,7 +33,7 @@
 
 ## 测试
 
-黑盒测试位于 `tests/office_skills/`（58 项，全部通过；金标准为手工推导值，不复用被测实现）：
+黑盒测试位于 `tests/office_skills/`（62 项，全部通过；金标准为手工推导值，不复用被测实现）：
 
 ```
 python -m pytest tests/office_skills -q

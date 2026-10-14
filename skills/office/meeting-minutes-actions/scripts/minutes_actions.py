@@ -26,6 +26,10 @@ import re
 import sys
 
 from docx import Document
+from docx.enum.section import WD_ORIENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt
 from openpyxl import Workbook, load_workbook
 
 LINE_RE = re.compile(r"^\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*([^:：\s]{1,20})[:：]\s*(.*)$")
@@ -48,6 +52,9 @@ NEG_PATTERNS = ["这不是", "并不是", "不是", "并非", "没有讨论", "�
 NOT_DISCUSS_RE = re.compile(r"没有讨论|未讨论|没讨论|没有提到|未提及|没提及|不涉及|未涉及")
 
 HEADER = ["编号", "责任人", "任务", "截止", "状态", "类型", "来源时间戳", "本期是否提及", "备注"]
+# 横向页面下按内容分配列宽（cm），任务/备注最宽，状态/编号等窄列
+COL_WIDTHS_CM = [1.5, 1.8, 7.0, 2.4, 1.6, 1.8, 2.6, 1.8, 5.5]
+TABLE_FONT_PT = 9
 COL_ALIASES = {
     "编号": ["编号", "行动项编号", "ID", "id"],
     "责任人": ["责任人", "负责人"],
@@ -297,6 +304,87 @@ def next_id_factory(prev):
     return make
 
 
+def _landscape(doc):
+    """横向页面：给 9 列表格足够宽度。"""
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    section.left_margin = Cm(1.5)
+    section.right_margin = Cm(1.5)
+    section.top_margin = Cm(1.8)
+    section.bottom_margin = Cm(1.8)
+
+
+def _set_repeat_header(row):
+    """表头行跨页重复（w:tblHeader）。"""
+    trPr = row._tr.get_or_add_trPr()
+    el = OxmlElement("w:tblHeader")
+    el.set(qn("w:val"), "true")
+    trPr.append(el)
+
+
+def _set_cant_split(row):
+    """单行不跨页拆分，避免半行换页。"""
+    trPr = row._tr.get_or_add_trPr()
+    trPr.append(OxmlElement("w:cantSplit"))
+
+
+def _set_cell(cell, text, bold=False):
+    cell.text = ""
+    p = cell.paragraphs[0]
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run("" if text is None else str(text))
+    run.bold = bold
+    run.font.size = Pt(TABLE_FONT_PT)
+
+
+def _build_action_table(doc, all_rows):
+    table = doc.add_table(rows=1 + len(all_rows), cols=len(HEADER))
+    table.style = "Table Grid"
+    table.autofit = False
+    layout = OxmlElement("w:tblLayout")
+    layout.set(qn("w:type"), "fixed")
+    table._tbl.tblPr.append(layout)
+    for j, h in enumerate(HEADER):
+        _set_cell(table.rows[0].cells[j], h, bold=True)
+    _set_repeat_header(table.rows[0])
+    for row in table.rows:
+        _set_cant_split(row)
+    for i, row in enumerate(all_rows, start=1):
+        for j in range(len(HEADER)):
+            _set_cell(table.rows[i].cells[j], row[j])
+    for j, w in enumerate(COL_WIDTHS_CM):
+        table.columns[j].width = Cm(w)
+        for row in table.rows:
+            row.cells[j].width = Cm(w)
+    return table
+
+
+def _summary_lines(carried, all_rows, issues):
+    """会议摘要条目：状态更新、本期新增、未决冲突/待确认（不新增事实）。"""
+    progress, unresolved = [], []
+    for c in carried:
+        if c.get("mentioned") == "是":
+            progress.append("[%s] %s：%s（据 %s）"
+                            % (c["id"], c["task"], c["status"], c.get("source", "")))
+    for row in all_rows:
+        if row[5] == "本期新增":
+            progress.append("[%s] %s（责任人 %s／截止 %s；来源 %s）"
+                            % (row[0], row[2], row[1], row[3], row[6]))
+    for i in issues:
+        if i["type"] == "conflict":
+            unresolved.append("[%s] 数字冲突：%s（双方保留，未核实前不选择、不定稿）"
+                              % (i["where"], " 与 ".join(i["values"])))
+    for row in all_rows:
+        if row[5] == "上期承接" and row[7] == "否":
+            unresolved.append("[%s] %s：本期未提及，维持原状态 %s（来源 %s）"
+                              % (row[0], row[2], row[4], row[6]))
+        elif row[5] == "本期新增" and ("待确认" in row[1] or "待确认" in row[3]):
+            unresolved.append("[%s] %s：责任人/截止待确认（来源 %s）" % (row[0], row[2], row[6]))
+    return progress, unresolved
+
+
 def write_outputs(outdir, actions, decisions, carried, issues):
     os.makedirs(outdir, exist_ok=True)
     make_id = next_id_factory(carried)
@@ -326,6 +414,7 @@ def write_outputs(outdir, actions, decisions, carried, issues):
 
     md = os.path.join(outdir, "minutes.docx")
     doc = Document()
+    _landscape(doc)
     doc.add_heading("会议纪要", level=1)
     doc.add_heading("一、会议结论", level=2)
     if decisions:
@@ -334,13 +423,17 @@ def write_outputs(outdir, actions, decisions, carried, issues):
                               style="List Bullet")
     else:
         doc.add_paragraph("（未识别到明确决议语句）")
+    progress, unresolved = _summary_lines(carried, all_rows, issues)
+    if progress:
+        doc.add_paragraph("本期进展摘要：")
+        for line in progress:
+            doc.add_paragraph(line, style="List Bullet")
+    if unresolved:
+        doc.add_paragraph("未决事项摘要：")
+        for line in unresolved:
+            doc.add_paragraph(line, style="List Bullet")
     doc.add_heading("二、行动项", level=2)
-    table = doc.add_table(rows=1 + len(all_rows), cols=len(HEADER))
-    for j, h in enumerate(HEADER):
-        table.rows[0].cells[j].text = h
-    for i, row in enumerate(all_rows, start=1):
-        for j in range(len(HEADER)):
-            table.rows[i].cells[j].text = str(row[j])
+    _build_action_table(doc, all_rows)
     doc.add_heading("三、待确认事项", level=2)
     pending = [i for i in issues if i["type"] == "conflict"]
     for row in all_rows:

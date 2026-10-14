@@ -31,7 +31,7 @@ python scripts/minutes_actions.py --transcript t.txt [--prev-actions prev.xlsx] 
 
 ## 输出（outdir/）
 
-- `minutes.docx`：会议结论 / 行动项表（与 xlsx 同构）/ 待确认事项（含数字冲突、待确认责任人截止、未提及项）/ 说明
+- `minutes.docx`：一、会议结论（决议句 + **本期进展摘要**与**未决事项摘要**，把完成更新与预算冲突前置，不只埋在表格末尾）/ 二、行动项表 / 三、待确认事项（含数字冲突、待确认责任人截止、未提及项）/ 四、说明。行动项表**横向页面**，按内容分配列宽（任务/备注最宽、状态/编号等窄列），表格字号 9pt，**表头行跨页重复（w:tblHeader）**且单行不跨页拆分。
 - `actions.xlsx`：`待办追踪` 表，9 列见上；承接项未提及时来源为"明确未讨论"语句时间戳或"上期"
 - `asr-issues.json`：number（待核数字）与 conflict（同句冲突，双方保留）清单
 

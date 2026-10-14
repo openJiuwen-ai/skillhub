@@ -12,6 +12,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from helpers import run_script  # noqa: E402
 
 from docx import Document  # noqa: E402
+from docx.enum.section import WD_ORIENT  # noqa: E402
+from docx.oxml.ns import qn  # noqa: E402
+from docx.text.paragraph import Paragraph  # noqa: E402
 from openpyxl import Workbook, load_workbook  # noqa: E402
 
 SKILL = "meeting-minutes-actions"
@@ -42,6 +45,16 @@ def load_rows(path):
 def docx_table(path):
     doc = Document(str(path))
     return [[c.text for c in r.cells] for r in doc.tables[0].rows]
+
+
+def paragraphs_before_first_table(doc):
+    out = []
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:tbl"):
+            break
+        if child.tag == qn("w:p"):
+            out.append(Paragraph(child, doc).text)
+    return out
 
 
 # ---------------------------------------------------------------- 正常场景
@@ -187,6 +200,50 @@ def test_complex_benchmark_frozen_checks(workspace):
     doc = Document(str(workspace / "out" / "minutes.docx"))
     pending_text = "\n".join(p.text for p in doc.paragraphs)
     assert "12万元" in pending_text and "15万元" in pending_text and "09:03" in pending_text
+
+
+def test_complex_layout_readable_and_summary_surfaces_updates(workspace):
+    """版式修复独立验证（对应 native-qa/meeting-minutes-layout-review.json）：
+    横向页面、按内容列宽、合适字号、跨页重复表头、摘要前置冲突/完成更新；
+    同时确认字段、七个行动项及原状态未被改动。"""
+    (workspace / "t.txt").write_text(BENCH_TRANSCRIPT, encoding="utf-8")
+    write_prev(str(workspace / "prev.xlsx"), BENCH_PREV)
+    r = run(workspace, "t.txt", "prev.xlsx")
+    assert r.returncode == 0, r.stderr + r.stdout
+
+    doc = Document(str(workspace / "out" / "minutes.docx"))
+    sec = doc.sections[0]
+    assert sec.orientation == WD_ORIENT.LANDSCAPE
+    assert sec.page_width > sec.page_height  # 横向页面
+
+    table = doc.tables[0]
+    assert len(table.columns) == 9  # 9 列字段保留
+    # 跨页重复表头（w:tblHeader）
+    trPr = table.rows[0]._tr.find(qn("w:trPr"))
+    assert trPr is not None and trPr.find(qn("w:tblHeader")) is not None
+    # 按内容分配列宽：任务列明显宽于 编号/状态 等窄列
+    task_w = table.rows[1].cells[2].width
+    assert task_w is not None and task_w > table.rows[1].cells[4].width
+    assert task_w > table.rows[1].cells[0].width
+    # 表格字号统一为 9pt（可读且小于正文默认）
+    sizes = {run.font.size.pt for row in table.rows for c in row.cells
+             for p in c.paragraphs for run in p.runs if run.font.size}
+    assert sizes == {9.0}
+
+    # 摘要位于行动项表之前：完成更新与预算冲突不再只埋在末尾
+    pre = "\n".join(paragraphs_before_first_table(doc))
+    assert "本期进展摘要" in pre and "[A02]" in pre and "已完成" in pre
+    assert "未决事项摘要" in pre
+    assert "12万元" in pre and "15万元" in pre and "09:03" in pre
+
+    # 内容未被版式改动影响：仍是 7 项，原状态保留
+    rows = load_rows(workspace / "out" / "actions.xlsx")
+    by_id = {r[0]: r for r in rows[1:]}
+    assert len(rows) - 1 == 7
+    assert by_id["A01"][4] == "受阻"
+    assert by_id["A03"][4] == "暂缓"
+    assert by_id["A04"][4] == "已取消"
+    assert docx_table(workspace / "out" / "minutes.docx") == rows
 
 
 # ---------------------------------------------------------------- 异常场景
