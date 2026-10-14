@@ -1,0 +1,2211 @@
+#!/usr/bin/env python3
+"""定位中文正式稿件中的 AI 痕迹、旁白、口语和格式风险。
+
+本脚本只报告风险，不自动改写正文。
+"""
+
+from __future__ import annotations
+
+import argparse
+from bisect import bisect_right
+from collections import deque
+import json
+import re
+import sys
+import zipfile
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Iterable
+from xml.etree import ElementTree
+
+
+@dataclass
+class Finding:
+    path: str
+    line: int
+    severity: str
+    label: str
+    match: str
+    excerpt: str
+
+
+class InputReadError(Exception):
+    """CLI 输入文件无法读取为可用文本时抛出。"""
+
+
+PatternSpec = tuple[str, str, str, str]
+CompiledPattern = tuple[str, str, re.Pattern[str], str]
+
+
+# 对比骨架按全文聚合：同一骨架出现 3 次以上才给一条 low。
+PAIRED_SUMMARY_SKELETONS: list[tuple[str, str]] = [
+    ("不是……而是", r"不是[^。；;\n]{0,80}而是"),
+    ("不仅……还", r"不仅[^。；;\n]{0,80}还"),
+    ("不仅……更是", r"不仅[^。；;\n]{0,80}更是"),
+    ("不但……而且", r"不但[^。；;\n]{0,80}而且"),
+    ("既……又", r"既(?!定|然)[^。；;\n]{0,80}又"),
+    ("一方面……另一方面", r"一方面[^。；;\n]{0,100}另一方面"),
+]
+PAIRED_SUMMARY_ADVICE = "单次出现仅作复核线索；多次出现时核对每处对比是否承担不同信息作用，合并换词重复。"
+
+PATTERNS: list[PatternSpec] = [
+    ("high", "side-commentary", r"本方案重点说明", "删除写作说明，改成方案正文判断。"),
+    ("high", "side-commentary", r"(?:重点|主要)说明[^。！？；;\n]{0,16}(?:用在哪里|用在何处|用在哪些方面|花在哪里|怎么用|如何使用|用来做什么)", "改为具体用途、需求来源或预期效果描述，不复述写作任务。"),
+    ("medium", "side-commentary", r"以下(直接)?列出", "改为正文承接，不写提示语。"),
+    ("medium", "side-commentary", r"本文将从", "改为直接进入结论或事实。"),
+    ("medium", "side-commentary", r"本节主要(介绍|说明)", "改为正文判断。"),
+    ("medium", "side-commentary", r"根据有关资料显示", "核实来源后直接写事实，避免模糊背书。"),
+    ("medium", "side-commentary", r"相关情况如下", "可删除套话，直接进入事项。"),
+    ("medium", "side-commentary", r"需要指出的是", "保留实质内容，删除提示语。"),
+    ("medium", "side-commentary", r"值得注意的是", "保留实质内容，删除提示语。"),
+    ("medium", "side-commentary", r"(?<!不)可以说[，,]", "保留实质判断，删除提示语。"),
+    ("medium", "side-commentary", r"综上所述[，,。：:；;]", "确认是否只是重复上一段；可直接写结论或删除。"),
+    ("medium", "side-commentary", r"为了便于理解", "核对是否为多余的写作旁白；讲解、解说和必要概念说明可保留，不因解释性措辞直接删除。"),
+    ("medium", "side-commentary", r"简单来说", "核对是否为多余的写作旁白；讲解、解说和必要概念说明可保留，不因解释性措辞直接删除。"),
+    ("medium", "side-commentary", r"通俗地说", "核对是否为多余的写作旁白；讲解、解说和必要概念说明可保留，不因解释性措辞直接删除。"),
+    ("medium", "side-commentary", r"可以理解为", "核对是否为多余的写作旁白；讲解、解说和必要概念说明可保留，不因解释性措辞直接删除。"),
+    ("medium", "cost-explainer", r"测算公式|计算公式|单价\s*[×xX*]\s*数量|计算如下", "核对该测算是否用于说明金额依据或响应用户要求；必要的公式及明细保留，精简与本稿用途无关的计算讲解。"),
+    ("medium", "unfinished-placeholder", r"\[[^\]\n]{0,30}(?:具体|待|填写|补充|确认|项目名称|单位名称|金额|日期)[^\]\n]{0,30}\]", "用户指定模板空位、匿名或脱敏内容照留；其他成稿核对是否仍有方括号占位；缺项改为正文外提示。"),
+    ("medium", "unfinished-placeholder", r"(?<![A-Za-z])(?:X{2,}(?![A-Za-z\u4e00-\u9fff])|X+(?:万元|亿元|亿|项|%|％|卡|套|人|次|个|年|月|日|张|台|路|并发))", "用户指定模板空位、匿名或脱敏内容照留；其他成稿核对是否仍有 X/XXXX 类占位；缺项改为正文外提示。"),
+    ("medium", "unfinished-placeholder", r"(?<![A-Za-z])X{2,}(?=[\u4e00-\u9fff])(?!发〔\d{4}〕\d+号)", "用户指定模板空位、匿名或脱敏内容照留；其他成稿核对是否仍有 XX类、XX系统等紧接中文的 X 类占位；缺项改为正文外提示或删去。"),
+    ("medium", "unfinished-placeholder", r"Y{4}年M{1,2}月D{1,2}日?", "用户指定模板空位、匿名或脱敏内容照留；其他成稿核对是否仍有 YYYY年MM月DD日 类占位；缺项改为正文外提示。"),
+    ("medium", "unfinished-placeholder", r"[（(][^）)\n]{0,30}(?:待(?:确认|补充|填写|签发)|签发日期|会议时间|成文日期)[^）)\n]{0,30}[）)]", "用户指定模板空位、匿名或脱敏内容照留；其他成稿核对是否仍有括号占位；缺项改为正文外提示。"),
+    ("medium", "unfinished-placeholder", r"〔(?:签发日期|会议时间|待补充|[^〕\n]{0,20}(?:待|补充|填写|确认)[^〕\n]{0,20})〕", "用户指定模板空位、匿名或脱敏内容照留；其他成稿核对是否仍有未完成占位；缺项改为正文外提示。"),
+    ("high", "thought-leak", r"作为(?:一个)?\s*AI|我是(?:一个)?\s*AI|由\s*AI\s*(?:起草|生成|辅助生成)|(?:本(?:文|稿|报告|方案|材料|说明|函)|该(?:文|稿|报告|方案|说明)|全文|以上内容)[^。\n]{0,6}(?:系|为)?\s*AI\s*(?:辅助)?生成|我的(?:思路|推理|分析)|(?:思考|推理)过程(?:如下|是|：|:)|内部推理", "删除模型身份、思考过程或内部推理表述。"),
+    ("medium", "thought-leak", r"我将根据|接下来我会|按你的要求", "改为文稿正文或办理安排，不暴露生成过程。"),
+    ("medium", "viewpoint-risk", r"(?:按|按照|根据)(?:录音|用户)要求|(?:录音|用户)要求(?:如下|为)|你让我|这版文章|这段文字", "检查是否把外部修改过程写进正文。"),
+    ("medium", "vague-attribution", r"有关方面认为|业内专家指出", "避免模糊背书；补充明确来源或改为材料已给事实。"),
+    ("medium", "casual", r"(?:租赁|购买|外包|自建|采购|模式|方式|方案)[^。！？；;\n]{0,10}(?:更稳|更省|更划算|更实惠|又稳又省)", "按原意分别表述成本与稳定性；例如更省对应成本较低，更稳对应稳定性较好，比较依据另核。"),
+    ("medium", "casual", r"(?:资源|算力|额度|预算|经费|容量|产能|名额)[^。！？；;\n]{0,10}(?:用不完|用不掉|花不完|花不掉|使不完)", "改为阶段性资源余量或资源利用率。"),
+    ("medium", "casual", r"(?i)(?<!去)(?<!降)AI\s*味(?!\s*(?:审校|检测|识别|清理|清洗|词汇|功能|模块|工具|系统))", "核对是否为口语评价；功能名或术语保留，评价按实际的语言问题正式表述，不一概改成表述偏泛。"),
+    ("medium", "casual", r"(?:钱|资金|费用|经费|投入|成本)[^。！？；;\n]{0,10}(?:花得值|花得划算|花得不亏|值不值|划得来|划不划算)", "改为资金使用必要性和预期效果，并保留依据边界。"),
+    ("medium", "casual", r"(?:老板|金主|上头)[^。！？；;\n]{0,10}(?:关心|在意|盯着|催)", "改为相关负责人关注该事项，不无依据升级为领导高度关注。"),
+    ("low", "empty-filler", r"全面赋能", "确认是否有具体机制支撑。"),
+    ("low", "empty-filler", r"提供有力支撑", "确认是否有具体支撑对象、机制或结果。"),
+    ("low", "empty-filler", r"奠定坚实基础", "确认是否有具体基础内容和后续事项。"),
+    ("low", "empty-filler", r"未来可期", "正式材料中通常改为具体预期目标或删去。"),
+    ("low", "empty-filler", r"高度重视", "确认是否有具体部署、责任或行动支撑。"),
+    ("low", "empty-filler", r"充分发挥", "确认后文是否说明发挥方式。"),
+    ("low", "empty-filler", r"不断提升", "确认是否有具体对象或目标。"),
+    ("low", "empty-filler", r"持续推进", "确认是否有具体推进事项、时限或责任。"),
+    ("low", "template-phrase", r"形成一批", "确认是否有明确对象、数量或结果形态。"),
+    ("low", "template-phrase", r"重点任务包括", "避免用一个总括句承接长清单，改为分项任务条款。"),
+    ("low", "template-phrase", r"保障措施包括", "避免泛化清单，改为组织、资金、督导、责任等具体措施。"),
+    ("low", "template-phrase", r"总体看", "确认是否只是过渡填充；可直接写判断。"),
+    ("low", "template-phrase", r"再上新台阶", "改为具体目标、任务或可验收结果。"),
+    (
+        "low",
+        "scene-filler-cluster",
+        r"(?:亲切会见[^。\n]{0,36}合影留念|合影留念[^。\n]{0,36}(?:现场)?气氛(?:十分|非常|格外)?(?:热烈|融洽|活跃|浓厚))",
+        "核对礼仪场景是否来自材料；无事实支撑时删除，材料已明确记载时可保留。",
+    ),
+    (
+        "low",
+        "scene-filler-cluster",
+        r"(?:(?:现场)?气氛(?:十分|非常|格外)?(?:热烈|融洽|活跃|浓厚)|在(?:热烈|融洽|活跃|浓厚)的?气氛中)[^。\n]{0,36}(?:圆满(?:结束|完成)|取得圆满成功|掌声不断|高潮迭起)",
+        "核对氛围与收束描写是否承载材料事实；无事实支撑时删除，已有事实时可保留。",
+    ),
+    ("medium", "ai-compute-vague", r"先进算力", "核对算力评价依据；用材料已有的能力或指标说明，依据缺失时收回空泛评价。"),
+    ("medium", "vague-claim", r"强大平台", "结合稿件语境，用材料已有的具体活动、服务或能力说明平台作用，删去无依据的强度评价。"),
+    ("medium", "vague-claim", r"成本更低", "核对材料中的比较对象、周期和成本口径；依据不足时收回比较结论，实际缺项列入文后提示。"),
+    ("medium", "vague-claim", r"满足未来发展需要", "对照材料中的需求及其依据，写清已有内容支持的作用或预期；缺少依据时删去泛化判断。"),
+]
+
+# 交付态规则按需启用。相同措辞在复核意见中可能合理，因此默认扫描不加载这些规则。
+# 限制“阅读”动作与写稿规则对象之间的局部跨度，避免跨句匹配业务内容。
+READING_PROCESS_CONTEXT_CHARS = 60
+
+DELIVERY_PATTERNS: list[PatternSpec] = [
+    (
+        "medium",
+        "reading-process-narration",
+        r"(?i)^\s*(?:我(?:需要|将|会|准备|先|还要|要)?|让我)(?:先|继续|再)?"
+        r"(?:读取|阅读|查看|查阅|选读)"
+        rf"[^。！？\n]{{0,{READING_PROCESS_CONTEXT_CHARS}}}"
+        r"(?:SKILL\.md|(?:本|该)?(?:Skill|技能)(?:文件|说明|规则)|写作规则|文种(?:的)?规范)",
+        "核对是否为起草者读取写稿规则的过程自述；交付稿件或审核意见，保留有明确来源的业务引语。",
+    ),
+    (
+        "medium",
+        "material-reading-narration",
+        r"(?:从|根据)(?:现有|已有|已给|所给|用户(?:已)?提供的)(?:资料|材料|信息|内容)(?:看|来看)[，,：:]?",
+        "核对这是否是模型对输入的说明；若原材料明确记载调查范围、缺失数据或结论边界，可以保留。",
+    ),
+    (
+        "medium",
+        "material-reading-narration",
+        r"(?:现有|已给|所给|用户(?:已)?提供的|上述)(?:资料|材料|信息|内容)(?:仅|只|未|没有|尚未|不足以|无法)[^。\n]{0,28}(?:反映|说明|提供|支持|明确|确认|判断|形成)",
+        "核对这是否是模型对输入的说明；若属于原材料明确记载的业务、调查或审计边界，可以保留。",
+    ),
+    (
+        "high",
+        "constraint-self-certification",
+        r"(?:不新增原文外事实|不超出(?:已给|现有)?事实|不扩大事实范围|不补造(?:供应商|技术参数|责任|流程|事实|数据))",
+        "删除规则遵循或事实边界自证，只保留正式正文内容。",
+    ),
+    (
+        "medium",
+        "constraint-self-certification",
+        r"(?:本报告|本文|本稿|本说明)(?:仅|只)(?:反映|说明|记录)[^。\n]{0,80}(?:不(?:对|作)|未)[^。\n]{0,60}(?:延伸判断|延伸结论|扩展判断|作出判断)",
+        "核对这是规则自证还是必要的报告范围说明；只有规则自证需要删除。",
+    ),
+    (
+        "medium",
+        "constraint-self-certification",
+        r"不扩大为[^。\n]{0,50}(?:结论|事实|事项|范围)",
+        "核对这是规则自证还是有材料依据的结论范围；只有规则自证需要删除。",
+    ),
+    (
+        "high",
+        "delivery-explanation",
+        r"(?:以下|以上|现)(?:为|提供)(?:根据|按照)?(?:你|用户)(?:的)?要求(?:生成|修改|整理|撰写|压缩|调整)的[^。\n]{0,40}",
+        "删除交付说明，直接输出正文。",
+    ),
+    (
+        "high",
+        "delivery-explanation",
+        r"^(?:(?:以下为|下面是)(?:最终|修订后|修改后|调整后)?(?:正文|稿件|文稿|内容)[：:]?|已(?:按|根据)(?:你|用户)(?:的)?要求(?:完成)?(?:修改|压缩|整理|调整)[^。\n]{0,20}[。.]?)\s*$",
+        "删除交付说明，直接输出正文。",
+    ),
+    (
+        "high",
+        "delivery-explanation",
+        r"^(?:已|已经)(?:按|根据|依照)?[^。\n]{0,100}(?:读取|阅读|选读|核对|复核|整理|修改|压缩|起草|撰写|完成)[^。\n]{0,80}(?:正文|成稿|稿件)(?:如下|为)?[：:]?\s*$",
+        "删除读取、复核或制作过程说明，直接输出正文。",
+    ),
+    (
+        "high",
+        "delivery-explanation",
+        r"^本(?:次|轮)(?:按|根据|依照)?[^。\n]{0,80}(?:读取|阅读|选读|核对|复核|整理|修改|压缩|起草|撰写|完成)[^。\n]{0,80}(?:正文|成稿|稿件)(?:如下|为)?[：:]?\s*$",
+        "删除本次任务的处理过程说明，直接输出正文。",
+    ),
+    (
+        "medium",
+        "delivery-metadata",
+        r"^(?=.*(?:脱敏|修改|修订|定稿|终稿|送审))\s*(?:(?:以下|以上)(?:为|是)|(?:本|该|此)(?:稿|版|版本|文稿)[^。\n]{0,6}(?:为|是)|审核通过[，,：:]?(?:以下|现)(?:为|是))[^。\n]{0,32}(?:版|版本|稿|稿件|文稿|正文)[^。\n]{0,24}[。.]?\s*$",
+        "核对是否为制作版本或交付状态说明；用户明确要求显示的版本或保密标识应保留。",
+    ),
+    (
+        "high",
+        "delivery-metadata",
+        r"(?:这是|以下为|本(?:稿|版|版本|文稿)(?:是|为)?)[^。\n]{0,12}给(?:领导|负责人|审阅人)看的(?:版本|稿子|文稿|材料)",
+        "删除口语化内部受众或分发说明；用户明确要求显示的正式标识应保留。",
+    ),
+    (
+        "high",
+        "delivery-metadata",
+        r"(?:当前|本次|本轮|本|该)(?:数据)?工作流(?:仅作|只作|仅用于|只用于|用于|为)[^。\n]{0,10}(?:只读|内部|门禁|校验|核验|核对)"
+        r"|(?:已|已经|现已)?通过内容门禁[，,：:]?[^。\n]{0,12}(?:可以|可|准予)(?:交付|报送|提交)",
+        "删除内部制作、校验或内容门禁状态。",
+    ),
+    (
+        "medium",
+        "delivery-metadata",
+        r"(?:以下|以上)(?:内容|材料)?[^。\n]{0,8}(?:已|已经)?(?:通过|完成|经过)内部(?:校验|审校)[。.]?\s*$|(?:仅供|供)(?:领导|负责人|内部(?:人员)?)[^。\n]{0,8}(?:审阅|核对)(?:[，,。.]|$)",
+        "核对是否为内部制作或分发说明；材料记载的业务事实和用户要求的正式标识应保留。",
+    ),
+    (
+        "high",
+        "delivery-boilerplate",
+        r"^(?:说明[：:]?)?(?:以上|以下)(?:内容|正文|文稿)?(?:已|已经)?(?:按|根据)(?:你|用户)(?:的)?要求(?:完成)?(?:整理|修改|调整)[^。\n]{0,20}(?:可直接(?:使用|交付)|供审阅)[。.]?\s*$|^(?:方法说明|处理方法|制作说明)[：:][^。\n]{0,24}(?:本稿|本文|文稿|正文)[^。\n]{0,30}(?:核对|调整|修改|整理|生成|编排)(?:事实|结构|表述|格式|内容)",
+        "删除制作、交付或处理方法说明，直接保留成品正文。",
+    ),
+    (
+        "medium",
+        "delivery-boilerplate",
+        r"^[（(]?(?:(?:小字)?说明|免责声明|边界说明)[：:][^。\n]{0,100}(?:仅供参考|不构成(?:正式|法律|专业)?意见|以实际(?:审核|审定|批准|发布)结果为准|不对(?:事实|内容)[^。\n]{0,12}负责)[^。\n]*[。.]?[）)]?\s*$|^(?:以上|上述)(?:说明|解释)[^。\n]{0,40}(?:不再赘述|与正文(?:内容)?一致)[。.]?\s*$",
+        "核对是否为与文种无关的小字结论、免责或边界话术；用户明确要求的声明和材料事实应保留。",
+    ),
+    (
+        "medium",
+        "tool-process-narration",
+        r"^\s*(?:(?=[^\n]{0,240}(?:字数|计数|篇幅|非空白|正文[ \t]*\d+[ \t]*(?:字|字符)))[^\n]{0,240}(?:文稿|语言)?扫描[^。\n]{0,24}(?:通过|完成|无待核线索)|"
+        r"(?:实测口径|字数核验|扫描结果)[：:][^。\n]{0,80}(?:正文|非空白|字符|字数))",
+        "核对是否为起草者的计数或扫描回执；按本轮交付要求去除工具自述，用户要求的实测结果或篇幅未达说明应保留。",
+    ),
+    (
+        "medium",
+        "tool-process-narration",
+        r"^\s*(?:临时稿|内部(?:计数|扫描)(?:用的)?(?:临时)?稿)[^。\n]{0,160}(?:工作目录|\.(?:txt|md)\b)",
+        "核对是否在交付内部临时稿路径；保留用户实际要求的文件链接、业务附件或归档位置。",
+    ),
+    (
+        "high",
+        "english-thought-fragment",
+        r"(?i)^\s*(?:analysis\s*[:：]|reasoning\s*[:：]|we need(?: to)?\b|i need(?: to)?\b|i will\s+(?:draft|write|revise|produce|prepare|review|analy[sz]e|edit|summari[sz]e)\b|let['’]?s\b|the user (?:asked|asks|wants|requested)\b|i should\b|now (?:write|draft|produce)\b|given the (?:user|prompt|materials?|context)\b)[^\n]{0,160}",
+        "删除英文思考残片或模型自述，只保留中文正式正文。",
+    ),
+    (
+        "high",
+        "english-thought-fragment",
+        r"(?i)\bas an ai(?: language)? model\b[^\n]{0,160}",
+        "删除英文模型身份或能力说明，只保留中文正式正文。",
+    ),
+]
+
+# 保护性句尾的局部窗口只用于限制单句匹配范围，不承担全文流程判断。
+PROTECTIVE_DECISION_OBJECT_CHARS = 24
+PROTECTIVE_BASIS_OBJECT_CHARS = 20
+UNRESOLVED_SUBJECT_CHARS = 24
+UNRESOLVED_RESULT_CHARS = 28
+MIN_NEGATIVE_BOUNDARY_TAIL_CHARS = 2
+NEGATIVE_BOUNDARY_TAIL_CHARS = 70
+
+# 终稿正文中的保护性句尾只给语义复核线索，不按单个否定词判错。
+# 两种成稿模式都检查正文；generic/review-only 不加载，允许的文后提示另按提示区规则扫描。
+DRAFT_BODY_PATTERNS: list[PatternSpec] = [
+    (
+        "low",
+        "unfinished-entity-placeholder",
+        r"×{2,}(?:公司|单位)|(?:^|\s)(?:申请人|辞职人|署名)[ \t]*[：:][ \t]*×{2,}",
+        "核对主体或署名是否仍待填写；真实稿按材料补齐或省略，已明确试写时按相容场景补拟保留字段，用户指定的模板、匿名或脱敏照留。",
+    ),
+    (
+        "medium",
+        "unfinished-reason-placeholder",
+        r"(?:^|(?<=[。！？；;，,\"“‘]))[ \t]*(?:现)?"
+        r"(?:(?:因|由于|鉴于)[ \t]*[＿_]{3,}|"
+        r"(?:因|由于|鉴于)?[ \t]*(?:〔(?:延期|申请|具体)?(?:原因|事由|理由|缘由)〕|"
+        r"[（(](?:延期|申请|具体)?(?:原因|事由|理由|缘由)待补[）)]))"
+        r"(?=[ \t]*[，,；;])",
+        "核对原因空位是否为用户指定模板；模板照留，完整申请则按材料补齐或依交付范围处理实质缺项。",
+    ),
+    (
+        "medium",
+        "negative-boundary-tail",
+        r"[，,；;](?:但|但这|这|也|并|同时|并且|而且)?(?:也|并)?"
+        rf"不(?:直接)?(?:代表|等同于|意味着|构成)"
+        rf"[^。！？\n]{{{MIN_NEGATIVE_BOUNDARY_TAIL_CHARS},{NEGATIVE_BOUNDARY_TAIL_CHARS}}}"
+        r"(?=[。！？]|$)",
+        "核对该句是否澄清实际范围、法律含义或决定状态；必要边界保留，精简与本稿用途无关的免责话术。",
+    ),
+]
+
+# 未决与保护性状态句按段落复核：单个独立状态句不报，仅尾部附加或同段重复提示 low。
+PROTECTIVE_STATE_PATTERNS: list[PatternSpec] = [
+    (
+        "low",
+        "protective-negative-inference",
+        r"(?:尚|仍|还|目前)?(?:不能|无法|不足以|不宜)"
+        r"(?:(?:直接)?(?:据此|由此))?"
+        r"(?:(?:直接|充分|准确)地?)?"
+        rf"(?:推定|判断|认定|说明|证明|得出|确定|比较|"
+        rf"形成[^。！？\n]{{0,{PROTECTIVE_DECISION_OBJECT_CHARS}}}(?:结论|决定|意见|安排)|"
+        rf"作为[^。！？\n]{{0,{PROTECTIVE_BASIS_OBJECT_CHARS}}}依据)",
+        "核对该句是否说明必要的证据或结论范围；保留材料和合理分析支持的边界，精简重复解释。",
+    ),
+    (
+        "low",
+        "unresolved-conclusion-tail",
+        rf"(?:尚未|仍未|暂未|还未|尚不|未(?!对|就|经|按|在))[^。！？\n]{{0,{UNRESOLVED_SUBJECT_CHARS}}}"
+        rf"(?:形成|作出)[^。！？\n]{{0,{UNRESOLVED_RESULT_CHARS}}}(?:结论|定论|决定|意见|安排)"
+        r"(?=[。！？]|$)",
+        "结合事项进展核对该句作用；保留必要的待核或未决状态，合并重复限定。",
+    ),
+]
+
+DELIVERY_MODES = ("generic", "draft-body", "review-only", "gap-note-allowed")
+DELIVERY_BODY_ONLY_LABELS = {"delivery-boilerplate"}
+
+# 程序控制阈值集中命名，便于区分“流程判断”与正则内部的局部长度上限。
+EXCERPT_CONTEXT_CHARS = 28
+QUOTE_LOOKAHEAD_LINES = 8
+ATTACHMENT_LOOKBACK_LINES = 5
+FRONTMATTER_METADATA_LOOKAHEAD_LINES = 7
+EXPECTED_THREE_PART_COUNT = 3
+MIN_THREE_PART_ITEM_CHARS = 30
+MIN_TOKEN_SOURCE_CHARS = 12
+DUPLICATE_NGRAM_SIZES = (2, 3)
+MIN_DUPLICATE_PARAGRAPH_CHARS = 60
+MIN_DUPLICATE_SHARED_TOKENS = 18
+MIN_DUPLICATE_TOKEN_RATIO = 0.42
+DUPLICATE_MATCH_PREVIEW_TOKENS = 6
+EXPLANATORY_TAIL_WINDOW_PARAGRAPHS = 5
+EXPLANATORY_TAIL_MIN_MATCHES = 3
+MIN_EXPLANATORY_TAIL_PARAGRAPH_CHARS = 45
+EXPLANATORY_TAIL_MAX_PURPOSE_CHARS = 52
+EXPLANATORY_TAIL_MAX_QUALIFIER_CHARS = 8
+MIN_UNRESOLVED_STATE_CHAIN_ITEMS = 3
+PLAIN_SECTION_HEADING_MAX_CHARS = 32
+TITLE_SCAN_LINES = 12
+MIN_TITLE_CHARS = 4
+MAX_TITLE_CHARS = 90
+PROJECT_CARD_CONSECUTIVE_FIELDS = 3
+PROJECT_CARD_TOTAL_FIELDS = 4
+FREQUENT_LIST_MARKER_COUNT = 8
+CODE_FENCE_MATCH_PREVIEW_CHARS = 20
+ATTACHMENT_NUMBER_ITEM_PATTERN = re.compile(r"^\s*[0-9]+[.)]\s+")
+FENCE_MARKER_PATTERN = re.compile(r"^\s*(`{3,})(?!`)")
+JSON_INDENT = 2
+EXIT_SUCCESS = 0
+EXIT_STRICT_FINDING = 1
+EXIT_INPUT_ERROR = 2
+
+# 扫描输入与 DOCX 读取的资源上限：超限按输入错误处理，不静默截断。
+MAX_SCAN_CHARS = 300_000
+DOCX_MAX_PART_BYTES = 20 * 1024 * 1024
+DOCX_MAX_TOTAL_BYTES = 60 * 1024 * 1024
+DOCX_MAX_COMPRESSION_RATIO = 100
+DOCX_MAX_HEADER_FOOTER_PARTS = 50
+DOCX_DTD_NEEDLES = (
+    b"<!doctype",
+    b"<\x00!\x00d\x00o\x00c\x00t\x00y\x00p\x00e",
+    b"\x00<\x00!\x00d\x00o\x00c\x00t\x00y\x00p\x00e",
+)
+
+# 同名标签的重叠去重只回看最近若干跨度，避免单行命中很多时的二次方检查。
+SPAN_DEDUP_WINDOW = 64
+
+# 结构检查的成对比较预算：超过整篇两两阈值后改用固定滑窗，保持有界。
+DUPLICATE_FULL_PAIRWISE_LIMIT = 200
+DUPLICATE_COMPARE_WINDOW = 20
+
+# 同一数字加单位出现在多个段落时只给结构线索，不判断主旨或事实。
+NUMBER_UNIT_PATTERN = re.compile(
+    r"(?<!\d)\d+(?:\.\d+)?\s?"
+    r"(?:万元|亿元|万|亿|元|%|％|人次|人|次|个|项|套|台|张|份|吨|公斤|平方米|公里|小时|架|辆|批)"
+)
+MIN_NUMBER_PARAGRAPH_REPEATS = 3
+NUMBER_REPEAT_MAX_FINDINGS = 5
+
+# 未决与保护性状态句只在尾部附加或同段重复时提示 low。
+PROTECTIVE_STATE_MIN_PARAGRAPH_MATCHES = 2
+PROTECTIVE_STATE_TAIL_WINDOW_CHARS = 20
+PROTECTIVE_STATE_TAIL_PATTERN = re.compile(
+    r"(?:[，,；;]|但(?:是)?)[^。！？!?\n]{0,12}$"
+)
+
+# 对比骨架聚合：同一骨架出现 3 次以上才给一条 low。
+PAIRED_SKELETON_MIN_COUNT = 3
+
+# 输出到人读终端时统一转义的控制、零宽和双向字符。
+UNSAFE_OUTPUT_PATTERN = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]"
+)
+
+WORD_MAIN_NAMESPACES = {
+    "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}",
+    "{http://purl.oclc.org/ooxml/wordprocessingml/main}",
+}
+
+FORMAT_PATTERNS: list[PatternSpec] = [
+    ("medium", "halfwidth-punctuation", r"[\u4e00-\u9fff][,;:!?][\u4e00-\u9fff]", "中文正文中通常改用全角标点。"),
+    ("low", "number-grouping-comma", r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", "确认正式中文材料中是否应取消千位分隔符。"),
+    ("low", "cn-number-space", r"[\u4e00-\u9fff]\s+\d|\d\s+[\u4e00-\u9fff]", "检查中文和数字之间是否误加空格。"),
+    ("medium", "emoji-marker", r"[\U0001F300-\U0001FAFF]", "正式公文正文避免使用 Emoji。"),
+    (
+        "low",
+        "markdown-bold",
+        (
+            r"(?:\*\*(?!\s)[^*\n]{1,80}?(?<!\s)\*\*"
+            r"|(?<![\w_])__(?!\s)[^_\n]{1,80}?(?<!\s)__(?![\w_]))"
+        ),
+        "正式公文正文不要用 Markdown 加粗标记；改为普通小标题或正文。",
+    ),
+    # 星号分支避开带空白的乘式，下划线分支保留词内标识符。
+    (
+        "low",
+        "markdown-emphasis",
+        (
+            r"(?:(?<!\*)\*(?![\s*])[^*\n]{1,80}?(?<![\s*])\*(?!\*)"
+            r"|(?<![\w_])_(?![\s_])[^_\n]{1,80}?(?<![\s_])_(?![\w_]))"
+        ),
+        "正式公文正文不要用 Markdown 斜体标记；改为普通正文。",
+    ),
+    ("low", "markdown-heading", r"^\s*#{1,6}\s+", "正式公文正文不要用 Markdown 标题标记；改为普通小标题或正文。"),
+    ("low", "western-bullet", r"^\s*(?:[-*+•●◆◇★✅☑]|[0-9]+[.)])\s+", "中文正式正文避免频繁使用西式项目符号或 1. 2. 编号；必要清单可保留。"),
+]
+
+# 面向约 2k-5k 字正式材料的低风险经验线，只提示术语过度集中，不作为硬失败或自动改写依据。
+REPEAT_TERMS: dict[str, int] = {
+    "边界": 4,  # 合规、职责和测算说明常用词，4 次起提示是否重复限定。
+    "底座": 6,  # 技术材料可合理多次出现，阈值高于一般空泛词。
+    "闭环": 4,  # 管理类材料常用词，4 次起提示是否以概念替代措施。
+    "赋能": 3,  # 容易空泛化，3 次起提示是否需要改成具体作用。
+    "生态": 4,  # 产业和平台材料常用词，4 次起提示是否泛化。
+    "抓手": 3,  # 容易变成套话，3 次起提示是否需要改成事项或机制。
+    "矩阵": 3,  # 组织和传播材料常用词，3 次起提示是否堆概念。
+}
+
+# 重复段落检测用的通用低信息词。不要放入“数据、系统、平台、服务、管理、实施、保障”等实义领域词。
+DUPLICATE_GENERIC_TOKENS = {
+    "项目",
+    "工作",
+    "建设",
+    "方案",
+    "情况",
+    "相关",
+    "进行",
+    "通过",
+    "形成",
+    "推进",
+    "落实",
+    "有效",
+    "积极",
+    "全面",
+    "持续",
+    "推动",
+    "完善",
+    "确保",
+}
+
+SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3}
+
+EXPLANATORY_TAIL_PATTERN = re.compile(
+    rf"为[^。！？；\n]{{2,{EXPLANATORY_TAIL_MAX_PURPOSE_CHARS}}}"
+    rf"提供(?:了)?[^。！？；\n]{{0,{EXPLANATORY_TAIL_MAX_QUALIFIER_CHARS}}}"
+    r"(?:基础|依据|支撑|保障|条件)[。！？]?\s*$"
+)
+PLAIN_SECTION_HEADING_PATTERN = re.compile(
+    rf"^(?:[一二三四五六七八九十]+、|第[一二三四五六七八九十0-9]+[章节]|"
+    rf"[（(][一二三四五六七八九十0-9]+[）)])[^。！？；：:]{{0,{PLAIN_SECTION_HEADING_MAX_CHARS}}}$"
+)
+UNRESOLVED_PREDICATE_PATTERN = re.compile(
+    r"(?:尚未|仍未|暂未|还未|未能|尚无|仍无|暂无)\s*(?=[\u4e00-\u9fff])"
+)
+SOURCE_EXCERPT_PREFIX_PATTERN = re.compile(
+    r"^\s*[^：:\n]*(?:原文|原句|引文|引用)(?:如下)?\s*[：:]"
+)
+
+
+def docx_zero_font_finding(
+    path: Path, run: ElementTree.Element, part: str, run_number: int, line: int,
+) -> Finding | None:
+    """只检查有文字运行的直接字号，不展开样式继承或历史格式。"""
+
+    namespace = run.tag.rsplit("}", 1)[0] + "}"
+    if namespace not in WORD_MAIN_NAMESPACES:
+        return None
+    text = "".join(item.text or "" for item in run.findall(f"{namespace}t"))
+    properties = run.find(f"{namespace}rPr")
+    if not text.strip() or properties is None:
+        return None
+    hidden = properties.find(f"{namespace}vanish")
+    if hidden is not None and hidden.get(f"{namespace}val", "true").lower() not in {"0", "false", "off"}:
+        return None
+    if not any(
+        re.fullmatch(r"0+", size.get(f"{namespace}val", "").strip())
+        for size in properties.findall(f"{namespace}sz")
+    ):
+        return None
+    return Finding(
+        path=str(path), line=line, severity="high", label="docx-zero-font-size",
+        match=f"{part} 第 {run_number} 个文本运行：w:sz=0",
+        excerpt=f"{' '.join(text.split())[:80]}｜显式字号为 0（半磅单位），相应字符可能不可见；按模板核对字号并渲染复核。",
+    )
+
+
+def dtd_payload_present(data: bytes) -> bool:
+    """检查 DTD 声明：按 UTF-8/ASCII 与 UTF-16 小端、大端字节形式分别匹配。"""
+
+    lowered = data.lower()
+    return any(needle in lowered for needle in DOCX_DTD_NEEDLES)
+
+
+def read_docx(
+    path: Path, scope: str = "all", *, format_findings: list[Finding] | None = None,
+) -> str:
+    """读取全部检查部件，或仅读取用于正文篇幅统计的主文档。
+
+    读取前检查部件大小、压缩比和解压总量，拒绝含 DTD 的部件；--format 时仅统计
+    批注、修订和隐藏文字数量，不修改文件。
+    """
+
+    pieces: list[str] = []
+    line_number = 1
+    if scope not in {"main-document", "all"}:
+        raise ValueError(f"unsupported DOCX scope: {scope}")
+    total_bytes = 0
+    residue = {"comments": 0, "insertions": 0, "deletions": 0, "hidden": 0}
+    count_residue = format_findings is not None
+    try:
+        with zipfile.ZipFile(path) as zf:
+            part_names = set(zf.namelist())
+            if "word/document.xml" not in part_names:
+                raise InputReadError(f"DOCX 缺少主文档内容: {path}")
+            xml_names = ["word/document.xml"]
+            if scope == "all":
+                note_parts = [
+                    name
+                    for kind in ("header", "footer")
+                    for name in sorted(
+                        name for name in part_names if re.fullmatch(rf"word/{kind}[^/]*\.xml", name)
+                    )
+                ]
+                if len(note_parts) > DOCX_MAX_HEADER_FOOTER_PARTS:
+                    raise InputReadError(f"DOCX 页眉页脚部件过多: {len(note_parts)}")
+                xml_names.extend(note_parts)
+                xml_names.extend((
+                    "word/footnotes.xml", "word/endnotes.xml", "word/comments.xml",
+                ))
+            for name in xml_names:
+                if name not in part_names:
+                    continue
+                info = zf.getinfo(name)
+                if info.file_size > DOCX_MAX_PART_BYTES or (
+                    info.compress_size
+                    and info.file_size / info.compress_size > DOCX_MAX_COMPRESSION_RATIO
+                ):
+                    raise InputReadError(f"DOCX 部件过大或压缩比异常: {name}")
+                total_bytes += info.file_size
+                if total_bytes > DOCX_MAX_TOTAL_BYTES:
+                    raise InputReadError("DOCX 解压总量超过上限")
+                data = zf.read(name)
+                if dtd_payload_present(data):
+                    raise InputReadError(f"DOCX 部件含 DTD，拒绝解析: {name}")
+                root = ElementTree.fromstring(data)
+                run_number = 0
+                for elem in root.iter():
+                    tag = elem.tag.rsplit("}", 1)[-1]
+                    namespace = elem.tag.rsplit("}", 1)[0] + "}" if "}" in elem.tag else ""
+                    if count_residue and namespace in WORD_MAIN_NAMESPACES:
+                        if tag == "ins":
+                            residue["insertions"] += 1
+                        elif tag == "del":
+                            residue["deletions"] += 1
+                        elif tag == "vanish" and elem.get(f"{namespace}val", "true").lower() not in {"0", "false", "off"}:
+                            residue["hidden"] += 1
+                        elif tag == "comment":
+                            residue["comments"] += 1
+                    if tag == "r":
+                        run_number += 1
+                        if format_findings is not None:
+                            finding = docx_zero_font_finding(path, elem, name, run_number, line_number)
+                            if finding is not None:
+                                format_findings.append(finding)
+                    if tag == "t" and elem.text:
+                        pieces.append(elem.text)
+                        line_number += elem.text.count("\n")
+                    elif tag in {"p", "br"}:
+                        pieces.append("\n")
+                        line_number += 1
+                    elif tag == "tab":
+                        pieces.append("\t")
+    except zipfile.BadZipFile as exc:
+        raise InputReadError(f"文件损坏或不是有效 DOCX: {path}") from exc
+    except ElementTree.ParseError as exc:
+        raise InputReadError(f"DOCX 内部 XML 无法解析: {path}") from exc
+    if count_residue and any(residue.values()):
+        details = [
+            f"{label} {residue[key]} 处"
+            for key, label in (
+                ("comments", "批注"), ("insertions", "修订插入"),
+                ("deletions", "修订删除"), ("hidden", "隐藏文字"),
+            )
+            if residue[key]
+        ]
+        format_findings.append(
+            Finding(
+                path=str(path), line=1, severity="low", label="docx-review-residue",
+                match="、".join(details),
+                excerpt="DOCX 中含批注、修订或隐藏文字痕迹；对外报送或公开发布前核对数量并由用户决定处理范围，脚本不自动清除。",
+            )
+        )
+    return "".join(pieces)
+
+
+def read_text(
+    path_arg: str,
+    encoding: str | None,
+    *,
+    docx_scope: str = "all",
+    docx_format_findings: list[Finding] | None = None,
+) -> tuple[str, str]:
+    """读取文本；docx_scope 仅影响 DOCX，默认保持全包检查行为。"""
+
+    if path_arg == "-":
+        return "<stdin>", sys.stdin.read()
+
+    path = Path(path_arg)
+    try:
+        if path.suffix.lower() == ".docx":
+            return str(path), read_docx(path, scope=docx_scope, format_findings=docx_format_findings)
+        raw = path.read_bytes()
+    except InputReadError:
+        raise
+    except FileNotFoundError as exc:
+        raise InputReadError(f"文件不存在: {path}") from exc
+    except PermissionError as exc:
+        raise InputReadError(f"无权限读取文件: {path}") from exc
+    except OSError as exc:
+        raise InputReadError(f"无法读取文件: {path}: {exc}") from exc
+
+    encodings = [encoding] if encoding else ["utf-8-sig", "utf-8", "gb18030"]
+    for enc in encodings:
+        if not enc:
+            continue
+        try:
+            return str(path), raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        except LookupError as exc:
+            raise InputReadError(f"不支持的文本编码: {enc}: {path}") from exc
+    raise InputReadError(f"无法按文本编码解码文件（{', '.join(encodings)}）: {path}")
+
+
+def excerpt(line: str, start: int, end: int) -> str:
+    left = max(0, start - EXCERPT_CONTEXT_CHARS)
+    right = min(len(line), end + EXCERPT_CONTEXT_CHARS)
+    value = line[left:right].strip()
+    return re.sub(r"\s+", " ", value)
+
+
+def printable(value: str) -> str:
+    """把控制、零宽和双向字符转成可见转义，避免人读输出被终端序列利用。"""
+
+    return UNSAFE_OUTPUT_PATTERN.sub(lambda match: f"\\u{ord(match.group()):04x}", value)
+
+
+def inline_code_spans(line: str) -> list[tuple[int, int]]:
+    """返回 Markdown 行内代码范围，供普通豁免和交付残留检查共用。"""
+    spans: list[tuple[int, int]] = []
+    idx = 0
+    while True:
+        left = line.find("`", idx)
+        if left == -1:
+            break
+        right = line.find("`", left + 1)
+        if right == -1:
+            break
+        spans.append((left, right + 1))
+        idx = right + 1
+    return spans
+
+
+def inside_inline_code(line: str, start: int, end: int) -> bool:
+    """匹配内容完全位于 Markdown 行内代码范围时返回 True。"""
+    return any(left <= start and end <= right for left, right in inline_code_spans(line))
+
+
+def quote_positions(line: str, mark: str) -> list[int]:
+    """一次顺序扫描收集某引号在一行内的全部位置，避免逐次回扫后缀。"""
+
+    positions: list[int] = []
+    position = line.find(mark)
+    while position != -1:
+        positions.append(position)
+        position = line.find(mark, position + 1)
+    return positions
+
+
+def next_quote_position(positions: list[int], cursor: int, start: int) -> tuple[int, int]:
+    """在已排序位置表上线性推进游标，返回（位置或 -1，新游标）。"""
+
+    while cursor < len(positions) and positions[cursor] < start:
+        cursor += 1
+    if cursor < len(positions):
+        return positions[cursor], cursor
+    return -1, cursor
+
+
+def quoted_spans_by_line(lines: list[str]) -> list[list[tuple[int, int]]]:
+    """返回各行引文范围；引号位置预计算后按游标推进，单行开销为线性。"""
+
+    pairs = {"“": "”", "‘": "’", '"': '"'}
+    quote_marks = set(pairs) | set(pairs.values())
+    result: list[list[tuple[int, int]]] = []
+    active_close: str | None = None
+    for line_index, line in enumerate(lines):
+        positions = {mark: quote_positions(line, mark) for mark in quote_marks}
+        cursors = {mark: 0 for mark in quote_marks}
+        spans: list[tuple[int, int]] = []
+        idx = 0
+        while idx < len(line):
+            if active_close is not None:
+                right, cursors[active_close] = next_quote_position(
+                    positions[active_close], cursors[active_close], idx
+                )
+                if right == -1:
+                    spans.append((idx, len(line)))
+                    idx = len(line)
+                else:
+                    spans.append((idx, right + 1))
+                    idx = right + 1
+                    active_close = None
+                continue
+
+            candidates: list[tuple[int, str]] = []
+            for mark in pairs:
+                position, cursors[mark] = next_quote_position(positions[mark], cursors[mark], idx)
+                if position != -1:
+                    candidates.append((position, mark))
+            if not candidates:
+                break
+            left, left_mark = min(candidates)
+            close_mark = pairs[left_mark]
+            right, cursors[close_mark] = next_quote_position(
+                positions[close_mark], cursors[close_mark], left + 1
+            )
+            if right == -1:
+                future_close = False
+                for future in lines[line_index + 1 : line_index + 1 + QUOTE_LOOKAHEAD_LINES]:
+                    if not future.strip():
+                        break
+                    if close_mark in future:
+                        future_close = True
+                        break
+                if future_close:
+                    spans.append((left, len(line)))
+                    active_close = close_mark
+                    idx = len(line)
+                else:
+                    idx = left + 1
+            else:
+                spans.append((left, right + 1))
+                idx = right + 1
+        result.append(spans)
+    return result
+
+
+def inside_spans(spans: list[tuple[int, int]], start: int, end: int) -> bool:
+    return any(left <= start and end <= right for left, right in spans)
+
+
+def span_starts(spans: list[tuple[int, int]]) -> list[int]:
+    """取跨度起点列表；跨度按起点有序且互不重叠。"""
+
+    return [left for left, _right in spans]
+
+
+def inside_sorted_spans(
+    spans: list[tuple[int, int]], starts: list[int], start: int, end: int,
+) -> bool:
+    """有序、互不重叠跨度的包含判断；按起点二分定位候选区间。"""
+
+    index = bisect_right(starts, start) - 1
+    return index >= 0 and end <= spans[index][1]
+
+
+def explicitly_attributed_quote(
+    source: ScanSource,
+    line_index: int,
+    start: int,
+    end: int,
+    quoted_spans: list[tuple[int, int]] | None = None,
+    quoted_starts: list[int] | None = None,
+) -> bool:
+    """Only protect the quote opened directly by a source attribution."""
+    spans = quoted_spans if quoted_spans is not None else source.quoted_spans[line_index]
+    if quoted_starts is not None:
+        index = bisect_right(quoted_starts, start) - 1
+        span = spans[index] if index >= 0 and end <= spans[index][1] else None
+    else:
+        span = next((item for item in spans if item[0] <= start and end <= item[1]), None)
+    if span is None:
+        return False
+    left, _right = span
+    origin = line_index
+    # A continued quote has a span beginning at zero; trace that same span
+    # back to its opener rather than inheriting every quote in the paragraph.
+    while origin >= 0:
+        line = source.lines[origin]
+        if left < len(line) and line[left] in {'“', '‘', '"'}:
+            prefix = line[:left]
+            attribution = SOURCE_EXCERPT_PREFIX_PATTERN.match(prefix)
+            return bool(attribution and not prefix[attribution.end():].strip())
+        if left != 0 or origin == 0 or line_index - origin >= QUOTE_LOOKAHEAD_LINES:
+            return False
+        origin -= 1
+        prior = source.quoted_spans[origin]
+        if not prior or prior[-1][1] != len(source.lines[origin]):
+            return False
+        left = prior[-1][0]
+    return False
+
+
+def spans_overlap(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    """两个命中区间存在共同字符时返回 True。"""
+
+    return first[0] < second[1] and second[0] < first[1]
+
+
+class SpanDeduper:
+    """同名标签的重叠去重；只回看最近窗口，保证单行命中很多时开销有界。"""
+
+    def __init__(self) -> None:
+        self._recent: dict[str, deque[tuple[int, int]]] = {}
+
+    def overlaps(self, label: str, span: tuple[int, int]) -> bool:
+        recent = self._recent.get(label)
+        if recent is None:
+            recent = self._recent[label] = deque(maxlen=SPAN_DEDUP_WINDOW)
+        elif any(spans_overlap(span, prior) for prior in recent):
+            return True
+        recent.append(span)
+        return False
+
+
+def attachment_boundary_line(
+    lines: list[str], index: int, boundary: dict[int, int] | None = None,
+) -> int:
+    """返回 index 起向前第一个既非空行也非编号行的行号；无则 -1。
+
+    boundary 按行号缓存回溯结果，连续编号行共享同一终点，避免重复向前走。
+    """
+
+    cursor = index
+    walked: list[int] = []
+    while cursor >= 0:
+        if boundary is not None and cursor in boundary:
+            cursor = boundary[cursor]
+            break
+        line = lines[cursor]
+        if line.strip() and not ATTACHMENT_NUMBER_ITEM_PATTERN.match(line):
+            break
+        walked.append(cursor)
+        cursor -= 1
+    if boundary is not None:
+        for visited in walked:
+            boundary[visited] = cursor
+    return cursor
+
+
+def is_attachment_number_item(
+    lines: list[str], line_index: int, line: str, boundary: dict[int, int] | None = None,
+) -> bool:
+    """附件标题后的数字编号视为合理格式。"""
+    if not ATTACHMENT_NUMBER_ITEM_PATTERN.match(line):
+        return False
+    window = lines[max(0, line_index - ATTACHMENT_LOOKBACK_LINES) : line_index]
+    if any("附件" in item for item in window):
+        return True
+    cursor = attachment_boundary_line(lines, line_index - 1, boundary)
+    return cursor >= 0 and "附件" in lines[cursor]
+
+
+def external_note_heading(line: str) -> re.Match[str] | None:
+    """只识别标准提示标题或明确标注正文外的旧标题，保留普通业务章节。"""
+    heading_prefix = (
+        r"^\s*(?:#{1,6}\s*)?"
+        r"(?P<number>(?:[一二三四五六七八九十百0-9]+[、.．)]\s*)|"
+        r"(?:[（(][一二三四五六七八九十百0-9]+[）)]\s*)|"
+        r"(?:第[一二三四五六七八九十百0-9]+(?:章|节)\s*))?"
+        r"(?:[（(【\[]\s*)?"
+    )
+    heading_end = r"(?=\s*(?:[：:]|[）)】\]]?\s*$))"
+    explicit_note_start = re.compile(
+        heading_prefix
+        + r"(?:文后提示|影响正式报送的待确认事项|待用户确认事项|补充以下信息后(?:，文章会更完整)?|正文外待确认|正文外提示)"
+        + heading_end
+    )
+    marked_legacy_note_start = re.compile(
+        heading_prefix
+        + r"(?:文后提示|待确认事项|风险提醒|核验提示|补充信息|需补充信息|待补充事项|需确认事项)"
+        r"\s*[（(【\[]\s*(?:正文外(?:\s*[，,、]\s*供用户确认)?|供用户确认)\s*[）)】\]]"
+        + heading_end
+    )
+    wrapped_standard_note_start = re.compile(
+        heading_prefix
+        + r"(?P<emphasis>\*{1,3}|_{1,3})文后提示(?P=emphasis)"
+        r"(?:\s*[）)】\]])?\s*[：:]?\s*$"
+    )
+    return (
+        explicit_note_start.search(line)
+        or marked_legacy_note_start.search(line)
+        or wrapped_standard_note_start.search(line)
+    )
+
+
+def fence_marker_length(line: str) -> int:
+    """Return the length of a leading backtick fence marker, or zero."""
+    match = FENCE_MARKER_PATTERN.match(line)
+    return len(match.group(1)) if match else 0
+
+
+def fence_marker_transition(current_length: int | None, line: str) -> tuple[bool, int | None]:
+    """Recognize a fence boundary only when it can open or close the current fence."""
+    marker_length = fence_marker_length(line)
+    if marker_length == 0:
+        return False, current_length
+    if current_length is None:
+        return True, marker_length
+    if marker_length >= current_length:
+        return True, None
+    return False, current_length
+
+
+def body_lines(lines: list[str]) -> list[str]:
+    """返回明确文后提示区之前的正文行；通用章节标题不构成截断依据。"""
+    result: list[str] = []
+    fence_length: int | None = None
+    for line in lines:
+        is_marker, fence_length = fence_marker_transition(fence_length, line)
+        if is_marker:
+            result.append(line)
+            continue
+        if fence_length is None and external_note_heading(line):
+            break
+        result.append(line)
+    return result
+
+
+def is_frontmatter_delimiter(lines: list[str], line_index: int, line: str) -> bool:
+    """扫描 Markdown 源文件时识别 YAML frontmatter 分隔线。"""
+    if line.strip() != "---":
+        return False
+    if line_index == 0:
+        return any(
+            re.match(r"^\s*(?:name|title|description|metadata|version):", item)
+            for item in lines[1 : 1 + FRONTMATTER_METADATA_LOOKAHEAD_LINES]
+        )
+    if lines and lines[0].strip() == "---" and "---" not in [item.strip() for item in lines[1:line_index]]:
+        return any(re.match(r"^\s*(?:name|title|description|metadata|version):", item) for item in lines[1:line_index])
+    return False
+
+
+def frontmatter_delimiter_indices(lines: list[str]) -> set[int]:
+    """一次扫描得到 YAML frontmatter 分隔线行号，避免逐行回看前缀。"""
+
+    result: set[int] = set()
+    if not lines or lines[0].strip() != "---":
+        return result
+    if any(
+        re.match(r"^\s*(?:name|title|description|metadata|version):", item)
+        for item in lines[1 : 1 + FRONTMATTER_METADATA_LOOKAHEAD_LINES]
+    ):
+        result.add(0)
+    for index in range(1, len(lines)):
+        if lines[index].strip() != "---":
+            continue
+        if any(re.match(r"^\s*(?:name|title|description|metadata|version):", item) for item in lines[1:index]):
+            result.add(index)
+        break
+    return result
+
+
+def supported_three_part_listing(snippet: str) -> bool:
+    parts = re.split(
+        r"一是|二是|三是",
+        snippet,
+        maxsplit=EXPECTED_THREE_PART_COUNT,
+    )
+    if len(parts) < EXPECTED_THREE_PART_COUNT + 1:
+        return False
+    for part in parts[1 : EXPECTED_THREE_PART_COUNT + 1]:
+        content = re.split(r"；|。|\n", part, maxsplit=1)[0]
+        compact = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", content)
+        if len(compact) < MIN_THREE_PART_ITEM_CHARS:
+            return False
+    return True
+
+
+def paragraph_blocks(lines: list[str]) -> list[tuple[int, str, int]]:
+    blocks: list[tuple[int, str, int]] = []
+    current: list[str] = []
+    start_line = 1
+    section_id = 0
+    fence_length: int | None = None
+
+    def flush_current() -> None:
+        nonlocal current
+        if current:
+            blocks.append((start_line, "\n".join(current), section_id))
+            current = []
+
+    for idx, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        is_marker, fence_length = fence_marker_transition(fence_length, line)
+        if is_marker:
+            flush_current()
+            section_id += 1
+            continue
+        if fence_length is not None:
+            continue
+        if not stripped:
+            flush_current()
+            continue
+        if stripped.startswith(("#", "|")):
+            flush_current()
+            section_id += 1
+            continue
+        if re.match(r"^\s*(?:[-*]|\d+[.)、])\s+", stripped):
+            flush_current()
+            continue
+        if not current:
+            start_line = idx
+        current.append(stripped)
+    flush_current()
+    return blocks
+
+
+def content_tokens(text: str) -> set[str]:
+    compact = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", text)
+    if len(compact) < MIN_TOKEN_SOURCE_CHARS:
+        return set()
+    tokens = {
+        compact[index : index + size]
+        for size in DUPLICATE_NGRAM_SIZES
+        for index in range(len(compact) - size + 1)
+    }
+    return {token for token in tokens if token not in DUPLICATE_GENERIC_TOKENS}
+
+
+def duplicate_findings(path_label: str, lines: list[str]) -> list[Finding]:
+    """同节内比对重复事项；整篇两两比较有上限，超长稿改用固定滑窗保持有界。"""
+
+    prepared: list[tuple[int, str, int, set[str]]] = []
+    for line_no, text, section in paragraph_blocks(lines):
+        if len(text) < MIN_DUPLICATE_PARAGRAPH_CHARS:
+            continue
+        tokens = content_tokens(text)
+        if tokens:
+            prepared.append((line_no, text, section, tokens))
+    if len(prepared) <= DUPLICATE_FULL_PAIRWISE_LIMIT:
+        pairs = (
+            (first, second)
+            for first in range(len(prepared))
+            for second in range(first + 1, len(prepared))
+        )
+    else:
+        pairs = (
+            (first, second)
+            for second in range(len(prepared))
+            for first in range(max(0, second - DUPLICATE_COMPARE_WINDOW), second)
+        )
+    best: dict[int, tuple[float, int, set[str]]] = {}
+    for first, second in pairs:
+        prev_line, _prev_text, prev_section, prev_tokens = prepared[first]
+        line_no, _text, section, tokens = prepared[second]
+        if section != prev_section:
+            continue
+        shared = prev_tokens & tokens
+        if len(shared) < MIN_DUPLICATE_SHARED_TOKENS:
+            continue
+        union = prev_tokens | tokens
+        ratio = len(shared) / len(union)
+        if ratio < MIN_DUPLICATE_TOKEN_RATIO:
+            continue
+        current = best.get(second)
+        if current is None or ratio > current[0]:
+            best[second] = (ratio, first, shared)
+    findings: list[Finding] = []
+    for second, (_ratio, first, shared) in sorted(best.items()):
+        prev_line = prepared[first][0]
+        line_no = prepared[second][0]
+        gap = second - first - 1
+        distance = "相邻段" if gap == 0 else f"中间隔 {gap} 段"
+        findings.append(
+            Finding(
+                path=path_label,
+                line=line_no,
+                severity="medium",
+                label="adjacent-duplicate-matter",
+                match=";".join(sorted(shared)[:DUPLICATE_MATCH_PREVIEW_TOKENS]),
+                excerpt=f"与前面约第 {prev_line} 行（{distance}）事项重叠较高；检查是否为同一组事实多处回说。",
+            )
+        )
+    return findings
+
+
+def is_plain_section_heading(text: str) -> bool:
+    """识别不带 Markdown 标记的中文章节标题。"""
+
+    compact = re.sub(r"\s+", "", text)
+    return bool(PLAIN_SECTION_HEADING_PATTERN.fullmatch(compact))
+
+
+def explanatory_tail_cluster_findings(path_label: str, lines: list[str]) -> list[Finding]:
+    """定位相邻事项段反复以“为……提供……”解释作用的结构。"""
+
+    findings: list[Finding] = []
+    window: list[tuple[int, re.Match[str] | None]] = []
+    current_section: int | None = None
+
+    for line_no, text, section_id in paragraph_blocks(lines):
+        if current_section != section_id:
+            current_section = section_id
+            window = []
+
+        compact = re.sub(r"\s+", "", text)
+        if is_plain_section_heading(compact):
+            window = []
+            continue
+        if len(compact) < MIN_EXPLANATORY_TAIL_PARAGRAPH_CHARS:
+            continue
+
+        window.append((line_no, EXPLANATORY_TAIL_PATTERN.search(compact)))
+        if len(window) > EXPLANATORY_TAIL_WINDOW_PARAGRAPHS:
+            window.pop(0)
+
+        matches = [(item_line, match) for item_line, match in window if match is not None]
+        if len(matches) < EXPLANATORY_TAIL_MIN_MATCHES:
+            continue
+
+        match_lines = [str(item_line) for item_line, _ in matches]
+        last_line, last_match = matches[-1]
+        assert last_match is not None
+        findings.append(
+            Finding(
+                path=path_label,
+                line=last_line,
+                severity="low",
+                label="explanatory-tail-cluster",
+                match=last_match.group(0),
+                excerpt=(
+                    f"最近 {len(window)} 个实质段中有 {len(matches)} 个使用同类解释性句尾"
+                    f"（约第 { '、'.join(match_lines) } 行）；检查是否反复补充意义或用途，"
+                    "各句确有独立事实作用时可保留。"
+                ),
+            )
+        )
+        # 一个成簇区间只提示一次；后续段落重新累计，避免相邻滑窗重复报警。
+        window = []
+
+    return findings
+
+
+def duplicate_title_findings(path_label: str, lines: list[str]) -> list[Finding]:
+    """定位交付稿开头附近逐字重复的标题。"""
+    title_ending = re.compile(
+        r"(?:通知|通告|报告|请示|函|意见|决定|方案|说明|纪要|公告|公示|通报)(?:[（(][^）)\n]{1,20}[）)])?$"
+    )
+    nonempty = [
+        (line_no, re.sub(r"\s+", "", line))
+        for line_no, line in enumerate(lines[:TITLE_SCAN_LINES], start=1)
+        if line.strip()
+    ]
+    for index in range(1, len(nonempty)):
+        previous_line, previous = nonempty[index - 1]
+        line_no, current = nonempty[index]
+        if (
+            current != previous
+            or not MIN_TITLE_CHARS <= len(current) <= MAX_TITLE_CHARS
+            or not title_ending.search(current)
+        ):
+            continue
+        return [
+            Finding(
+                path=path_label,
+                line=line_no,
+                severity="high",
+                label="duplicate-title",
+                match=current,
+                excerpt=f"与第 {previous_line} 行标题重复；成品正文只保留一次标题。",
+            )
+        ]
+    return []
+
+
+def protective_tail_context(text: str, start: int) -> bool:
+    """判断匹配是否位于逗号或“但”之后的尾部附加句。
+
+    尾部模式最多 12 字加标记，取匹配前 20 字窗口即可；窗口内的句末标点由
+    字符类自然排除，不做前缀回扫。
+    """
+
+    window = text[max(0, start - PROTECTIVE_STATE_TAIL_WINDOW_CHARS):start]
+    return bool(PROTECTIVE_STATE_TAIL_PATTERN.search(window))
+
+
+def state_paragraph_blocks(lines: list[str]) -> list[tuple[int, str]]:
+    """未决状态句的段落视图：空行分段，跳过代码围栏，保留列表项和标题行。"""
+
+    blocks: list[tuple[int, str]] = []
+    current: list[str] = []
+    start = 1
+    fence_length: int | None = None
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            blocks.append((start, "\n".join(current)))
+            current = []
+
+    for index, line in enumerate(lines, start=1):
+        is_marker, fence_length = fence_marker_transition(fence_length, line)
+        if is_marker or fence_length is not None:
+            flush()
+            continue
+        if not line.strip():
+            flush()
+            continue
+        if not current:
+            start = index
+        current.append(line.strip())
+    flush()
+    return blocks
+
+
+def protective_state_findings(path_label: str, source: ScanSource) -> list[Finding]:
+    """未决或保护性状态句：单句不报，尾部附加或同段重复才提示 low。"""
+
+    compiled = [
+        (severity, label, re.compile(pattern), advice)
+        for severity, label, pattern, advice in PROTECTIVE_STATE_PATTERNS
+    ]
+    findings: list[Finding] = []
+    for block_start, block_text in state_paragraph_blocks(source.lines_to_scan):
+        matches: list[tuple[int, CompiledPattern, re.Match[str]]] = []
+        newline_positions = [
+            position for position, character in enumerate(block_text) if character == "\n"
+        ]
+        for pattern in compiled:
+            _severity, label, regex, _advice = pattern
+            for match in regex.finditer(block_text):
+                matches.append((match.start(), pattern, match))
+        if not matches:
+            continue
+        matches.sort(key=lambda item: item[0])
+        distinct_states = 0
+        covered_end = -1
+        for start, _pattern, match in matches:
+            if start >= covered_end:
+                distinct_states += 1
+            covered_end = max(covered_end, match.end())
+        repeated = distinct_states >= PROTECTIVE_STATE_MIN_PARAGRAPH_MATCHES
+        for start, pattern, match in matches:
+            if not repeated and not protective_tail_context(block_text, start):
+                continue
+            severity, label, _regex, advice = pattern
+            findings.append(
+                Finding(
+                    path=path_label,
+                    line=block_start + bisect_right(newline_positions, start - 1),
+                    severity=severity,
+                    label=label,
+                    match=match.group(0),
+                    excerpt=f"{excerpt(block_text, match.start(), match.end())} | {advice}",
+                )
+            )
+    return findings
+
+
+def project_card_findings(path_label: str, lines: list[str]) -> list[Finding]:
+    """定位连续字段行形成的项目卡片式摘要。"""
+
+    findings: list[Finding] = []
+    card_pattern = re.compile(r"^\s*(?:[-*]\s*)?(?:项目名称|项目单位|建设单位|实施单位|采购单位|建设周期|实施周期|服务期限|建设内容|采购内容|服务内容|总投资|预算金额|经费预算|资金来源|项目地点)\s*[：:]")
+    streak = 0
+    streak_start = 1
+    total = 0
+    first_line = 1
+    for line_no, line in enumerate(lines, start=1):
+        if card_pattern.search(line):
+            if streak == 0:
+                streak_start = line_no
+            streak += 1
+            total += 1
+            if total == 1:
+                first_line = line_no
+            if streak == PROJECT_CARD_CONSECUTIVE_FIELDS:
+                findings.append(
+                    Finding(
+                        path=path_label,
+                        line=streak_start,
+                        severity="low",
+                        label="project-card-summary",
+                        match="card-fields",
+                        excerpt="连续字段行使摘要或项目概况像项目卡片；必要时改为连续正式正文。",
+                    )
+                )
+        elif line.strip():
+            streak = 0
+    if total >= PROJECT_CARD_TOTAL_FIELDS and not any(
+        item.label == "project-card-summary" for item in findings
+    ):
+        findings.append(
+            Finding(
+                path=path_label,
+                line=first_line,
+                severity="low",
+                label="project-card-summary",
+                match="card-fields",
+                excerpt="字段行较多，检查摘要或项目概况是否像项目卡片。",
+            )
+        )
+
+    return findings
+
+
+def necessity_listing_findings(path_label: str, text: str) -> list[Finding]:
+    """定位必要性章节中缺少事实支撑的三段式罗列。"""
+
+    match = re.search(
+        r"(?:^|\n)\s*(?:[一二三四五六七八九十]+、)?[^。\n]{0,18}必要性[^。\n]*(?:\n|$)"
+        r"[\s\S]{0,700}一是[\s\S]{0,220}二是[\s\S]{0,220}三是[\s\S]{0,220}",
+        text,
+    )
+    if match and not supported_three_part_listing(match.group(0)):
+        line = text[: match.start()].count("\n") + 1
+        return [
+            Finding(
+                path=path_label,
+                line=line,
+                severity="medium",
+                label="necessity-listing",
+                match="一是/二是/三是",
+                excerpt="必要性章节像论点罗列；必要时补足事实依据、工作影响和事项落点。",
+            )
+        ]
+    return []
+
+
+def structured_smell_findings(path_label: str, text: str, lines: list[str]) -> list[Finding]:
+    """汇总彼此独立的结构异味检查。"""
+
+    return (
+        project_card_findings(path_label, lines)
+        + necessity_listing_findings(path_label, text)
+        + explanatory_tail_cluster_findings(path_label, lines)
+    )
+
+
+@dataclass(frozen=True)
+class ScanSource:
+    """一次扫描中保持不变的文本视图。"""
+
+    lines: list[str]
+    body_only_lines: list[str]
+    lines_to_scan: list[str]
+    text_to_scan: str
+    quoted_spans: list[list[tuple[int, int]]]
+
+
+@dataclass(frozen=True)
+class CompiledPatternSets:
+    """按使用阶段分组的已编译规则，避免用一个万能字典跨阶段传递。"""
+
+    primary: list[CompiledPattern]
+    delivery_absolute: list[CompiledPattern]
+    delivery_fence: list[CompiledPattern]
+
+
+def prepare_scan_source(text: str, delivery_mode: str) -> ScanSource:
+    """建立正文、正文外区域和引文范围等稳定视图。"""
+
+    lines = text.splitlines() or [text]
+    body_only = body_lines(lines)
+    lines_to_scan = lines if delivery_mode in {"draft-body", "review-only"} else body_only
+    return ScanSource(
+        lines=lines,
+        body_only_lines=body_only,
+        lines_to_scan=lines_to_scan,
+        text_to_scan="\n".join(lines_to_scan),
+        quoted_spans=quoted_spans_by_line(lines),
+    )
+
+
+def compile_patterns(patterns: Iterable[PatternSpec]) -> list[CompiledPattern]:
+    """统一编译规则，保持规则原有顺序。"""
+
+    return [
+        (severity, label, re.compile(pattern), advice)
+        for severity, label, pattern, advice in patterns
+    ]
+
+
+def prepare_pattern_sets(
+    include_format: bool,
+    delivery_mode: str,
+    allow_markdown: bool = False,
+) -> CompiledPatternSets:
+    """按通用扫描、交付区扫描和代码围栏扫描准备规则。"""
+
+    stage_patterns = DRAFT_BODY_PATTERNS if delivery_mode in {"draft-body", "gap-note-allowed"} else []
+    format_patterns = FORMAT_PATTERNS if include_format else []
+    if allow_markdown:
+        format_patterns = [
+            item
+            for item in format_patterns
+            if item[1] not in {"markdown-bold", "markdown-emphasis", "markdown-heading"}
+        ]
+        format_patterns = [
+            (severity, label, r"^\s*[•●◆◇★✅☑]\s+", advice)
+            if label == "western-bullet" else (severity, label, pattern, advice)
+            for severity, label, pattern, advice in format_patterns
+        ]
+    primary_patterns = PATTERNS + format_patterns
+    if delivery_mode in {"draft-body", "gap-note-allowed"}:
+        primary_patterns += DELIVERY_PATTERNS
+    primary_patterns += stage_patterns
+
+    absolute_patterns = [
+        item
+        for item in PATTERNS
+        if item[1] in {"thought-leak", "viewpoint-risk", "side-commentary"}
+    ]
+    absolute_patterns += [
+        item
+        for item in DELIVERY_PATTERNS
+        if item[1] != "material-reading-narration" and item[1] not in DELIVERY_BODY_ONLY_LABELS
+    ]
+    fence_patterns = [
+        item
+        for item in PATTERNS
+        if item[1] in {"thought-leak", "viewpoint-risk", "side-commentary"}
+    ] + DELIVERY_PATTERNS + stage_patterns
+    return CompiledPatternSets(
+        primary=compile_patterns(primary_patterns),
+        delivery_absolute=compile_patterns(absolute_patterns),
+        delivery_fence=compile_patterns(fence_patterns),
+    )
+
+
+def finding_from_match(
+    path_label: str,
+    line_no: int,
+    line: str,
+    pattern: CompiledPattern,
+    match: re.Match[str],
+) -> Finding:
+    """把一次正则命中转换为稳定的 Finding。"""
+
+    severity, label, _regex, advice = pattern
+    return Finding(
+        path=path_label,
+        line=line_no,
+        severity=severity,
+        label=label,
+        match=match.group(0),
+        excerpt=f"{excerpt(line, match.start(), match.end())} | {advice}",
+    )
+
+
+def unexpected_external_note_findings(
+    path_label: str,
+    source: ScanSource,
+    delivery_mode: str,
+) -> list[Finding]:
+    """只交付正文时，定位正文后仍残留的说明区。"""
+
+    if delivery_mode != "draft-body" or len(source.body_only_lines) >= len(source.lines):
+        return []
+    note_line = len(source.body_only_lines) + 1
+    return [
+        Finding(
+            path=path_label,
+            line=note_line,
+            severity="high",
+            label="unexpected-external-note",
+            match=source.lines[note_line - 1].strip(),
+            excerpt="只交付正文的模式不应附待确认、风险、自证或其他正文外说明。",
+        )
+    ]
+
+
+def external_note_boundary_findings(
+    path_label: str,
+    source: ScanSource,
+    delivery_mode: str,
+    allow_markdown: bool = False,
+) -> list[Finding]:
+    """允许文后提示时，检查提示没有黏入正文结构。"""
+
+    if delivery_mode != "gap-note-allowed" or len(source.body_only_lines) >= len(source.lines):
+        return []
+    note_index = len(source.body_only_lines)
+    note_line = note_index + 1
+    heading = source.lines[note_index].strip()
+    findings: list[Finding] = []
+    note_heading = external_note_heading(heading)
+    if note_heading is not None and note_heading.group("number"):
+        findings.append(
+            Finding(
+                path=path_label,
+                line=note_line,
+                severity="high",
+                label="external-note-boundary",
+                match=heading,
+                excerpt="正文外提示不得沿用正文层级序号；完整结束正文后另起无编号提示标题。",
+            )
+        )
+    if note_index > 0 and source.lines[note_index - 1].strip():
+        findings.append(
+            Finding(
+                path=path_label,
+                line=note_line,
+                severity="high",
+                label="external-note-boundary",
+                match=heading,
+                excerpt="正文与文后提示之间应保留空行，避免提示黏入正文末段。",
+            )
+        )
+    prior_nonempty = next(
+        (line.strip() for line in reversed(source.lines[:note_index]) if line.strip()),
+        "",
+    )
+    if re.fullmatch(r"-{3,}", prior_nonempty) and not allow_markdown:
+        findings.append(
+            Finding(
+                path=path_label,
+                line=note_line,
+                severity="high",
+                label="external-note-boundary",
+                match=prior_nonempty,
+                excerpt="正文外提示使用独立标题和空行分区，不用 Markdown 横线包装。",
+            )
+        )
+    return findings
+
+
+def postscript_heading_format_findings(path_label: str, source: ScanSource) -> list[Finding]:
+    """提示区独立分离后仍提示标准标题的 Markdown 包装。"""
+    note_index = len(source.body_only_lines)
+    if note_index >= len(source.lines):
+        return []
+    heading = source.lines[note_index]
+    findings: list[Finding] = []
+    emphasis = re.search(r"(?P<mark>\*{1,3}|_{1,3})文后提示(?P=mark)", heading)
+    markdown_heading = re.match(r"^\s*#{1,6}\s*", heading)
+    for match, label in (
+        (emphasis, "markdown-bold" if emphasis and len(emphasis.group("mark")) > 1 else "markdown-emphasis"),
+        (markdown_heading, "markdown-heading"),
+    ):
+        if match:
+            findings.append(
+                Finding(
+                    path=path_label,
+                    line=note_index + 1,
+                    severity="low",
+                    label=label,
+                    match=match.group(0),
+                    excerpt="文后提示标题使用普通文本，去掉 Markdown 加粗、斜体或标题标记。",
+                )
+            )
+    return findings
+
+
+def fence_findings(
+    path_label: str,
+    line_no: int,
+    line: str,
+    patterns: list[CompiledPattern],
+) -> list[Finding]:
+    """在代码围栏内部按指定规则扫描；围栏本身由上层处理。"""
+
+    findings: list[Finding] = []
+    seen = SpanDeduper()
+    for pattern in patterns:
+        _severity, label, regex, _advice = pattern
+        for match in regex.finditer(line):
+            span = (match.start(), match.end())
+            if seen.overlaps(label, span):
+                continue
+            findings.append(finding_from_match(path_label, line_no, line, pattern, match))
+    return findings
+
+
+def plain_line_findings(
+    path_label: str,
+    source: ScanSource,
+    line_index: int,
+    line: str,
+    patterns: list[CompiledPattern],
+    delivery_mode: str,
+    attachment_boundary: dict[int, int] | None = None,
+) -> list[Finding]:
+    """扫描普通正文行，并处理引用、附件编号和检查依据例外。"""
+
+    findings: list[Finding] = []
+    seen = SpanDeduper()
+    inline_spans = inline_code_spans(line)
+    inline_starts = span_starts(inline_spans)
+    quoted_spans = source.quoted_spans[line_index]
+    quoted_starts = span_starts(quoted_spans)
+    for pattern in patterns:
+        _severity, label, regex, _advice = pattern
+        for match in regex.finditer(line):
+            if inside_sorted_spans(inline_spans, inline_starts, match.start(), match.end()):
+                continue
+            if delivery_mode == "review-only" and inside_sorted_spans(
+                quoted_spans, quoted_starts, match.start(), match.end()
+            ):
+                continue
+            if label == "reading-process-narration" and inside_sorted_spans(
+                quoted_spans, quoted_starts, match.start(), match.end()
+            ):
+                continue
+            if label == "unfinished-reason-placeholder" and explicitly_attributed_quote(
+                source, line_index, match.start(), match.end(), quoted_spans, quoted_starts
+            ):
+                continue
+            if label == "unfinished-entity-placeholder":
+                context = "\n".join(source.lines[max(0, line_index - 1):line_index + 1])
+                if inside_sorted_spans(quoted_spans, quoted_starts, match.start(), match.end()):
+                    continue
+                if re.search(r"脱敏|匿名|化名|隐去|模板|保留占位", context):
+                    continue
+            if label == "western-bullet" and is_attachment_number_item(
+                source.lines, line_index, line, attachment_boundary
+            ):
+                continue
+            span = (match.start(), match.end())
+            if seen.overlaps(label, span):
+                continue
+            findings.append(finding_from_match(path_label, line_index + 1, line, pattern, match))
+    return findings
+
+
+def format_marker_findings(
+    path_label: str,
+    lines: list[str],
+    line_index: int,
+    line: str,
+    allow_markdown: bool = False,
+    frontmatter_lines: set[int] | None = None,
+) -> list[Finding]:
+    """定位代码围栏和 Markdown 横线；不处理围栏内部正文。"""
+
+    if allow_markdown:
+        return []
+    line_no = line_index + 1
+    stripped = line.strip()
+    if fence_marker_length(line):
+        return [
+            Finding(
+                path=path_label,
+                line=line_no,
+                severity="low",
+                label="markdown-code-fence",
+                match=stripped[:CODE_FENCE_MATCH_PREVIEW_CHARS],
+                excerpt="正式公文正文不要用 Markdown 代码块包裹；交付正文应直接呈现。",
+            )
+        ]
+    if re.fullmatch(r"\s*-{3,}\s*", line) and not (
+        line_index in frontmatter_lines
+        if frontmatter_lines is not None
+        else is_frontmatter_delimiter(lines, line_index, line)
+    ):
+        return [
+            Finding(
+                path=path_label,
+                line=line_no,
+                severity="low",
+                label="markdown-horizontal-rule",
+                match=stripped,
+                excerpt="正式公文正文和改稿说明之间不要用 Markdown 横线 `---` 分隔；需要说明时用简短正文外提示。",
+            )
+        ]
+    return []
+
+
+def primary_line_findings(
+    path_label: str,
+    source: ScanSource,
+    pattern_sets: CompiledPatternSets,
+    include_format: bool,
+    delivery_mode: str,
+    allow_markdown: bool = False,
+    attachment_boundary: dict[int, int] | None = None,
+) -> list[Finding]:
+    """完成正文逐行扫描；不承担正文外复核和全文统计。"""
+
+    findings: list[Finding] = []
+    inline_patterns = pattern_sets.delivery_absolute + [
+        pattern for pattern in pattern_sets.primary if pattern[1] in DELIVERY_BODY_ONLY_LABELS
+    ]
+    frontmatter_lines = frontmatter_delimiter_indices(source.lines_to_scan) if include_format else None
+    fence_length: int | None = None
+    for line_index, line in enumerate(source.lines_to_scan):
+        line_no = line_index + 1
+        is_marker, fence_length = fence_marker_transition(fence_length, line)
+        if is_marker:
+            if include_format:
+                findings.extend(
+                    format_marker_findings(
+                        path_label,
+                        source.lines_to_scan,
+                        line_index,
+                        line,
+                        allow_markdown=allow_markdown,
+                        frontmatter_lines=frontmatter_lines,
+                    )
+                )
+            continue
+        if include_format:
+            findings.extend(
+                format_marker_findings(
+                    path_label,
+                    source.lines_to_scan,
+                    line_index,
+                    line,
+                    allow_markdown=allow_markdown,
+                    frontmatter_lines=frontmatter_lines,
+                )
+            )
+        if fence_length is not None:
+            patterns = pattern_sets.primary if include_format else []
+            if not include_format and delivery_mode in {"draft-body", "gap-note-allowed"}:
+                patterns = pattern_sets.delivery_fence
+            findings.extend(fence_findings(path_label, line_no, line, patterns))
+            continue
+        findings.extend(
+            plain_line_findings(
+                path_label,
+                source,
+                line_index,
+                line,
+                pattern_sets.primary,
+                delivery_mode,
+                attachment_boundary,
+            )
+        )
+        if delivery_mode in {"draft-body", "gap-note-allowed"} and line_index < len(source.body_only_lines):
+            # 行内代码保留普通技术内容豁免；已知身份、推理和制作残留仍给出复核线索。
+            for left, right in inline_code_spans(line):
+                findings.extend(
+                    fence_findings(path_label, line_no, line[left + 1 : right - 1], inline_patterns)
+                )
+    return findings
+
+
+def delivery_section_findings(
+    path_label: str,
+    source: ScanSource,
+    patterns: list[CompiledPattern],
+    delivery_mode: str,
+) -> list[Finding]:
+    """复核模式和允许缺项模式下，单独扫描正文外区域。"""
+
+    if delivery_mode not in {"review-only", "gap-note-allowed"}:
+        return []
+
+    findings: list[Finding] = []
+    start_index = 0 if delivery_mode == "review-only" else len(source.body_only_lines)
+    fence_length: int | None = None
+    for zero_index, line in enumerate(source.lines[start_index:], start=start_index):
+        is_marker, fence_length = fence_marker_transition(fence_length, line)
+        if is_marker:
+            continue
+        if fence_length is not None and delivery_mode == "review-only":
+            continue
+        inline_spans = inline_code_spans(line)
+        inline_starts = span_starts(inline_spans)
+        quoted_spans = source.quoted_spans[zero_index]
+        quoted_starts = span_starts(quoted_spans)
+        for pattern in patterns:
+            _severity, label, regex, _advice = pattern
+            if delivery_mode == "gap-note-allowed" and label == "constraint-self-certification":
+                continue
+            for match in regex.finditer(line):
+                if inside_sorted_spans(inline_spans, inline_starts, match.start(), match.end()):
+                    continue
+                if inside_sorted_spans(quoted_spans, quoted_starts, match.start(), match.end()):
+                    continue
+                findings.append(
+                    finding_from_match(path_label, zero_index + 1, line, pattern, match)
+                )
+    return findings
+
+
+def frequent_list_marker_findings(
+    path_label: str,
+    lines: list[str],
+    allow_markdown: bool = False,
+    attachment_boundary: dict[int, int] | None = None,
+) -> list[Finding]:
+    """按全文数量定位过密的西式项目符号。"""
+
+    pattern = r"^\s*[•●◆◇★✅☑]\s+" if allow_markdown else r"^\s*(?:[-*+•●◆◇★✅☑]|[0-9]+[.)])\s+"
+    western_list_count = sum(
+        1
+        for line_index, line in enumerate(lines)
+        if re.match(pattern, line)
+        and not is_attachment_number_item(lines, line_index, line, attachment_boundary)
+    )
+    if western_list_count < FREQUENT_LIST_MARKER_COUNT:
+        return []
+    return [
+        Finding(
+            path=path_label,
+            line=1,
+            severity="low",
+            label="frequent-list-markers",
+            match=str(western_list_count),
+            excerpt="正文中西式项目符号或 1. 2. 编号较多；确认是否可改为中文条款或自然段。",
+        )
+    ]
+
+
+def repeat_term_findings(path_label: str, text: str) -> list[Finding]:
+    """按各术语独立阈值定位全文高频复述。"""
+
+    findings: list[Finding] = []
+    for term, threshold in REPEAT_TERMS.items():
+        count = text.count(term)
+        if count >= threshold:
+            findings.append(
+                Finding(
+                    path=path_label,
+                    line=1,
+                    severity="low",
+                    label="term-overuse",
+                    match=term,
+                    excerpt=f"`{term}` 出现 {count} 次；建议将部分表述替换为更具体的事项、主体或办理要素。",
+                )
+            )
+    return findings
+
+
+def paired_skeleton_findings(
+    path_label: str, source: ScanSource, delivery_mode: str,
+) -> list[Finding]:
+    """同一对比骨架全文聚合：单处出现只作复核线索，3 次以上给一条 low。"""
+
+    compiled = [(name, re.compile(pattern)) for name, pattern in PAIRED_SUMMARY_SKELETONS]
+    counts = {name: 0 for name, _regex in compiled}
+    first: dict[str, tuple[int, str]] = {}
+    fence_length: int | None = None
+    for line_index, line in enumerate(source.lines_to_scan):
+        is_marker, fence_length = fence_marker_transition(fence_length, line)
+        if is_marker or fence_length is not None:
+            continue
+        inline_spans = inline_code_spans(line)
+        inline_starts = span_starts(inline_spans)
+        quoted_spans = source.quoted_spans[line_index]
+        quoted_starts = span_starts(quoted_spans)
+        for name, regex in compiled:
+            for match in regex.finditer(line):
+                if inside_sorted_spans(inline_spans, inline_starts, match.start(), match.end()):
+                    continue
+                if delivery_mode == "review-only" and inside_sorted_spans(
+                    quoted_spans, quoted_starts, match.start(), match.end()
+                ):
+                    continue
+                counts[name] += 1
+                if name not in first:
+                    first[name] = (line_index + 1, excerpt(line, match.start(), match.end()))
+    findings: list[Finding] = []
+    for name, _regex in compiled:
+        if counts[name] < PAIRED_SKELETON_MIN_COUNT:
+            continue
+        line_no, sample = first[name]
+        findings.append(
+            Finding(
+                path=path_label,
+                line=line_no,
+                severity="low",
+                label="paired-summary",
+                match=name,
+                excerpt=f"对比骨架“{name}”在正文出现 {counts[name]} 次（首处：{sample}）；{PAIRED_SUMMARY_ADVICE}",
+            )
+        )
+    return findings
+
+
+def repeated_number_findings(path_label: str, lines: list[str]) -> list[Finding]:
+    """同一数字加单位出现在多个段落时给结构线索，不判断主旨或事实。"""
+
+    occurrences: dict[str, list[int]] = {}
+    for line_no, text, _section in paragraph_blocks(lines):
+        compact = re.sub(r"\s+", "", text)
+        for number in sorted(set(NUMBER_UNIT_PATTERN.findall(compact))):
+            occurrences.setdefault(number, []).append(line_no)
+    findings: list[Finding] = []
+    for number, line_numbers in occurrences.items():
+        if len(line_numbers) < MIN_NUMBER_PARAGRAPH_REPEATS:
+            continue
+        preview = "、".join(str(item) for item in line_numbers[:6])
+        findings.append(
+            Finding(
+                path=path_label,
+                line=line_numbers[0],
+                severity="low",
+                label="number-paragraph-repeat",
+                match=number,
+                excerpt=(
+                    f"同一数字“{number}”出现在 {len(line_numbers)} 个段落（约第 {preview} 行）；"
+                    "仅作结构复核线索，同一数字在多段重复出现不代表主旨有误或事实有误。"
+                ),
+            )
+        )
+        if len(findings) >= NUMBER_REPEAT_MAX_FINDINGS:
+            break
+    return findings
+
+
+def unresolved_state_chain_findings(path_label: str, source: ScanSource) -> list[Finding]:
+    """同句未决谓语聚类只给复核线索，不判断独立状态是否冗余。"""
+    lines: list[str] = []
+    for line_index, line in enumerate(source.body_only_lines):
+        characters = list(line)
+        for start, end in source.quoted_spans[line_index]:
+            characters[start:end] = " " * (end - start)
+        masked = "".join(characters)
+        attribution = SOURCE_EXCERPT_PREFIX_PATTERN.match(masked)
+        if source.quoted_spans[line_index] and attribution:
+            masked = " " * attribution.end() + masked[attribution.end() :]
+        if not masked.lstrip().startswith("```"):
+            masked = re.sub(r"`[^`]*`", lambda match: " " * len(match.group(0)), masked)
+        lines.append("" if masked.lstrip().startswith(">") else masked)
+
+    findings: list[Finding] = []
+    for line_no, paragraph, _section in paragraph_blocks(lines):
+        quoted = any(
+            source.quoted_spans[index]
+            for index in range(line_no - 1, line_no + paragraph.count("\n"))
+        )
+        if SOURCE_EXCERPT_PREFIX_PATTERN.match(paragraph) and not quoted:
+            continue
+        for sentence in re.finditer(r"[^。！？!?]+(?:[。！？!?]|$)", paragraph):
+            clauses = re.split(r"[，,；;、]", sentence.group(0))
+            pending = [
+                clause.strip()
+                for clause in clauses
+                if not re.search(r"[:：|\t]", clause) and UNRESOLVED_PREDICATE_PATTERN.search(clause)
+            ]
+            if len(pending) < MIN_UNRESOLVED_STATE_CHAIN_ITEMS:
+                continue
+            content_start = sentence.start() + len(sentence.group(0)) - len(sentence.group(0).lstrip())
+            findings.append(
+                Finding(
+                    path=path_label,
+                    line=line_no + paragraph[:content_start].count("\n"),
+                    severity="low",
+                    label="unresolved-state-chain",
+                    match="，".join(re.sub(r"\s+", " ", clause) for clause in pending),
+                    excerpt=(
+                        f"同一句中有 {len(pending)} 项未决谓语；核对是否只是上游未定带出的重复下游状态。"
+                        "各项有独立事实或办理作用时可保留，不据此判错或自动删除。"
+                    ),
+                )
+            )
+    return findings
+
+
+def aggregate_findings(
+    path_label: str,
+    source: ScanSource,
+    include_format: bool,
+    include_structure: bool,
+    delivery_mode: str,
+    allow_markdown: bool = False,
+    attachment_boundary: dict[int, int] | None = None,
+) -> list[Finding]:
+    """按固定顺序汇总格式、结构、标题和术语检查。"""
+
+    findings: list[Finding] = []
+    if include_format:
+        findings.extend(
+            frequent_list_marker_findings(
+                path_label, source.lines_to_scan, allow_markdown, attachment_boundary,
+            )
+        )
+        if not allow_markdown and delivery_mode in {"draft-body", "gap-note-allowed"}:
+            findings.extend(postscript_heading_format_findings(path_label, source))
+    if include_structure:
+        findings.extend(duplicate_findings(path_label, source.lines_to_scan))
+        findings.extend(repeated_number_findings(path_label, source.lines_to_scan))
+        findings.extend(
+            structured_smell_findings(path_label, source.text_to_scan, source.lines_to_scan)
+        )
+        if delivery_mode in {"draft-body", "gap-note-allowed"}:
+            findings.extend(unresolved_state_chain_findings(path_label, source))
+    if delivery_mode in {"draft-body", "gap-note-allowed"}:
+        findings.extend(duplicate_title_findings(path_label, source.lines_to_scan))
+    findings.extend(paired_skeleton_findings(path_label, source, delivery_mode))
+    findings.extend(repeat_term_findings(path_label, source.text_to_scan))
+    return findings
+
+
+def unique_findings(findings: Iterable[Finding]) -> list[Finding]:
+    """按原有稳定键去重，并保持首次出现顺序。"""
+
+    result: list[Finding] = []
+    seen: set[tuple[str, int, str, str, str]] = set()
+    for item in findings:
+        key = (item.path, item.line, item.severity, item.label, item.match)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def scan(
+    path_label: str,
+    text: str,
+    include_format: bool = False,
+    include_structure: bool = False,
+    delivery_mode: str = "generic",
+    allow_markdown: bool = False,
+) -> list[Finding]:
+    """编排一次完整扫描，不在此处实现具体检测职责。"""
+
+    if delivery_mode not in DELIVERY_MODES:
+        raise ValueError(f"unsupported delivery mode: {delivery_mode}")
+    if len(text) > MAX_SCAN_CHARS:
+        raise InputReadError(f"扫描输入超过上限（{MAX_SCAN_CHARS} 字符）: {path_label}")
+
+    # Review comments are a separate deliverable, not the manuscript body.
+    allow_markdown = allow_markdown or delivery_mode == "review-only"
+
+    source = prepare_scan_source(text, delivery_mode)
+    pattern_sets = prepare_pattern_sets(include_format, delivery_mode, allow_markdown)
+    attachment_boundary: dict[int, int] = {}
+    findings = unexpected_external_note_findings(path_label, source, delivery_mode)
+    findings.extend(
+        external_note_boundary_findings(
+            path_label,
+            source,
+            delivery_mode,
+            allow_markdown=allow_markdown,
+        )
+    )
+    findings.extend(
+        primary_line_findings(
+            path_label,
+            source,
+            pattern_sets,
+            include_format,
+            delivery_mode,
+            allow_markdown,
+            attachment_boundary,
+        )
+    )
+    findings.extend(
+        delivery_section_findings(
+            path_label,
+            source,
+            pattern_sets.delivery_absolute,
+            delivery_mode,
+        )
+    )
+    if delivery_mode in {"draft-body", "gap-note-allowed"}:
+        findings.extend(protective_state_findings(path_label, source))
+    findings.extend(
+        aggregate_findings(
+            path_label,
+            source,
+            include_format,
+            include_structure,
+            delivery_mode,
+            allow_markdown,
+            attachment_boundary,
+        )
+    )
+    return unique_findings(findings)
+
+
+def print_text(findings: Iterable[Finding]) -> None:
+    for item in findings:
+        print(printable(f"{item.path}:{item.line}: {item.severity}: {item.label}: {item.match}"))
+        print(printable(f"  {item.excerpt}"))
+
+
+def build_argument_parser() -> argparse.ArgumentParser:
+    """建立 CLI 参数解析器；参数名和帮助文本保持兼容。"""
+
+    parser = argparse.ArgumentParser(description="Warn about Chinese official-writing prose risks.")
+    parser.add_argument("files", nargs="+", help="Text/Markdown/DOCX files to scan, or '-' for stdin.")
+    parser.add_argument("--encoding", help="Encoding for plain-text files.")
+    parser.add_argument("--json", action="store_true", help="Emit JSON findings.")
+    parser.add_argument("--format", action="store_true", help="Also scan punctuation, number, list-marker, emoji, explicit DOCX zero-font-size risks, and DOCX review-residue counts.")
+    parser.add_argument("--allow-markdown", action="store_true", help="Treat Markdown formatting as explicitly requested; keep other prose and delivery checks.")
+    parser.add_argument("--structure", action="store_true", help="Also scan repeated matters across paragraphs (bounded) and other structure risks.")
+    parser.add_argument(
+        "--delivery-mode",
+        choices=DELIVERY_MODES,
+        default="generic",
+        help="Opt in to mode-aware delivery checks; default generic keeps existing lint behavior.",
+    )
+    parser.add_argument("--strict", action="store_true", help="Return exit code 1 when findings exist.")
+    parser.add_argument(
+        "--fail-on",
+        choices=("low", "medium", "high"),
+        default="low",
+        help="With --strict, fail only when findings at this severity or higher exist.",
+    )
+    return parser
+
+
+def scan_input_files(
+    file_args: Iterable[str],
+    encoding: str | None,
+    include_format: bool,
+    include_structure: bool,
+    delivery_mode: str,
+    allow_markdown: bool = False,
+) -> tuple[list[Finding], bool]:
+    """读取并扫描全部输入文件，同时保留是否发生读取错误。"""
+
+    all_findings: list[Finding] = []
+    had_read_error = False
+    for file_arg in file_args:
+        docx_format_findings: list[Finding] = []
+        try:
+            path_label, text = read_text(
+                file_arg, encoding,
+                docx_format_findings=docx_format_findings if include_format else None,
+            )
+        except InputReadError as exc:
+            print(printable(f"ERROR: {exc}"), file=sys.stderr)
+            had_read_error = True
+            continue
+        try:
+            findings = scan(
+                path_label,
+                text,
+                include_format=include_format,
+                include_structure=include_structure,
+                delivery_mode=delivery_mode,
+                allow_markdown=allow_markdown,
+            )
+        except InputReadError as exc:
+            print(printable(f"ERROR: {exc}"), file=sys.stderr)
+            had_read_error = True
+            continue
+        all_findings.extend(findings)
+        all_findings.extend(docx_format_findings)
+    return all_findings, had_read_error
+
+
+def emit_findings(findings: list[Finding], emit_json: bool, had_read_error: bool) -> None:
+    """按既有文本或 JSON 协议输出扫描结果。"""
+
+    if emit_json:
+        print(
+            printable(
+                json.dumps(
+                    [asdict(item) for item in findings],
+                    ensure_ascii=False,
+                    indent=JSON_INDENT,
+                )
+            )
+        )
+    elif findings:
+        print_text(findings)
+    elif not had_read_error:
+        print("No prose risks found.")
+
+
+def determine_exit_code(
+    findings: list[Finding],
+    had_read_error: bool,
+    strict: bool,
+    fail_on: str,
+) -> int:
+    """根据读取状态和严格模式计算兼容退出码。"""
+
+    if had_read_error:
+        return EXIT_INPUT_ERROR
+    if strict:
+        threshold = SEVERITY_RANK[fail_on]
+        return (
+            EXIT_STRICT_FINDING
+            if any(SEVERITY_RANK[item.severity] >= threshold for item in findings)
+            else EXIT_SUCCESS
+        )
+    return EXIT_SUCCESS
+
+
+def main(argv: list[str] | None = None) -> int:
+    """编排 CLI 参数、扫描、输出和退出码。"""
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    args = build_argument_parser().parse_args(argv)
+    all_findings, had_read_error = scan_input_files(
+        args.files,
+        args.encoding,
+        args.format,
+        args.structure,
+        args.delivery_mode,
+        args.allow_markdown,
+    )
+    emit_findings(all_findings, args.json, had_read_error)
+    return determine_exit_code(all_findings, had_read_error, args.strict, args.fail_on)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
