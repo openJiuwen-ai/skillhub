@@ -176,7 +176,8 @@ def compute_coverage(item, matched):
                             "无法据此判齐备，需人工核验"
                             % (name, temporal_n, len(years)))
             config_conflict = True
-        allow_merged = bool(item.get("allow_merged_years", False))
+        # Only an explicit JSON boolean enables this exception; "false" is truthy.
+        allow_merged = item.get("allow_merged_years", False) is True
         per_year = {}
         for y in years:
             pat = _year_token(y)

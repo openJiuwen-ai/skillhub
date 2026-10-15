@@ -15,6 +15,7 @@ M2 名称"近三年审计报告"、patterns 仅 ["审计报告", "2023"]、mats 
 import json
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 from helpers import run_script  # noqa: E402
@@ -37,6 +38,22 @@ def write_json(path, obj):
 
 def item(rep, iid):
     return [i for i in rep["items"] if i["id"] == iid][0]
+
+
+@pytest.mark.parametrize("flag", ["false", "true", 1])
+def test_merged_years_requires_literal_boolean_true(workspace, flag):
+    """Text 'false' and truthy malformed values must not enable a coverage exception."""
+    mat = workspace / "mats"
+    mat.mkdir()
+    (mat / "审计报告_2021_2022_2023.md").write_text("审计意见。", encoding="utf-8")
+    cfg = {"items": [{"id": "M1", "name": "近三年审计报告", "required": True,
+                      "patterns": ["审计报告"], "required_years": [2021, 2022, 2023],
+                      "allow_merged_years": flag}]}
+    write_json(workspace / "c.json", cfg)
+    r = run("checklist", "--checklist", workspace / "c.json", "--dir", mat,
+            "--report", workspace / "r.json")
+    assert r.returncode == 0
+    assert read_json(workspace / "r.json")["business_verdict"] == "block"
 
 
 def test_host_case_near_three_years_only_2023_not_released(workspace):
