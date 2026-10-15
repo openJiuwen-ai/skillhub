@@ -1,6 +1,9 @@
 ---
 name: sheet-consolidate-reconcile
 description: 多源 Excel/CSV 表格合并、清洗与对账，产出标准化合并表与审计台账。当用户给出多份同名指标但来源/口径不同的 xlsx/csv（如各区域销售表、多系统导出），要求"合并这些表/对账/核对差异/多表汇总/找出不一致"时使用。自动剔除合计行避免重复计入、主键匹配与重复主键明细、同名不同口径列显式标注来源、匹配率可复算。单文件编辑用 xlsx，统计分析用 data-analysis。
+display_name: 多表合并与对账
+tags: [办公与生产力, 文档处理]
+license: Apache-2.0
 ---
 
 # 多源表格合并、清洗与对账

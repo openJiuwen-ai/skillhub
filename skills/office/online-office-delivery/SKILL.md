@@ -1,6 +1,9 @@
 ---
 name: online-office-delivery
 description: 在线办公文档交付与回读：探测宿主环境已授权的官方 CLI（默认飞书 lark-cli，可选钉钉官方 dws），先用 CLI 自身 --help 核对命令语法再执行导入/回读/可编辑校验；交付成功必须同时满足真实导入完成、CLI 返回的真实 URL、内容回读一致、金丝雀写入回读通过，缺任何一环即失败；无授权 CLI、语法无法核实或未授权时显式 blocked 并以非零退出，绝不伪造链接或以本地文件/截图冒充在线交付。当用户要求"把表格发布到线上/创建在线文档并修改"时使用。
+display_name: 在线表格交付与回读
+tags: [办公与生产力, 文档处理]
+license: Apache-2.0
 ---
 
 # 在线办公文档交付与回读
@@ -120,11 +123,7 @@ python scripts/dingtalk_delivery.py --plan plan.json --outdir out/ \
   https://open-dev.dingtalk.com/fe/old#/developerSettings 开启后重新登录）
   记 `blocked`（非能力缺失），报告含 `admin_url`。
 
-**真实线上状态**：截至 2026-10-15，本机用户设备授权成功，但 dws 组织 CLI
-访问被拒（`authorization-blocker.json`），因此钉钉线上交付在 Jiuwen/WorkBuddy
-两边均 **not_run**，产品能力未失败判定；脚本级管线用明确标注的 dws 测试替身
-回归（`tests/office_skills/test_online_office_delivery_dingtalk.py`），
-不冒充线上成功。
+**验证范围**：飞书表格导入、回读和当前账号写权限已做真实环境验证。钉钉适配已通过脚本回归；真实交付要求组织开通 CLI 访问并完成账号授权，尚未完成同等线上验收。不得将脚本测试结果表述为钉钉线上成功。
 
 ## 依赖
 

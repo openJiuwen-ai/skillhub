@@ -1,0 +1,2 @@
+# Validated runtime dependency versions. Install inside an isolated environment.
+python-docx==1.2.0

@@ -1,6 +1,9 @@
 ---
 name: word-template-editor
 description: 在用户提供的 .docx 模板上原位填充结构化数据并保真交付。当用户给出含占位符（如 {{name}}）的 Word 模板和字段数据，要求"按模板填充/生成合同/套打/按模板出报告"且不破坏原格式时使用。保留 run 级字符格式、命名样式、原生多级编号(numId/ilvl)、分节与页眉页脚；输出未匹配占位清单和 OOXML/OPC 交付校验结果。不用于从零生成新文档（用 doc-generator），也不做批注修订（用 docx-review-redline）。
+display_name: Word 模板填充与格式保持
+tags: [办公与生产力, 文档处理]
+license: Apache-2.0
 ---
 
 # Word 模板保真编辑

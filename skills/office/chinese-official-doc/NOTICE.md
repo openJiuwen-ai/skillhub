@@ -13,3 +13,5 @@
 本包新增内容（原创，不属于上游）：
 - `scripts/gbt9704_layout.py`：GB/T 9704 版式 docx 排版与元素核查脚本
 - `SKILL.md` 中关于 Jiuwen 平台的适配说明
+
+新增实现的许可证全文见 `LICENSE`（Apache-2.0）；原有复用内容仍按 `LICENSE.md`（MIT）及上述版权声明分发。

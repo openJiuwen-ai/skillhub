@@ -1,0 +1,2 @@
+# Validated runtime dependency versions. Install inside an isolated environment.
+openpyxl==3.1.5

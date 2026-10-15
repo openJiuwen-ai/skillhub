@@ -1,6 +1,9 @@
 ---
 name: docx-version-diff
 description: 对同一 Word 文档的两个版本 .docx 做结构级对比，输出段落/表格单元格/页眉页脚/分节的变更清单（新增/删除/修改+定位）与变更报告 docx。当用户给出 v1/v2 两版文档问"改了什么/两版差异/对比这两份合同"时使用。不做批注修订（用 docx-review-redline），不读 PDF。
+display_name: Word 版本差异对比
+tags: [办公与生产力, 文档处理]
+license: Apache-2.0
 ---
 
 # Word 文档版本结构级对比
