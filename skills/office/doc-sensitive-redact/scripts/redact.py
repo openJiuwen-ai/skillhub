@@ -13,18 +13,27 @@
              未改动的部件按原始字节复制。
   XLSX: openpyxl 处理字符串/数值单元格、单元格批注、文档属性；
         保存后再对包内剩余 XML 部件做底层清洗，并保留（清洗后的）线程批注。
-  PDF: 页面文本 redaction 底层删除 + 元数据/XMP/书签/批注信息清洗 +
-       含敏感值的附件移除，保存后回读验证。
+  PDF: 页面文本 redaction 底层删除 + 元数据/XMP/书签/批注信息/链接目标
+       (URI/启动文件等字符串字段)/表单域值清洗 + 文件附件批注内容清洗
+       (zip/Office 附件逐条目重写并保留无关内容, 无法可靠重写的二进制
+       明文/加密/超深嵌套显式阻断) + 含敏感值的文档级附件移除;
+       保存后对页面文本/链接/批注/附件(zip 递归展开)/元数据/XMP/书签
+       做全类型回读验证, 表单/含图像页等未核验范围以 needs_review
+       标注且不宣称 pdf_removed_and_verified。
 
 安全策略:
   - 每个输出文件都做底层回读验证（逐部件搜索已识别的敏感值，
-    二进制部件按原始字节搜索）；任何残留 => 该文件标记 failed 并删除输出，
-    不做笼统成功。无法清洗的位置（如二进制部件内的明文）会被显式阻断。
+    二进制部件按原始字节搜索；PDF 额外对全部启用类型重新识别，
+    覆盖链接目标与附件内容等新表面，而非仅搜索此前已识别的值）；
+    任何残留 => 该文件标记 failed 并删除输出，
+    不做笼统成功。无法清洗的位置（如二进制部件内的明文、不可靠
+    重写的附件内容）会被显式阻断。
   - 打码清单不包含任何原始敏感值。
 
 退出码: 0=全部完成且通过回读验证（可含 needs_review） 2=输入错误或任一文件失败/被阻断
 """
 import argparse
+import io
 import json
 import math
 import os
@@ -68,6 +77,11 @@ class VerificationLeak(Exception):
         super().__init__(
             "verification_leak: sensitive value remains accessible in parts: "
             + ", ".join(parts[:10]))
+
+
+class UncleanableAttachment(Exception):
+    """附件内容含敏感值但格式无法可靠重写（二进制明文/加密/超深嵌套），
+    必须显式阻断交付而不是笼统宣称安全。"""
 
 
 def id_checksum_ok(v):
@@ -597,14 +611,180 @@ def process_xlsx(in_path, out_path, types):
 
 # ---------- PDF ----------
 
+ZIP_HEADS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+MAX_NEST_DEPTH = 4
+
+
+def _is_zip_data(data):
+    return data[:4] in ZIP_HEADS
+
+
+def _text_blob_clean(data, types):
+    """文本视图清洗: 返回 (bytes, hits); 无法按文本处理时返回 None。"""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if text is not None:
+        hits, _ = find_hits(text, types)
+        if hits:
+            return _replace_in(text, hits).encode("utf-8"), hits
+        return data, []
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        codec = "utf-16-le" if data[:2] == b"\xff\xfe" else "utf-16-be"
+        try:
+            text = data[2:].decode(codec)
+        except UnicodeDecodeError:
+            text = None
+        if text is not None:
+            hits, _ = find_hits(text, types)
+            if hits:
+                return data[:2] + _replace_in(text, hits).encode(codec), hits
+            return data, []
+    return None
+
+
+def _blob_views(data, depth=0):
+    """字节内容的可读文本视图: utf-8 / 带 BOM 的 utf-16 / latin-1;
+    zip 容器递归展开条目(深度受限)。"""
+    if _is_zip_data(data):
+        if depth >= MAX_NEST_DEPTH:
+            return [data.decode("latin-1", errors="ignore")]
+        views = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                for n in z.namelist():
+                    views.extend(_blob_views(z.read(n), depth + 1))
+        except Exception:
+            views.append(data.decode("latin-1", errors="ignore"))
+        return views
+    try:
+        return [data.decode("utf-8")]
+    except UnicodeDecodeError:
+        pass
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        codec = "utf-16-le" if data[:2] == b"\xff\xfe" else "utf-16-be"
+        try:
+            return [data[2:].decode(codec)]
+        except UnicodeDecodeError:
+            pass
+    return [data.decode("latin-1", errors="ignore")]
+
+
+def _clean_attachment_blob(blob, types, where, depth=0):
+    """清洗附件内容, 返回 (cleaned_bytes, all_hits)。
+
+    zip 容器逐条目递归重写(保留无关条目); 文本视图做全类型替换;
+    二进制明文命中或超深嵌套/加密压缩包 => 抛 UncleanableAttachment
+    阻断整份交付。
+    """
+    if _is_zip_data(blob):
+        if depth >= MAX_NEST_DEPTH:
+            raise UncleanableAttachment(
+                "%s: nested archive beyond supported depth" % where)
+        try:
+            with zipfile.ZipFile(io.BytesIO(blob)) as zin:
+                items = [(n, zin.read(n)) for n in zin.namelist()]
+        except Exception as e:
+            raise UncleanableAttachment(
+                "%s: unreadable or encrypted archive (%s)"
+                % (where, type(e).__name__))
+        out = io.BytesIO()
+        all_hits = []
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+            for n, data in items:
+                cleaned, hits = _clean_attachment_blob(
+                    data, types, "%s:%s" % (where, n), depth + 1)
+                zout.writestr(n, cleaned)
+                all_hits.extend(hits)
+        return out.getvalue(), all_hits
+    res = _text_blob_clean(blob, types)
+    if res is not None:
+        return res
+    hits, _ = find_hits(blob.decode("latin-1"), types)
+    if hits:
+        raise UncleanableAttachment(
+            "%s: sensitive values in non-rewritable binary content" % where)
+    return blob, []
+
+
+def _clean_pdf_attachment_annot(annot, result, detected, types, where):
+    """文件附件批注: 嵌入内容与文件名含敏感值时清洗重写并保留无关内容;
+    无法可靠清洗时抛 UncleanableAttachment(整文件阻断, 不笼统成功)。"""
+    try:
+        blob = annot.get_file()
+    except Exception:
+        blob = None
+    cleaned = None
+    hits_all = []
+    if blob:
+        cleaned, hits_all = _clean_attachment_blob(blob, types, where)
+    info = annot.info or {}
+    fname = info.get("content")
+    fhits = []
+    if isinstance(fname, str) and fname:
+        fhits, _ = find_hits(fname, types)
+    if not hits_all and not fhits:
+        return
+    kw = {}
+    if cleaned is not None:
+        kw["buffer_"] = cleaned
+    if fhits:
+        new_name = _replace_in(fname, fhits)
+        kw["filename"] = new_name
+        kw["ufilename"] = new_name
+    try:
+        annot.update_file(**kw)
+    except Exception:
+        raise UncleanableAttachment("%s: update_file failed" % where)
+    for h in hits_all:
+        detected.append(h["value"])
+    _record(result, [dict(h, location=where) for h in hits_all], [])
+    for h in fhits:
+        detected.append(h["value"])
+    _record(result, [dict(h, location=where + ":filename") for h in fhits], [])
+
+
 def _pdf_scopes(path):
-    """回读视图: 页面文本/元数据/XMP/书签/批注信息/附件名与内容。"""
+    """回读视图: 页面文本/链接目标(URI/启动文件等)/表单域值/批注信息/
+    文件附件批注与文档级附件的内容(zip 递归展开)/元数据/XMP/书签。"""
     import pymupdf
     doc = pymupdf.open(path)
     scopes = []
     try:
         for page in doc:
             scopes.append(page.get_text("text"))
+            try:
+                links = list(page.get_links() or [])
+            except Exception:
+                links = []
+            for lnk in links:
+                for key in ("uri", "file", "name", "nameddest"):
+                    v = lnk.get(key)
+                    if isinstance(v, str) and v:
+                        scopes.append(v)
+            try:
+                widgets = list(page.widgets() or [])
+            except Exception:
+                widgets = []
+            for w in widgets:
+                v = w.field_value
+                if isinstance(v, str) and v:
+                    scopes.append(v)
+            try:
+                annots = list(page.annots() or [])
+            except Exception:
+                annots = []
+            for a in annots:
+                info = a.info or {}
+                scopes.extend(str(v) for v in info.values() if isinstance(v, str))
+                if a.type[0] == pymupdf.PDF_ANNOT_FILE_ATTACHMENT:
+                    try:
+                        blob = a.get_file()
+                    except Exception:
+                        blob = None
+                    if blob:
+                        scopes.extend(_blob_views(blob))
         md = doc.metadata or {}
         scopes.extend(str(v) for v in md.values() if isinstance(v, str))
         try:
@@ -615,20 +795,12 @@ def _pdf_scopes(path):
             scopes.extend(e[1] or "" for e in doc.get_toc())
         except Exception:
             pass
-        for page in doc:
-            try:
-                annots = list(page.annots() or [])
-            except Exception:
-                annots = []
-            for a in annots:
-                info = a.info or {}
-                scopes.extend(str(v) for v in info.values() if isinstance(v, str))
         try:
             for name in doc.embfile_names():
                 info = doc.embfile_info(name) or {}
                 scopes.extend(str(v) for v in info.values() if isinstance(v, str))
                 try:
-                    scopes.append(doc.embfile_get(name).decode("latin-1", errors="ignore"))
+                    scopes.extend(_blob_views(doc.embfile_get(name)))
                 except Exception:
                     pass
         except Exception:
@@ -660,6 +832,56 @@ def process_pdf(in_path, out_path, types):
                     page.add_redact_annot(rect, fill=(0, 0, 0))
                 _record(result, [dict(h, location="page %d" % pno)], [])
             page.apply_redactions()
+
+            try:
+                links = list(page.get_links() or [])
+            except Exception:
+                links = []
+            for lnk in links:
+                dirty = False
+                for key in ("uri", "file", "name", "nameddest"):
+                    v = lnk.get(key)
+                    if not isinstance(v, str) or not v:
+                        continue
+                    lhits, _ = find_hits(v, types)
+                    if not lhits:
+                        continue
+                    lnk[key] = _replace_in(v, lhits)
+                    dirty = True
+                    for h in lhits:
+                        detected.append(h["value"])
+                    _record(result, [dict(h, location="link:page %d" % pno)
+                                     for h in lhits], [])
+                if dirty:
+                    try:
+                        page.update_link(lnk)
+                    except Exception:
+                        result["needs_review"]["link_update_failed_needs_manual"] = \
+                            result["needs_review"].get(
+                                "link_update_failed_needs_manual", 0) + 1
+
+            try:
+                widgets = list(page.widgets() or [])
+            except Exception:
+                widgets = []
+            for w in widgets:
+                v = w.field_value
+                if not isinstance(v, str) or not v:
+                    continue
+                whits, _ = find_hits(v, types)
+                if not whits:
+                    continue
+                try:
+                    w.field_value = _replace_in(v, whits)
+                    w.update()
+                    for h in whits:
+                        detected.append(h["value"])
+                    _record(result, [dict(h, location="form_field:page %d" % pno)
+                                     for h in whits], [])
+                except Exception:
+                    result["needs_review"]["form_field_update_failed_needs_manual"] = \
+                        result["needs_review"].get(
+                            "form_field_update_failed_needs_manual", 0) + 1
 
         md = dict(doc.metadata or {})
         md_changed = False
@@ -703,7 +925,7 @@ def process_pdf(in_path, out_path, types):
         if toc_changed:
             doc.set_toc(toc)
 
-        for page in doc:
+        for pno, page in enumerate(doc, start=1):
             try:
                 annots = list(page.annots() or [])
             except Exception:
@@ -724,6 +946,10 @@ def process_pdf(in_path, out_path, types):
                         for h in hits:
                             detected.append(h["value"])
                         _record(result, [dict(h, location="annotation:" + key)], [])
+                if annot.type[0] == pymupdf.PDF_ANNOT_FILE_ATTACHMENT:
+                    _clean_pdf_attachment_annot(
+                        annot, result, detected, types,
+                        "file_attachment:page %d" % pno)
 
         if getattr(doc, "is_form_pdf", False):
             result["needs_review"]["form_fields_present_needs_manual_review"] = 1
@@ -751,15 +977,34 @@ def process_pdf(in_path, out_path, types):
             except Exception:
                 blob = None
             if blob:
-                hh, _ = find_hits(blob.decode("latin-1", errors="ignore"), types)
-                if hh:
-                    hit_here = True
+                for view in _blob_views(blob):
+                    hh, _ = find_hits(view, types)
+                    if hh:
+                        hit_here = True
+                        for h in hh:
+                            detected.append(h["value"])
+                        break
             if hit_here:
                 try:
                     doc.embfile_del(name)
                     removed_emb += 1
                 except Exception:
                     pass
+
+        unverified = {}
+        if getattr(doc, "is_form_pdf", False):
+            unverified["form_fields"] = "表单结构/脚本未逐项核验"
+        img_pages = []
+        for pno, page in enumerate(doc, start=1):
+            try:
+                has_img = bool(page.get_images(full=True))
+            except Exception:
+                has_img = True
+            if has_img:
+                img_pages.append(pno)
+        if img_pages:
+            result["needs_review"]["images_present_not_ocr_scanned"] = len(img_pages)
+            unverified["image_pages_not_ocr_scanned"] = img_pages
 
         doc.save(out_path, garbage=3, deflate=True)
     finally:
@@ -768,11 +1013,13 @@ def process_pdf(in_path, out_path, types):
     uniq = set(detected)
     leaks = []
     for scope in _pdf_scopes(out_path):
-        for v in uniq:
-            if v in scope:
-                leaks.append("pdf content/metadata/attachment")
-                break
-        if leaks:
+        hh, _ = find_hits(scope, types)
+        if hh:
+            leaks.append("pdf surface (%s): %s"
+                         % (hh[0]["type"], "content/link/annotation/attachment"))
+            break
+        if any(v in scope for v in uniq):
+            leaks.append("pdf content/metadata/attachment")
             break
     raw = open(out_path, "rb").read()
     for v in uniq:
@@ -783,7 +1030,11 @@ def process_pdf(in_path, out_path, types):
         raise VerificationLeak(sorted(set(leaks)))
 
     fin = _finalize(result)
-    fin["pdf_removed_and_verified"] = True
+    if unverified:
+        fin["pdf_removed_and_verified"] = False
+        fin["unverified_surfaces"] = unverified
+    else:
+        fin["pdf_removed_and_verified"] = True
     if removed_emb:
         fin["removed_embedded_files"] = removed_emb
     return fin, detected

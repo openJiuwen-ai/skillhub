@@ -5,6 +5,7 @@
 隐藏部件（删除修订/批注/数值单元格/备注）用底层 ZIP 逐部件扫描验证，
 对应冻结证据 benchmarks/redaction-hidden 的验收规则。
 """
+import io
 import json
 import os
 import shutil
@@ -63,6 +64,11 @@ PDF_ANNOT_EMAIL = "zhushiquan@chuangyi.test"
 PDF_ATTACH_EMAIL = "fujian@chuangyi.test"
 PDF_TOC_EMAIL = "shuqian@chuangyi.test"
 BIN_EMAIL = "ercun@chuangyi.test"
+PDF_LINK_EMAIL = "lianjie@chuangyi.test"
+PDF_NORMAL_URI = "https://example.com/public"
+ATTACH_DOC_EMAIL = "fujianneirong@chuangyi.test"
+ATTACH_PUBLIC = "Attachment public unchanged text."
+FORM_EMAIL = "biaodan@chuangyi.test"
 
 
 def build_plain_docx(path):
@@ -388,7 +394,155 @@ def test_redact_pdf_hidden_surfaces(workspace):
     assert counts.get("email") >= 5 and counts.get("phone") == 1
 
 
+# ---------- 复杂：PDF 链接目标 / 附件批注 / 表单与图像限定 ----------
+# 对应冻结证据 benchmarks/redaction-pdf-sidechannels（mailto 链接目标与
+# 压缩 DOCX 附件批注残留 + link-only 独立案例的验收规则）
+
+def build_pdf_links(path):
+    doc = pymupdf.open()
+    p = doc.new_page()
+    p.insert_text((72, 72), "Public unchanged body", fontname="helv")
+    p.insert_link({"kind": pymupdf.LINK_URI,
+                   "from": pymupdf.Rect(72, 100, 260, 118),
+                   "uri": "mailto:" + PDF_LINK_EMAIL})
+    p.insert_link({"kind": pymupdf.LINK_URI,
+                   "from": pymupdf.Rect(72, 130, 260, 148),
+                   "uri": PDF_NORMAL_URI})
+    doc.save(str(path))
+    doc.close()
+
+
+def test_redact_pdf_link_targets_cleaned(workspace):
+    build_pdf_links(workspace / "links.pdf")
+    r = run_script("doc-sensitive-redact", "redact.py",
+                   ["--input", workspace / "links.pdf", "--outdir", workspace / "out"])
+    assert r.returncode == 0, r.stderr + r.stdout
+    out = workspace / "out" / "links_REDACTED.pdf"
+    d = pymupdf.open(str(out))
+    uris = [l.get("uri") or "" for pg in d for l in pg.get_links()]
+    assert uris and all(PDF_LINK_EMAIL not in u for u in uris), uris
+    assert PDF_NORMAL_URI in uris
+    assert "Public unchanged body" in d[0].get_text()
+    d.close()
+    assert PDF_LINK_EMAIL.encode() not in out.read_bytes()
+    man = load_manifest(workspace / "out")
+    pf = man["files"][0]
+    assert pf["failed"] is False
+    assert pf["pdf_removed_and_verified"] is True
+    counts = {x["type"]: x["count"] for x in pf["redactions"]}
+    assert counts.get("email", 0) >= 1
+    locs = [loc for x in pf["redactions"] if x["type"] == "email"
+            for loc in x["locations"]]
+    assert any(loc.startswith("link:") for loc in locs), locs
+    assert PDF_LINK_EMAIL not in json.dumps(man, ensure_ascii=False)
+
+
+def build_pdf_attachment(path):
+    buf = io.BytesIO()
+    docx = Document()
+    docx.add_paragraph(ATTACH_PUBLIC)
+    docx.add_paragraph("contact " + ATTACH_DOC_EMAIL)
+    docx.save(buf)
+    pdf = pymupdf.open()
+    p = pdf.new_page()
+    p.insert_text((72, 72), "Public unchanged body", fontname="helv")
+    p.add_file_annot((72, 200), buf.getvalue(), "notes.docx",
+                     desc="Supporting material")
+    pdf.save(str(path))
+    pdf.close()
+
+
+def test_redact_pdf_attachment_annot_cleaned(workspace):
+    build_pdf_attachment(workspace / "att.pdf")
+    r = run_script("doc-sensitive-redact", "redact.py",
+                   ["--input", workspace / "att.pdf", "--outdir", workspace / "out"])
+    assert r.returncode == 0, r.stderr + r.stdout
+    out = workspace / "out" / "att_REDACTED.pdf"
+    d = pymupdf.open(str(out))
+    assert "Public unchanged body" in d[0].get_text()
+    blobs = []
+    for pg in d:
+        for a in (pg.annots() or []):
+            if a.type[0] == pymupdf.PDF_ANNOT_FILE_ATTACHMENT:
+                blobs.append(a.get_file())
+    assert len(blobs) == 1
+    blob = blobs[0]
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        names = z.namelist()
+        leaks = [n for n in names if ATTACH_DOC_EMAIL.encode() in z.read(n)]
+        doc_xml = z.read("word/document.xml").decode("utf-8")
+    assert leaks == [], leaks
+    assert ATTACH_PUBLIC in doc_xml
+    d.close()
+    man = load_manifest(workspace / "out")
+    pf = man["files"][0]
+    assert pf["failed"] is False
+    assert pf["pdf_removed_and_verified"] is True
+    counts = {x["type"]: x["count"] for x in pf["redactions"]}
+    assert counts.get("email", 0) >= 1
+    locs = [loc for x in pf["redactions"] if x["type"] == "email"
+            for loc in x["locations"]]
+    assert any("file_attachment" in loc for loc in locs), locs
+    assert ATTACH_DOC_EMAIL not in json.dumps(man, ensure_ascii=False)
+
+
+def test_redact_pdf_form_and_image_qualification(workspace):
+    pdf = pymupdf.open()
+    p = pdf.new_page()
+    p.insert_text((72, 72), "Public body text", fontname="helv")
+    w = pymupdf.Widget()
+    w.field_type = pymupdf.PDF_WIDGET_TYPE_TEXT
+    w.field_name = "contact"
+    w.field_value = "form " + FORM_EMAIL
+    w.rect = pymupdf.Rect(72, 150, 300, 170)
+    p.add_widget(w)
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 16, 16))
+    p.insert_image(pymupdf.Rect(72, 200, 136, 264), pixmap=pix)
+    pdf.save(str(workspace / "formimg.pdf"))
+    pdf.close()
+    r = run_script("doc-sensitive-redact", "redact.py",
+                   ["--input", workspace / "formimg.pdf", "--outdir", workspace / "out"])
+    assert r.returncode == 0, r.stderr + r.stdout
+    out = workspace / "out" / "formimg_REDACTED.pdf"
+    d = pymupdf.open(str(out))
+    vals = [wd.field_value or "" for wd in d[0].widgets()]
+    assert vals and all(FORM_EMAIL not in v for v in vals), vals
+    d.close()
+    assert FORM_EMAIL.encode() not in out.read_bytes()
+    man = load_manifest(workspace / "out")
+    pf = man["files"][0]
+    assert pf["failed"] is False
+    assert pf["pdf_removed_and_verified"] is False
+    unv = pf["unverified_surfaces"]
+    assert "form_fields" in unv and "image_pages_not_ocr_scanned" in unv
+    review_types = {x["type"] for x in pf["needs_review"]}
+    assert "form_fields_present_needs_manual_review" in review_types
+    assert "images_present_not_ocr_scanned" in review_types
+    assert FORM_EMAIL not in json.dumps(man, ensure_ascii=False)
+
+
 # ---------- 异常 ----------
+
+def test_redact_pdf_uncleanable_attachment_blocked(workspace):
+    pdf = pymupdf.open()
+    p = pdf.new_page()
+    p.insert_text((72, 72), "Public body", fontname="helv")
+    blob = bytes([0x81, 0x88, 0xFE]) + b"contact " + \
+        ATTACH_DOC_EMAIL.encode() + b" ok" + bytes([0x80, 0x99, 0xFF])
+    p.add_file_annot((72, 200), blob, "blob.bin", desc="binary")
+    pdf.save(str(workspace / "bin.pdf"))
+    pdf.close()
+    r = run_script("doc-sensitive-redact", "redact.py",
+                   ["--input", workspace / "bin.pdf", "--outdir", workspace / "out"])
+    assert r.returncode == 2
+    man = load_manifest(workspace / "out")
+    pf = man["files"][0]
+    assert pf["failed"] is True
+    assert "UncleanableAttachment" in pf["error"], pf["error"]
+    assert pf["output"] is None
+    assert not (workspace / "out" / "bin_REDACTED.pdf").exists()
+    assert ATTACH_DOC_EMAIL not in json.dumps(man, ensure_ascii=False)
+
 
 def test_redact_mixed_batch_partial_failure(workspace):
     root = workspace / "mix"
