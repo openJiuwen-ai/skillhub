@@ -19,7 +19,7 @@
 
 ## 安装与依赖
 
-- Python 3.9+
+- Python ≥3.10（依赖最低要求：`pdfminer.six`/`pillow`/`cffi`/`pycparser` 的 `Requires-Python` 均为 `>=3.10`；实测解释器 3.12.9，2026-10-15 任务 venv 与 clean-venv）
 - 运行时依赖全部宽松许可（**无 PyMuPDF/fitz**）：`pdfplumber`(MIT) + `pdfminer.six`(MIT) 定位文本；`pypdf`(BSD-3-Clause) 结构读写与落盘（`pip install -r requirements.txt`）
 - 标准库：argparse / io / json / os / re / sys / tempfile
 
@@ -28,6 +28,9 @@
 ```text
 pdf-nl-edit/
 ├── SKILL.md
+├── README.md
+├── DEPENDENCIES.md
+├── LICENSE
 ├── requirements.txt
 └── scripts/pdf_edit.py
 ```
@@ -35,10 +38,10 @@ pdf-nl-edit/
 ### 实现方式（相对原 PyMuPDF 版）
 
 - 定位：pdfplumber `page.search(find)`（等价 `search_for` 连续文本语义）给出命中矩形与字符框
-- 改写：直接对目标页内容流做**算子级手术**——把命中字形码从 `Tj/TJ` 操作数中切除；命中与其它文本共用算子时按字距补偿精确切除（不整段误删）；再在命中原点追加新文本算子
+- 改写：直接对目标页内容流做**算子级手术**——把命中字形码从 `Tj/TJ` 操作数中切除；命中与其它文本共用算子时按字距补偿精确切除（不整段误删），字距按**该字体真实字宽**补偿（简单字体 `/Widths`+`/FirstChar`、CID `/W`+`/DW`、标准 14 号 AFM 宽度表），保留文本位置不漂移；再在命中原点追加新文本算子
 - 字体：复用文档已有字体资源（`helv`/`china-s` 等 CID）；页面缺少合适字体时按需新增（西文 Helvetica / CJK Heiti `UniGB-UTF16-H`，与 PyMuPDF 内建 CJK 同一 Adobe 标准字体机制）
 - 落盘：默认 `pypdf` **append-only 会话来写**（真正增量：输出以原文件字节为前缀、仅追加修改对象）；`--purge` 用 `pypdf` 整文件重建，未引用对象（旧内容流）被清除
-- 不做整页栅格化、不用白框遮盖；不支持的结构（跨算子命中、无法安全往返重编码的字体）**显式失败退出 2**
+- 不改写整页：不做整页栅格化、不用白框遮盖；保留文本以**原字形码**重排（不重编码，故嵌入 CID/Identity-H 字体亦可安全部分替换）；不支持的结构（跨算子命中、跨同一 TJ 数组多字符串元素）**显式失败退出 2**；内容流内联图像（`BI ... ID ... EI`）与未知定界符安全跳过/推进，不死循环
 
 ## 用法
 
@@ -52,6 +55,7 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
 - `edits[]`：每处 `{page, before, after, rect:[x0,y0,x1,y1], fontsize}`
 - `occurrences_found` / `occurrences_replaced`：命中数与真实替换处数（多命中时两者一致）
 - `other_pages_unchanged` / `target_page_contains_new_text` / `target_page_contains_old_text`
+- `target_page_body_preserved`：去掉命中/替换后目标页**未匹配正文**逐字符一致（忽略空白）；与上两项共同构成退出 0 的前置，坏结果不会以退出 0 蒙混过关
 - `font_note`：插入字体（helv / china-s）说明
 - `mode`：`incremental`（默认，真正 append-only 增量）/ `purge`（`--purge` 整文件重写）/ `full_fallback`（增量未成立时整文件回退）
 - `irreversible`：`purge`/`full_fallback` 为 true；`security_note` 说明增量保存不构成敏感原文删除
@@ -82,6 +86,10 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
 
 家族回归（同技能，兼容旧契约）：`tests/office_skills/test_pdf_ppt_family.py::test_pdf_edit` 通过。
 
+迁移回归：`tests/office_skills/test_pdf_nl_edit_migration.py`（6 项，运行时去 PyMuPDF 的契约/增量/purge/字体/跨算子失败）。
+
+复核修复回归：`tests/office_skills/test_pdf_nl_edit_review_repair.py`（7 项，覆盖字面量解码、同算子多命中、Courier/Times/Helvetica-Bold 真实字宽与位置、TJ 多字符串/数字字距保留、跨元素显式失败、内联图像/未知定界符不死循环）。
+
 ## 修复记录（2026-10-14，相对初版）
 
 主控缺陷探针 `benchmarks/pdf-edit-complex/before-review/controller-results.json` 冻结真实数据丢失：同页两处 `OLD_LABEL` 被全删、只插入一处 `NEW_LABEL`，却退出 0 且报告 `occurrences_replaced=2`。初版 `pdf_edit.py` 对每个命中加 redaction 全部删除，却只在 `rects[0]` 插入一次。修复：对**每个命中**分别规划插入框并逐一插入（`plan_insert` 使用 `get_text_length` 精确量宽），`occurrences_replaced` 反映真实处数；失败改用临时文件 + 原子替换，避免覆盖既有输出；新增同输入输出路径拒绝、越页/覆盖邻近内容保护、`mode`/`irreversible`/`security_note` 字段区分普通编辑与不可恢复脱敏。对保留的原始 `two-occurrences.pdf` 用修复后代码在新目录 `per-skill/pdf-nl-edit/after-fix-run-20261014` 复跑（未覆盖 `before-review`）：NEW==2、OLD==0、KEEP 保留、第 2 页不变、退出 0，与 `expected.json` 一致。
@@ -96,6 +104,18 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
 - 新增独立迁移回归 `tests/office_skills/test_pdf_nl_edit_migration.py`（覆盖真正增量前缀、purge 清除旧对象、字体缺失时新增资源、部分命中字距补偿、跨算子显式失败、静态无 pymupdf/fitz import、用 PyMuPDF oracle 交叉核对）
 - 迁移暴露的新隐患（原测试未覆盖）：命中与其它文本共用同一算子时的精确切除与字距补偿；页面缺少目标字体时的资源新增——均已补独立测试
 
+## 复核修复记录（2026-10-15，主控复核发现的真实缺陷）
+
+主控复核脚本 `work/.../market-release-20261015/probe_edit_review.py` 未能接受上一迁移交付，复现两处真实缺陷并追加审查项；本轮全部修复，未改任何旧 expected/pass 条件，仅追加独立回归 `tests/office_skills/test_pdf_nl_edit_review_repair.py`（7 项）：
+
+- **缺陷 1（字面量解码）**：`_scan_literal` 把外层 `(` 也当作内容（`_scan_literal(b'(HELLO)',0)` 返回 `b'(HELLO'`），普通 literal `Tj` 文档局部替换后非目标正文多出左括号。修复：解析从 `i+1` 开始、外层定界括号不入内容，嵌套括号仍保留。
+- **缺陷 2（同算子多命中）**：同一文本算子内 `OLD_LABEL OLD_LABEL` 两处命中时 `hits` 按算子计数（1）与定位器（2）不一致而退出 2。修复：按命中处数计数并在算子内逐处切除（`_remove_in_text` 循环），`occurrences_found`/`occurrences_replaced` 与真实处数一致。
+- **字体真实字宽 + 原码重排**：字距补偿原先统一用 Helvetica AFM，对 Courier/Times 等字体导致保留文本位置漂移。修复：`_FontCodec` 解析真实字宽（简单字体 `/Widths`+`/FirstChar`、CID `/W`+`/DW`，标准 14 号基础字体复用 MIT 依赖 `pdfminer.six` 自带 `fontmetrics.FONT_METRICS`，不手抄/不引入模糊版权数据；`Symbol`/`ZapfDingbats` 因非 ASCII 映射不参与回退）。保留文本改为按**原始字形码**重排（不做可能失真的字符→码重编码，避免 Identity-H CID 的 ToUnicode 多对一失配）。实测：Courier/Times/Helvetica-Bold 及嵌入 TrueType CID（Arial/Courier New）部分替换后 `SUFFIX` 位移均 `0.0pt`（旧实现下 Courier 漂移约 3.9pt，嵌入 CID 直接失败）。未通过拒绝普通可支持字体来缩水。
+- **未知定界符 / 内联图像**：`_next_token` 对孤立 `)`/`>` 返回零长 token 会死循环；现保证推进，并在 `_tokenize` 中跳过 `BI...ID...EI` 内联图像二进制（`_skip_inline_image`）。
+- **TJ 数组保留与跨元素**：同一 TJ 数组的多个字符串元素与数字字距项原样保留（实测 `-50`/`60` 仍在内容流）；目标跨同一数组多元素时**显式失败退出 2**，不假成功。
+- **输出校验加严**：新增 `target_page_body_preserved`（去掉命中/替换后目标页未匹配正文逐字符一致，忽略空白），纳入退出 0 前置，坏结果不会以退出 0 蒙混过关。
+- Python 版本声明校正为 **≥3.10**（依赖 `Requires-Python` 下限），实测 3.12.9。
+
 ## 来源与许可
 
 本技能为原创实现（`decision-register.json`: independent_implement；未复制外部代码；竞品 doubao/word 的 PDF 方向、workbuddy nano-pdf 均 `no_license_found`，仅功能对标未搬运）。
@@ -107,7 +127,7 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
 |---|---|---|---|
 | pdfplumber | 0.11.10 | MIT | 直接：文本定位/字符框 |
 | pypdf | 6.19.0 | BSD-3-Clause | 直接：结构读写/增量与整文件落盘 |
-| pdfminer.six | 20260107 | MIT | 传递（pdfplumber）：PDF 解析 |
+| pdfminer.six | 20260107 | MIT | 直接/传递：PDF 解析 + 标准 14 号字体宽度（`pdfminer.fontmetrics.FONT_METRICS`，其文件头内嵌 Adobe Core AFM 宽松许可，故不自行维护字体宽度表） |
 | pillow | 12.3.0 | MIT-CMU | 传递（pdfplumber） |
 | pypdfium2 | 5.14.0 | BSD-3-Clause OR Apache-2.0（随附 PDFium 及其第三方均宽松：freetype/icu/libjpeg-turbo/libpng/lcms/openjpeg/zlib/abseil/agg/simdutf/fast_float/llvm-libc） | 传递（pdfplumber） |
 | charset-normalizer | 3.5.2 | MIT | 传递（pdfminer.six） |

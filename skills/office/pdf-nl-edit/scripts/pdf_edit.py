@@ -44,30 +44,30 @@ from pypdf.generic import (
 PAGE_MARGIN = 6.0
 MIN_FONTSIZE = 4.0
 
-# Adobe Helvetica AFM 宽度（/1000 单位）；用于普通西文的排布测量。
-HELV_WIDTHS = {
-    " ": 278, "!": 278, '"': 355, "#": 556, "$": 556, "%": 889, "&": 667,
-    "'": 191, "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333,
-    ".": 278, "/": 278, ":": 278, ";": 278, "<": 584, "=": 584, ">": 584,
-    "?": 556, "@": 1015, "[": 278, "\\": 278, "]": 278, "^": 469, "_": 556,
-    "`": 333, "{": 334, "|": 260, "}": 334, "~": 584,
-}
-for _d in "0123456789":
-    HELV_WIDTHS[_d] = 556
-_HELV_UPPER = {
-    "A": 667, "B": 667, "C": 722, "D": 722, "E": 667, "F": 611, "G": 778,
-    "H": 722, "I": 278, "J": 500, "K": 667, "L": 556, "M": 833, "N": 722,
-    "O": 778, "P": 667, "Q": 778, "R": 722, "S": 667, "T": 611, "U": 722,
-    "V": 667, "W": 944, "X": 667, "Y": 667, "Z": 611,
-}
-HELV_WIDTHS.update(_HELV_UPPER)
-_HELV_LOWER = {
-    "a": 556, "b": 556, "c": 500, "d": 556, "e": 556, "f": 278, "g": 556,
-    "h": 556, "i": 222, "j": 222, "k": 500, "l": 222, "m": 833, "n": 556,
-    "o": 556, "p": 556, "q": 556, "r": 333, "s": 500, "t": 278, "u": 556,
-    "v": 500, "w": 722, "x": 500, "y": 500, "z": 500,
-}
-HELV_WIDTHS.update(_HELV_LOWER)
+# 标准 14 号基础字体的字宽来自运行时依赖 pdfminer.six（MIT）自带的数据
+# `pdfminer.fontmetrics.FONT_METRICS`；该模块内嵌 Adobe Core AFM 许可（见其
+# 文件头），故不自行手抄/维护字体宽度表。仅在简单字体没有 /Widths 数组时使用。
+# Symbol / ZapfDingbats 不是普通 ASCII 映射，不参与此回退。
+try:
+    from pdfminer.fontmetrics import FONT_METRICS as _STD_FONT_METRICS
+except Exception:  # pragma: no cover - pdfminer.six 随 pdfplumber 提供
+    _STD_FONT_METRICS = {}
+
+_NON_TEXT_STANDARD_FONTS = ("Symbol", "ZapfDingbats")
+
+
+def _standard_char_width(basefont, ch):
+    """标准 14 号基础字体中字符 ch 的 AFM 宽度（1/1000 em）；无则返回 None。"""
+    name = (basefont or "").lstrip("/")
+    if "+" in name:  # 子集前缀 AAAAAA+Times-Roman
+        name = name.split("+", 1)[1]
+    if not name or name in _NON_TEXT_STANDARD_FONTS:
+        return None
+    entry = _STD_FONT_METRICS.get(name)
+    if not entry:
+        return None
+    w = entry[1].get(ch)
+    return float(w) if w is not None else None
 
 
 def _is_wide(ch):
@@ -86,18 +86,6 @@ def _is_wide(ch):
 
 def _has_cjk(text):
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
-
-
-def _measure(text, size):
-    total = 0.0
-    for ch in text:
-        if _is_wide(ch):
-            total += 1.0
-        elif ord(ch) < 128:
-            total += HELV_WIDTHS.get(ch, 556) / 1000.0
-        else:
-            total += 0.5
-    return total * size
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +139,140 @@ class _FontCodec:
         else:
             self.winansi = encoding in ("/WinAnsiEncoding", "/StandardEncoding", "")
             self.macroman = encoding == "/MacRomanEncoding"
+        # --- 真实字宽（单位 1/1000 em）：用于字距补偿与排版测量 ---
+        self.widths = {}          # 简单字体：码位 -> 字宽
+        self.cid_widths = {}      # CID 字体：码位 -> 字宽
+        self.dw = 1000.0          # CID 默认字宽 /DW
+        self.missing_width = None
+        self._rev = None
+        try:
+            if self.is_cid:
+                self._load_cid_widths(font_dict)
+            else:
+                self._load_simple_widths(font_dict)
+        except Exception:
+            self.widths = {}
+            self.cid_widths = {}
+
+    def _load_simple_widths(self, font_dict):
+        widths = font_dict.get("/Widths")
+        first = font_dict.get("/FirstChar")
+        if widths is not None and first is not None:
+            try:
+                arr = widths.get_object()
+                base = int(first)
+                for k in range(len(arr)):
+                    try:
+                        self.widths[base + k] = float(arr[k])
+                    except (TypeError, ValueError, IndexError):
+                        pass
+            except Exception:
+                self.widths = {}
+        fd = font_dict.get("/FontDescriptor")
+        if fd is not None:
+            try:
+                mw = fd.get_object().get("/MissingWidth")
+                if mw is not None:
+                    self.missing_width = float(mw)
+            except Exception:
+                pass
+
+    def _load_cid_widths(self, font_dict):
+        desc = font_dict.get("/DescendantFonts")
+        d0 = None
+        if desc is not None:
+            try:
+                d0 = desc.get_object()[0].get_object()
+            except Exception:
+                d0 = None
+        if d0 is None:
+            return
+        dw = d0.get("/DW")
+        if dw is not None:
+            try:
+                self.dw = float(dw)
+            except (TypeError, ValueError):
+                pass
+        warr = d0.get("/W")
+        if warr is None:
+            return
+        try:
+            arr = warr.get_object()
+        except Exception:
+            return
+        i, n = 0, len(arr)
+        while i < n:
+            try:
+                first = int(arr[i])
+            except (TypeError, ValueError):
+                i += 1
+                continue
+            i += 1
+            if i >= n:
+                break
+            item = arr[i]
+            if hasattr(item, "get_object"):
+                item = item.get_object()
+            if isinstance(item, (list, tuple)) or type(item).__name__ == "ArrayObject":
+                for k, v in enumerate(item):
+                    try:
+                        self.cid_widths[first + k] = float(v)
+                    except (TypeError, ValueError):
+                        pass
+                i += 1
+            else:
+                i += 1
+                if i >= n:
+                    break
+                try:
+                    last = int(item)
+                    wv = float(arr[i])
+                except (TypeError, ValueError):
+                    i += 1
+                    continue
+                i += 1
+                for c in range(first, last + 1):
+                    self.cid_widths[c] = wv
+
+    def code_for(self, ch):
+        """字符 -> 该字体中的字形码；无法表示返回 None。"""
+        if self.two_byte:
+            if self.predefined_unicode:
+                cp = ord(ch)
+                return cp if cp <= 0xFFFF else None
+            if self.tounicode:
+                if self._rev is None:
+                    self._rev = {v: k for k, v in self.tounicode.items()}
+                return self._rev.get(ch)
+            return None
+        try:
+            return ch.encode("cp1252")[0]
+        except (UnicodeEncodeError, IndexError):
+            return None
+
+    def width_for_code(self, code, ch=None):
+        """字形码字宽（1/1000 em）：优先字体 /Widths|/W，再标准 14 号 AFM。"""
+        if self.is_cid:
+            return self.cid_widths.get(code, self.dw)
+        if code in self.widths:
+            return self.widths[code]
+        w = _standard_char_width(self.basefont, ch) if ch is not None else None
+        if w is not None:
+            return w
+        if self.missing_width is not None:
+            return self.missing_width
+        return 500.0
+
+    def measure(self, text, size):
+        """用该字体真实字宽测量文本宽度（单位 pt）。"""
+        total = 0.0
+        for ch in text:
+            code = self.code_for(ch)
+            if code is None:
+                total += 1.0 if _is_wide(ch) else 0.5
+            else:
+                total += self.width_for_code(code, ch) / 1000.0
+        return total * size
 
     def decode(self, raw):
         out = []
@@ -183,13 +305,14 @@ class _FontCodec:
 
     def encode(self, text):
         if self.two_byte:
-            if self.tounicode and not self.predefined_unicode:
-                rev = {v: k for k, v in self.tounicode.items()}
+            if self.tounicode:
+                if self._rev is None:
+                    self._rev = {v: k for k, v in self.tounicode.items()}
                 out = bytearray()
                 for ch in text:
-                    if ch not in rev:
+                    if ch not in self._rev:
                         raise ValueError(f"char {ch!r} not encodable with font {self.name}")
-                    out += rev[ch].to_bytes(2, "big")
+                    out += self._rev[ch].to_bytes(2, "big")
                 return bytes(out)
             return text.encode("utf-16-be")
         return text.encode("cp1252", "replace")
@@ -211,8 +334,12 @@ class _Tok:
 
 
 def _scan_literal(data, i):
-    depth = 0
-    j = i
+    """解析 data[i]=='(' 起的 PDF 字面量字符串，返回 (内容字节, 结束下标)。
+
+    外层定界括号不进入内容；嵌套的括号作为内容保留。
+    """
+    depth = 1
+    j = i + 1
     n = len(data)
     out = bytearray()
     while j < n:
@@ -338,17 +465,34 @@ def _next_token(data, i):
     j = i
     while j < n and data[j] not in _WS and data[j] not in _DELIM:
         j += 1
+    if j == i:
+        # 未识别的定界符（如孤立的 ')' '>' 等）：必须推进，绝不返回零长 token 造成死循环
+        return _Tok("op", data[i:i + 1], i, i + 1), i + 1
     return _Tok("op", data[i:j], i, j), j
+
+
+def _skip_inline_image(data, i):
+    """跳过内联图像二进制（BI ... ID <binary> EI），返回 EI 之后的下标。
+
+    内容流里内联图像的数据是任意二进制，绝不能被当作算子/字符串解析。
+    """
+    m = re.search(rb"\sEI(?=[\s\[\]<>()/%]|\Z)", data[i:])
+    if not m:
+        return len(data)
+    return i + m.end()
 
 
 def _tokenize(data):
     toks = []
     i = 0
-    while True:
+    n = len(data)
+    while i < n:
         t, i = _next_token(data, i)
         if t is None:
             break
         toks.append(t)
+        if t.kind == "op" and t.value == b"ID":
+            i = _skip_inline_image(data, i)
     return toks
 
 
@@ -361,18 +505,46 @@ def _decode_op_text(font, tok):
     return ""
 
 
-def _remove_in_text(text, find):
-    """返回 (剩余文本, 被删片段宽度em列表)——用于补偿定位。"""
+def _decode_with_codes(font, raw):
+    """把字符串字节解码为 [(字符, 原始字形码)]。
+
+    保留原始字形码：这样切除命中后，保留文本可直接用**原字形码**重排，
+    既不做可能失真的重编码（如 Identity-H CID 的 ToUnicode 多对一），
+    也能用命中字形码的**真实字宽**做字距补偿。
+    """
+    out = []
+    if font.two_byte:
+        for i in range(0, len(raw) - 1, 2):
+            code = int.from_bytes(raw[i:i + 2], "big")
+            if font.tounicode:
+                ch = font.tounicode.get(code, "\ufffd")
+            else:
+                ch = raw[i:i + 2].decode("utf-16-be", "replace")
+            out.append((ch, code))
+    else:
+        for b in raw:
+            if font.tounicode and b in font.tounicode:
+                ch = font.tounicode[b]
+            elif font.macroman:
+                ch = bytes([b]).decode("mac-roman", "replace")
+            else:
+                ch = bytes([b]).decode("cp1252", "replace")
+            out.append((ch, b))
+    return out
+
+
+def _split_occurrences(pairs, find):
+    """把 [(字符, 码)] 按 find 拆成 keep/drop 段（与定位器一致的非重叠命中）。"""
+    text = "".join(ch for ch, _ in pairs)
     segments = []
-    removed = []
     idx = 0
     while True:
         pos = text.find(find, idx)
         if pos < 0:
-            segments.append(("keep", text[idx:]))
+            segments.append(("keep", pairs[idx:]))
             break
-        segments.append(("keep", text[idx:pos]))
-        segments.append(("drop", text[pos:pos + len(find)]))
+        segments.append(("keep", pairs[idx:pos]))
+        segments.append(("drop", pairs[pos:pos + len(find)]))
         idx = pos + len(find)
     return segments
 
@@ -384,10 +556,13 @@ def _remove_in_text(text, find):
 def _edit_content(content, fonts, find):
     """在内容流中删除 `find` 的字形码。
 
-    返回 (新内容字节, 命中列表)；命中列表每项 {found:bool, font:codec, size:float}。
-    只有能安全手术（整个文本显示算子被删除，或在算子内以字距补偿精确切除）才改写；
-    若遇到无法解析的内容则抛错，由上层显式失败。
+    返回 (新内容字节, 命中列表)；命中列表每个命中元素占一项，因此同一
+    文本算子内的多处命中会被完整计数（与定位器一致）。只有能安全手术
+    （整个文本显示算子被删除，或在算子内以字距补偿精确切除）才改写；
+    若遇到无法可靠处理的内容则抛 _UnsupportedEdit，由上层显式失败。
     """
+    if not find:
+        return content, []
     toks = _tokenize(content)
     edits = []  # (start, end, replacement_bytes)
     hits = []
@@ -409,49 +584,24 @@ def _edit_content(content, fonts, find):
             operands = []
             continue
         show_tok = None
-        if op in (b"Tj", b"'") and operands and operands[-1].kind == "str":
-            show_tok = operands[-1]
-        elif op == b'"' and operands and operands[-1].kind == "str":
+        if op in (b"Tj", b"'", b'"') and operands and operands[-1].kind == "str":
             show_tok = operands[-1]
         elif op == b"TJ" and operands and operands[-1].kind == "array":
             show_tok = operands[-1]
-        if show_tok is None:
-            operands = []
-            continue
-        if cur_font is None:
+        if show_tok is None or cur_font is None:
             operands = []
             continue
         decoded = _decode_op_text(cur_font, show_tok)
-        if find in decoded:
+        occ = decoded.count(find)
+        if occ:
             span_start = operands[0].start
             span_end = t.end
-            if show_tok.kind == "str":
-                segments = _remove_in_text(decoded, find)
-                dumps, has_keep = _segments_to_dump(cur_font, segments, cur_size)
-                if has_keep:
-                    edits.append((show_tok.start, span_end,
-                                  b"[" + dumps + b"]TJ"))
-                else:
-                    edits.append((span_start, span_end, b""))
+            replacement = _rewrite_show_token(cur_font, show_tok, find)
+            if replacement is None:
+                edits.append((span_start, span_end, b""))
             else:
-                parts = []
-                has_keep = False
-                for it in show_tok.items:
-                    if it.kind == "str":
-                        seg = _remove_in_text(cur_font.decode(it.value), find)
-                        chunk, keep = _segments_to_dump(cur_font, seg, cur_size)
-                        has_keep = has_keep or keep
-                        parts.append(chunk)
-                    elif it.kind == "num":
-                        parts.append(b" " + it.value)
-                    else:
-                        parts.append(b"")
-                if has_keep:
-                    body = b"".join(p for p in parts if p)
-                    edits.append((show_tok.start, span_end, b"[" + body + b"]TJ"))
-                else:
-                    edits.append((span_start, span_end, b""))
-            hits.append({"font": cur_font, "size": cur_size})
+                edits.append((show_tok.start, span_end, replacement))
+            hits.extend([{"font": cur_font, "size": cur_size}] * occ)
         operands = []
     # 应用（从后往前）
     out = bytearray(content)
@@ -460,27 +610,86 @@ def _edit_content(content, fonts, find):
     return bytes(out), hits
 
 
-def _segments_to_dump(font, segments, size):
-    """把分段结果编码回 TJ 片段；被删片段插入字距补偿号（千分之一 em）。
+class _UnsupportedEdit(Exception):
+    """无法可靠手术的内容结构（显式失败，不猜改）。"""
+
+
+def _rewrite_show_token(font, show_tok, find):
+    """改写一个文本显示算子，切除 `find`。
+
+    返回新的算子字节（含 TJ 包装）或 None（整个算子已无保留文本，应删除）。
+    目标跨同一 TJ 数组的多个字符串元素时无法可靠保留字距，抛 _UnsupportedEdit。
+    保留文本用原始字形码重排，不重编码，故不受 ToUnicode 多对一影响。
+    """
+    if show_tok.kind == "str":
+        segments = _split_occurrences(_decode_with_codes(font, show_tok.value), find)
+        dumps, has_keep = _segments_to_dump(font, segments)
+        if has_keep:
+            return b"[" + dumps + b"]TJ"
+        return None
+
+    items = show_tok.items
+    texts = []
+    pos_map = []
+    for idx, it in enumerate(items):
+        if it.kind == "str":
+            d = font.decode(it.value)
+            texts.append(d)
+            pos_map.extend([idx] * len(d))
+    full = "".join(texts)
+    start = 0
+    while True:
+        p = full.find(find, start)
+        if p < 0:
+            break
+        if pos_map[p] != pos_map[p + len(find) - 1]:
+            raise _UnsupportedEdit(
+                "find string spans multiple strings inside one TJ array; "
+                "refusing to guess at kerning")
+        start = p + len(find)
+    parts = []
+    has_keep = False
+    for it in items:
+        if it.kind == "str":
+            seg = _split_occurrences(_decode_with_codes(font, it.value), find)
+            chunk, keep = _segments_to_dump(font, seg)
+            has_keep = has_keep or keep
+            parts.append(chunk)
+        elif it.kind == "num":
+            parts.append(it.value)
+        else:
+            parts.append(b"")
+    if has_keep:
+        body = b" ".join(p for p in parts if p)
+        return b"[" + body + b"]TJ"
+    return None
+
+
+def _codes_to_hex(font, seg):
+    if font.two_byte:
+        return b"".join(code.to_bytes(2, "big") for _, code in seg).hex().encode()
+    return bytes(code & 0xFF for _, code in seg).hex().encode()
+
+
+def _segments_to_dump(font, segments):
+    """把 keep/drop 字形码段拼成 TJ 片段；drop 段插入字距补偿号（千分之一 em）。
 
     返回 (dumps, has_keep)；has_keep=False 表示该算子不再含任何保留文本。
+    字距 = -Σ(被删字形真实字宽/1000em)，用命中字形码的真实宽度，位置不漂移。
     """
     chunks = []
     has_keep = False
     for kind, seg in segments:
         if kind == "keep":
             if seg:
-                if not font.can_encode(seg):
-                    raise ValueError(
-                        "partial edit would require re-encoding text with a font "
-                        "that cannot round-trip safely")
-                chunks.append(b"<" + font.encode(seg).hex().encode() + b">")
+                chunks.append(b"<" + _codes_to_hex(font, seg) + b">")
                 has_keep = True
         else:
-            if seg and size:
-                w = _measure(seg, size)
-                kern = int(round(-w / size * 1000))
-                chunks.append(b" " + str(kern).encode())
+            if seg:
+                total = sum(font.width_for_code(code, ch) for ch, code in seg)
+                kern = -int(round(total))
+                if kern:
+                    chunks.append(b" " + str(kern).encode())
     return b" ".join(chunks), has_keep
 
 
@@ -604,8 +813,12 @@ def _rect_intersects(a, b):
     return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
 
 
-def _plan_insert(match_rect, replace, page_wh, words, ignore_rects):
-    """返回 (ok, size, box, overlapped, reason)。坐标均为 PDF 坐标(原点左下)。"""
+def _plan_insert(match_rect, replace, page_wh, words, ignore_rects, codec):
+    """返回 (ok, size, box, overlapped, reason)。坐标均为 PDF 坐标(原点左下)。
+
+    替换文本宽度按**插入字体真实字宽**测量（codec.measure），避免用错字宽
+    导致越页/覆盖判断失真。
+    """
     pr_w, pr_h = page_wh
     max_right = pr_w - PAGE_MARGIN
     max_bottom = pr_h - PAGE_MARGIN
@@ -614,7 +827,7 @@ def _plan_insert(match_rect, replace, page_wh, words, ignore_rects):
     size = prefer
     last_within = None
     while size >= MIN_FONTSIZE - 1e-9:
-        w = _measure(replace, size)
+        w = codec.measure(replace, size)
         box = (match_rect[0] - 0.5, match_rect[1] - 1.0,
                match_rect[0] - 0.5 + max(w, match_rect[2] - match_rect[0]) + 2.0,
                match_rect[3] + 2.0)
@@ -701,6 +914,10 @@ def _page_texts(path):
         for page in pdf.pages:
             texts.append(page.extract_text() or "")
     return texts
+
+
+def _strip_ws(text):
+    return re.sub(r"\s+", "", text)
 
 
 def _write_report(path, obj):
@@ -841,7 +1058,7 @@ def main():
     plans = []
     for rect in match_rects:
         ok, size, box, overlapped, reason = _plan_insert(
-            rect, args.replace, page_wh, words, match_rects)
+            rect, args.replace, page_wh, words, match_rects, codec)
         if not ok:
             result = {"status": "error", "page": args.page, "find": args.find,
                       "output": args.output, "reason": reason,
@@ -878,6 +1095,16 @@ def main():
         unchanged = all(after_texts[i] == before_texts[i]
                         for i in range(min(len(before_texts), len(after_texts)))
                         if i != pno)
+        # 除“新文出现/旧文消失”外，还要核查**未匹配正文**未被损坏：
+        # 去掉命中与替换后，目标页正文应逐字符一致（忽略空白），
+        # 这样错误的解码/手术（如多出定界括号）不会以退出 0 蒙混过关。
+        # 注意 before 侧也要去掉 replace，否则页面**原本就有**的相同新文本
+        # （独立于命中）会被误当成“正文丢失”而误报。
+        body_preserved = (
+            _strip_ws(before_texts[pno]
+                      .replace(args.find, "")
+                      .replace(args.replace, ""))
+            == _strip_ws(after_texts[pno].replace(args.replace, "")))
         report = {
             "input": args.input,
             "output": args.output,
@@ -890,6 +1117,7 @@ def main():
             "other_pages_unchanged": unchanged,
             "target_page_contains_new_text": args.replace in after_texts[pno],
             "target_page_contains_old_text": args.find in after_texts[pno],
+            "target_page_body_preserved": body_preserved,
             "replace_all_occurrences": True,
             "mode": mode,
             "irreversible": mode in ("purge", "full_fallback"),
@@ -897,7 +1125,8 @@ def main():
                               "不可逆脱敏请使用 doc-sensitive-redact"),
         }
         ok = (unchanged and report["target_page_contains_new_text"]
-              and not report["target_page_contains_old_text"])
+              and not report["target_page_contains_old_text"]
+              and body_preserved)
         _write_report(args.report, report)
         print(json.dumps(report, ensure_ascii=False))
         if not ok:

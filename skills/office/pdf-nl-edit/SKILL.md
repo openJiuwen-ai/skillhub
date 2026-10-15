@@ -1,6 +1,9 @@
 ---
 name: pdf-nl-edit
 description: PDF 自然语言局部编辑：按"第 N 页把 X 改成 Y"的指令在指定页定位文本、删除原文并在同位插入新文本，默认把该页**全部命中**逐一替换（多命中不会漏插），增量保存保证其余页内容不变，输出编辑报告（位置/原文/新文）与不变性验证。当用户要求"改 PDF 第几页的标题/修正错别字/替换某段文字"时使用。页码基准为 1 基并显式约定；目标不存在时明确报错不产出损坏文件。这是普通文字编辑，不是不可恢复的敏感信息脱敏。
+display_name: PDF 指定页文字修改
+tags: [办公与生产力, PDF, 文档处理]
+license: Apache-2.0
 ---
 
 # PDF 自然语言局部编辑
@@ -30,6 +33,7 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
   - `occurrences_found` / `occurrences_replaced`：命中数与真实替换处数（两者一致）
   - `other_pages_unchanged`：编辑后逐页提取文本与原文件比对，未编辑页文本必须一致
   - `target_page_contains_new_text` / `target_page_contains_old_text`
+  - `target_page_body_preserved`：去掉命中/替换后目标页未匹配正文逐字符一致（忽略空白），坏结果不会以退出 0 蒙混过关
   - `mode`（incremental/purge/full_fallback）、`irreversible`、`security_note`
   - 字号按命中区域高度估算，CJK 使用内置字体，字体替换已在报告中说明
 
@@ -48,8 +52,9 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
 - 复杂艺术字、曲线文字、扫描页无法定位时不猜不改
 - 增量为普通编辑：**旧对象版本仍存于文件**，不构成不可恢复的敏感原文删除；如需更彻底清除用 `--purge`（仍非取证级安全擦除）或改用脱敏技能
 - 新文字宽度与原文差异大时可能触发越页/覆盖保护而失败，建议保持近似长度
-- 目标文本若与其它文本共用同一文本算子（如"标题：XXX"里只改 XXX），只精确切除命中字形并做字距补偿；若字体需要无法安全往返的重编码，则**明确失败**而不破坏保留文本
-- 目标文本跨多个文本算子时本版本不猜改，**明确失败（退出 2）**
+- 目标文本若与其它文本共用同一文本算子（如"标题：XXX"里只改 XXX），只精确切除命中字形并做字距补偿；字距按**该字体真实字宽**（简单字体 `/Widths`、CID `/W`+`/DW`、标准 14 号 pdfminer.six 内置 AFM）计算；保留文本以**原字形码**重排（不重编码），位置不漂移
+- 目标文本跨多个文本算子时本版本不猜改，**明确失败（退出 2）**；跨同一 TJ 数组内多个字符串元素时同样明确失败，不假成功
+- 内容流中的内联图像（`BI ... ID ... EI`）与未知定界符会被安全跳过/推进，绝不会死循环
 
 ## 退出码
 
@@ -59,9 +64,9 @@ python scripts/pdf_edit.py --input in.pdf --page 2 --find 旧标题 --replace �
 
 ## 依赖
 
-Python 3.9+，全部为宽松许可（无 PyMuPDF/fitz）：
+Python ≥3.10（依赖最低要求：pdfminer.six / pillow / cffi / pycparser 均 `Requires-Python >=3.10`；实测 3.12.9），全部为宽松许可（无 PyMuPDF/fitz）：
 
-- `pdfplumber` / `pdfminer.six`（MIT）：文本定位与字符框
+- `pdfplumber` / `pdfminer.six`（MIT）：文本定位与字符框；标准 14 号字体宽度复用 pdfminer.six 内置 AFM 数据
 - `pypdf`（BSD-3-Clause）：结构读写、加密检查、增量/整文件落盘
 
 安装：`pip install -r requirements.txt`。许可说明与证据见 `docs/office-skills/pdf-nl-edit.md`。
