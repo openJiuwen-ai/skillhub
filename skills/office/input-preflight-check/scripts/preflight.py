@@ -69,8 +69,158 @@ def _short(v, n=40):
 def dump(path, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
-    print(json.dumps({"verdict": obj["verdict"],
-                      "reasons": obj.get("reasons", [])[:5]}, ensure_ascii=False))
+    summary = {"verdict": obj["verdict"], "reasons": obj.get("reasons", [])[:5]}
+    # 清单模式的业务完整性层结论一并暴露到 stdout（数据模式不带该层，保持旧输出）
+    if "business_verdict" in obj:
+        summary["business_verdict"] = obj["business_verdict"]
+        summary["coverage_warnings"] = obj.get("coverage_warnings", [])
+    print(json.dumps(summary, ensure_ascii=False))
+
+
+_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_TEMPORAL_RE = re.compile(r"(?:最近|近)\s*([0-9]+|[一二三四五六七八九十两]+)\s*年")
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+_VERDICT_RANK = {"pass": 0, "confirm_needed": 1, "needs_confirmation": 1,
+                 "block": 2}
+_VERDICT_LABEL = {0: "pass", 1: "needs_confirmation", 2: "block"}
+_CHECKLIST_NOTE = ("verdict为关键词匹配层结论（向后兼容保留）；business_verdict为"
+                   "业务完整性层结论（跨年度覆盖核对）。有跨年度/近N年要求但未声明"
+                   "具体年份或证据不足时 business_verdict=needs_confirmation/block，"
+                   "不得据关键词层 pass 放行；block时不产出分析结论")
+
+
+def _cn_int(tok):
+    if tok.isdigit():
+        return int(tok)
+    if tok in _CN_NUM:
+        return _CN_NUM[tok]
+    if "十" in tok:  # 十一 / 二十 / 二十三 等
+        parts = tok.split("十")
+        tens = _CN_NUM.get(parts[0], 1) if parts[0] else 1
+        ones = _CN_NUM.get(parts[1], 0) if len(parts) > 1 and parts[1] else 0
+        return tens * 10 + ones
+    return None
+
+
+def detect_temporal_years(name):
+    """检测名称中的"近N年/最近N年"跨年度要求，返回 N 或 None。
+
+    只识别相对年限，不推断基准年份（"近三年"相对哪一年由人工核验）。
+    """
+    if not name:
+        return None
+    m = _TEMPORAL_RE.search(str(name))
+    if not m:
+        return None
+    n = _cn_int(m.group(1))
+    return n if n and n > 0 else None
+
+
+def _normalize_years(raw):
+    """把 required_years 归一化为 4 位年份字符串列表，返回 (years, invalid)。"""
+    if not isinstance(raw, list):
+        return [], [raw]
+    years, invalid = [], []
+    for y in raw:
+        s = str(y).strip()
+        if _YEAR_RE.fullmatch(s):
+            years.append(s)
+        else:
+            invalid.append(y)
+    return years, invalid
+
+
+def _year_token(year):
+    return re.compile(r"(?<!\d)" + re.escape(year) + r"(?!\d)")
+
+
+def compute_coverage(item, matched):
+    """业务完整性层：按配置的材料覆盖核对。返回 (coverage_state, coverage, warnings)。
+
+    核对的是"每个要求年份是否配置了可核对的对应材料"，**不是**审计真实性验证。
+
+    - 声明 required_years：逐年核对是否有"该项已命中的可读证据文件"，文件名含该
+      年份（独立数字标记）才算证据；缺年 → incomplete。
+    - 配置不自洽（非法年份 / 重复年份 / 与名称"近N年"数量不一致）→ needs_confirmation，
+      不得因存在有效年份就放行。
+    - 单文件名称并列多个要求年份（合并报告）默认不算多份证据 → needs_confirmation；
+      仅在显式 `allow_merged_years: true` 时按可核对证据接受。
+    - 未声明但名称含"近N年"：不猜基准年份 → needs_confirmation。
+    - 两者皆无：None（普通清单，保持旧行为）。
+    来源证据保留在 coverage["evidence"]。
+    """
+    name = item.get("name")
+    raw = item.get("required_years")
+    temporal_n = detect_temporal_years(name)
+    warnings = []
+    if raw is not None:
+        years, invalid = _normalize_years(raw)
+        if invalid:
+            warnings.append("required_years含无法识别年份: %s（应为4位年份），"
+                            "配置不可靠，无法据此核对覆盖" % [str(x) for x in invalid])
+        if not years:
+            warnings.append("清单项'%s'声明了required_years但无可识别年份，"
+                            "无法核对覆盖，需人工核验" % name)
+            return "needs_confirmation", {
+                "required_years": None, "covered_years": [],
+                "missing_years": [], "evidence": {}}, warnings
+        # 配置自洽性：重复年份 / 与"近N年"数量不一致
+        config_conflict = bool(invalid)
+        if len(set(years)) != len(years):
+            warnings.append("required_years存在重复年份: %s，无法核对覆盖，需人工核验"
+                            % years)
+            config_conflict = True
+        if temporal_n and len(years) != temporal_n:
+            warnings.append("清单项'%s'为'近%d年'但required_years为%d个年份，数量不一致，"
+                            "无法据此判齐备，需人工核验"
+                            % (name, temporal_n, len(years)))
+            config_conflict = True
+        allow_merged = bool(item.get("allow_merged_years", False))
+        per_year = {}
+        for y in years:
+            pat = _year_token(y)
+            per_year[y] = [mf for mf in matched
+                           if pat.search(os.path.basename(mf))]
+
+        def _req_years_in(fname):
+            b = os.path.basename(fname)
+            return [y for y in set(years) if _year_token(y).search(b)]
+
+        single = {f for f in matched if len(_req_years_in(f)) == 1}
+        missing = [y for y in years if not per_year[y]]
+        merged_only = []
+        if not allow_merged:
+            for y in years:
+                if per_year[y] and not any(f in single for f in per_year[y]):
+                    merged_only.append(y)
+        covered = [y for y in years
+                   if per_year[y] and y not in missing and y not in merged_only]
+        evidence = {y: per_year[y] for y in years if per_year[y]}
+        coverage = {"required_years": years, "covered_years": covered,
+                    "missing_years": missing, "evidence": evidence,
+                    "merged_years_pending": merged_only}
+        if config_conflict:
+            return "needs_confirmation", coverage, warnings
+        if missing:
+            warnings.append("跨年度材料不齐：'%s'要求年份 %s，缺少 %s"
+                            % (name, years, missing))
+            return "incomplete", coverage, warnings
+        if merged_only:
+            warnings.append("清单项'%s'存在跨越多要求年份的单文件（名称并列 %s），"
+                            "单文件名并列年份不等于多份证据；未配置 allow_merged_years，"
+                            "不能静默通过，请拆分或显式允许合并并人工核对"
+                            % (name, merged_only))
+            return "needs_confirmation", coverage, warnings
+        return "complete", coverage, warnings
+    if temporal_n:
+        warnings.append("清单项'%s'含'近%d年'要求但未声明具体年份(required_years)，"
+                        "无法核对跨年度覆盖；不猜测基准年份，请提供 required_years "
+                        "或人工核验" % (name, temporal_n))
+        return "needs_confirmation", {
+            "temporal_requirement_years": temporal_n, "required_years": None,
+            "covered_years": [], "missing_years": [], "evidence": {}}, warnings
+    return None, None, warnings
 
 
 def mode_checklist(args):
@@ -88,10 +238,11 @@ def mode_checklist(args):
         return 2
     items = cfg.get("items")
     if not isinstance(items, list) or not items:
-        dump(args.report, {"mode": "checklist", "verdict": "block", "items": [],
-                           "files_scanned": 0,
+        dump(args.report, {"mode": "checklist", "verdict": "block",
+                           "business_verdict": "block", "items": [],
+                           "files_scanned": 0, "coverage_warnings": [],
                            "reasons": ["清单为空：没有任何条目"],
-                           "note": "verdict=block时不产出分析结论"})
+                           "note": _CHECKLIST_NOTE})
         return 0
     # 清单自身问题：缺 id / 重复 id / 条目无任何匹配模式
     ids = [i.get("id") for i in items]
@@ -154,11 +305,14 @@ def mode_checklist(args):
             if required:
                 reasons.append("缺失: %s（无文件命中全部模式 %s）"
                                % (item.get("name"), pats))
+        cov_state, cov_detail, cov_warnings = compute_coverage(item, matched)
         results.append({"id": item.get("id"), "name": item.get("name"),
                         "state": state, "matched_files": matched[:5],
                         "unreadable_files": unreadable[:5],
                         "fuzzy_files": fuzzy_matched[:5],
-                        "required": required})
+                        "required": required,
+                        "coverage_state": cov_state, "coverage": cov_detail,
+                        "coverage_warnings": cov_warnings})
     blocking = bool(dups) or bool(missing_ids) or bool(no_pattern)
     for r, item in zip(results, items):
         required = item.get("required", True)
@@ -169,9 +323,20 @@ def mode_checklist(args):
     confirm = any(r["state"] == "needs_confirm" for r in results)
     verdict = "block" if blocking else ("confirm_needed" if (confirm or reasons)
                                         else "pass")
-    report = {"mode": "checklist", "verdict": verdict, "items": results,
+    # 业务完整性层：绝不比关键词层更宽松；跨年度证据不足时收紧结论
+    business_rank = _VERDICT_RANK[verdict]
+    coverage_warnings = []
+    for r, item in zip(results, items):
+        coverage_warnings.extend(r.get("coverage_warnings", []))
+        cs = r.get("coverage_state")
+        required = item.get("required", True)
+        if cs in ("incomplete", "needs_confirmation"):
+            business_rank = max(business_rank, 2 if required else 1)
+    business_verdict = _VERDICT_LABEL[business_rank]
+    report = {"mode": "checklist", "verdict": verdict,
+              "business_verdict": business_verdict, "items": results,
               "files_scanned": len(files), "reasons": reasons,
-              "note": "verdict=block时不产出分析结论"}
+              "coverage_warnings": coverage_warnings, "note": _CHECKLIST_NOTE}
     dump(args.report, report)
     return 0
 

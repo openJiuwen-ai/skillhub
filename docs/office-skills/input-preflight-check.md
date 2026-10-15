@@ -2,6 +2,8 @@
 
 材料齐全性与分析前数据范围校验：`checklist` 模式做清单三态核对（ready/missing/needs_confirm，patterns 需在可读文件的文件名或内容全部命中，损坏文件不得因文件名命中而判已齐）；`data` 模式做分析前数据范围校验（必需列/重复表头/单位口径/数值列/真实日历日期范围/最少行数/公式缓存），输出放行（pass）或阻断（block）结论。校验不通过即阻断，不继续产出分析结论。
 
+清单模式同时给出**业务完整性层**判定（`business_verdict`/`coverage_state`/`coverage_warnings`）：对有"近N年/跨年度"要求但未声明具体年份或证据不足的条目，业务层判 `needs_confirmation`/`block`，关键词层 `verdict` 仅作兼容保留，**不得据关键词 `pass` 放行**。可用 `required_years` 显式声明目标年份，逐年核对覆盖并保留来源证据。此为保守防误判（防止把"近三年"仅凭一份 2023 报告当齐全），不是通用审计真实性鉴别。
+
 ## 能力边界
 
 | 场景 | 是否支持 |
@@ -20,8 +22,16 @@
 | 材料目录为空 → 至少 confirm_needed（必需项随之 missing→block） | 是 |
 | 日期列要求了但表头没有 / date_range 配置无效 → 明确失败检查项 + 阻断（不静默跳过） | 是 |
 | 单位口径：表头未注明要求单位且列有数值 → confirm（needs_confirm） | 是 |
+| 跨年度业务完整性：条目名含"近N年/最近N年"但未声明 `required_years` → `coverage_state=needs_confirmation`，必需项 `business_verdict=block`（不猜基准年份） | 是 |
+| 显式 `required_years`：逐年在"该项已命中的可读证据文件"中核对（文件名含独立年份标记），缺年 → `coverage_state=incomplete`、`business_verdict=block`，保留 `evidence` 来源 | 是 |
+| 显式 `required_years` 三年齐备（各自独立证据文件）→ `coverage_state=complete`、业务层可 `pass` | 是 |
+| 配置不自洽（`required_years` 含非法年份/重复年份，或与名称"近N年"数量不一致）→ 即便有有效年份命中，业务层 `needs_confirmation`/`block` | 是 |
+| 单文件名并列多年份（`审计报告_2021_2022_2023.md`）默认不算多份证据 → `needs_confirmation`（`merged_years_pending`）；显式 `allow_merged_years: true` 时才按可核对证据接受 | 是 |
+| 无年度要求的普通清单 → `coverage_state=null`，业务层与旧行为一致 | 是 |
+| `business_verdict` 绝不比关键词层 `verdict` 更宽松（关键词 pass 不得当完整材料放行） | 是 |
 | 不存在的材料目录 / 清单或要求文件不是 JSON 对象 / 数据表无法读取 | 退出 2 |
 | 语义级"材料真实性"判定（内容真伪、签章效力等） | 否（只做结构与范围校验） |
+| 自动推断"近N年"的基准年份 / 判定材料内容是否具有跨年度效力 | 否（需显式 `required_years` 或人工核验） |
 
 ## 安装与依赖
 
@@ -66,9 +76,15 @@ requirements.json：
 
 输出 preflight-report.json：`verdict: pass|confirm_needed|block`；checklist 模式含
 `items[].state/matched_files/unreadable_files/fuzzy_files`、`files_scanned`、`reasons`；
-data 模式含 `duplicate_headers/required_columns/unit/numeric/date_range/formula_cache/min_rows`
-各检查项（日期项含 `parsed_rows/out_of_range/unparseable/missing_rows` 计数与行号）、
-`sheet`、`rows`、`reasons`。**verdict=block 时不产出任何分析结论**。
+并新增业务完整性层 `business_verdict: pass|needs_confirmation|block`、
+`items[].coverage_state: complete|incomplete|needs_confirmation|null`、
+`items[].coverage`（`required_years/covered_years/missing_years/evidence/merged_years_pending`）、
+`coverage_warnings`。`verdict`/`state` 为关键词匹配层（向后兼容保留），
+`business_verdict` 为业务放行依据且绝不比关键词层更宽松。CLI stdout 同步输出
+`business_verdict`/`coverage_warnings`。data 模式含 `duplicate_headers/required_columns/unit/
+numeric/date_range/formula_cache/min_rows` 各检查项（日期项含
+`parsed_rows/out_of_range/unparseable/missing_rows` 计数与行号）、`sheet`、`rows`、
+`reasons`。**verdict=block / business_verdict=block 时不产出任何分析结论**。
 
 ## 退出码
 
@@ -101,14 +117,35 @@ M02 材料齐全性检查 / M17 分析前数据范围校验 / M18 Excel 工作�
    patterns 条目 block；损坏数据文件退出 2；空 requirements block；date_column 不在
    表头 → date_column_not_in_header 阻断。
 
+业务完整性层黑盒回归位于独立新文件
+`tests/office_skills/test_input_preflight_check_business.py`（10 项，不改动既有 14 项）：
+
+1. 真实宿主冻结样例（"近三年审计报告" patterns 仅含"审计报告"/"2023"、mats 只有
+   2023 一份）→ 关键词层 `verdict=pass`（兼容保留），业务层 `business_verdict=block`、
+   `coverage_state=needs_confirmation`、`coverage_warnings` 非空，CLI stdout 同判；
+2. 显式 `required_years=[2021,2022,2023]` 缺 2021 → `coverage_state=incomplete`、
+   `missing_years=["2021"]`、`evidence` 保留 2022/2023 来源、业务层 block；
+3. 显式三年齐备（各自独立证据）→ `coverage_state=complete`、业务层 `pass`、`evidence` 命中；
+4. 无年度普通单材料清单 → `coverage_state=null`、`business_verdict=pass`（无回归）；
+5. 未声明年份的"近三年" → 不猜基准年份（`required_years` 为空）、业务层不得 pass、
+   警告含"未声明/人工核验"；
+6. 年份仅出现在非证据文件（不命中该清单项模式）→ 不计入覆盖，缺年仍 block
+   （拒绝"任意年份在任意文件即覆盖"的宽松启发式）；
+7. `required_years=[2023,"bad"]`（含非法年份）→ 即便 2023 命中仍 `needs_confirmation`/block；
+8. 名称"近三年"但 `required_years=[2023]`（数量不一致）→ `needs_confirmation`/block；
+9. `required_years=[2023,2023,2023]`（重复）→ 不得当三年齐备，`needs_confirmation`/block；
+10. 单文件 `审计报告_2021_2022_2023.md` 名称并列三年 → 默认 `needs_confirmation`
+    （`merged_years_pending`），显式 `allow_merged_years: true` 时才 `complete`/pass。
+
 在仓库根目录运行（任务 venv 解释器，任务目录下唯一临时目录）：
 
 ```bash
-C:\code\jiuwen\work\skills-comparison-20261013\office-delivery-glm53\venv\Scripts\python.exe -m pytest tests/office_skills/test_input_preflight_check.py --basetemp <任务目录下唯一测试临时目录>
+C:\code\jiuwen\work\skills-comparison-20261013\office-delivery-glm53\venv\Scripts\python.exe -m pytest tests/office_skills/test_input_preflight_check.py tests/office_skills/test_input_preflight_check_business.py --basetemp <任务目录下唯一测试临时目录>
 ```
 
 家族回归（同技能）：`tests/office_skills/test_business_family.py::test_preflight` 通过
-（三态核对/近似名陷阱/缺列阻断/日期越界原有契约保持）。
+（三态核对/近似名陷阱/缺列阻断/日期越界原有契约保持）。全量 `tests/office_skills`
+（200 项）通过。
 
 包校验：仓库原 CLI `jiuwen-teamskills validate skills/office/input-preflight-check`
 → "Skill validation passed."；`pack` 成功产出 zip+sha256。
@@ -133,6 +170,34 @@ C:\code\jiuwen\work\skills-comparison-20261013\office-delivery-glm53\venv\Script
 `benchmarks/preflight-complex/after-fix-20261015/`（新目录，未覆盖 before-review 历史
 证据），`passed=true`（脚本 probe_rerun.py 可独立复跑）。
 
+## 宿主误判修复（2026-10-15，业务完整性层）
+
+真实 Jiuwen 宿主调用
+`jiuwen-host-acceptance-20261015/cases/input-preflight-check/c.json`：M2 名称
+"近三年审计报告"、patterns 仅 `["审计报告","2023"]`、mats 只有 2023 一份报告，
+关键词层给 `ready/pass`，宿主据此称"齐全"。原始事件与报告已保留（未改动冻结输入）。
+
+修复（向后兼容、有边界）：
+
+- **保留** `verdict`/`items[].state` 为关键词匹配层结果，已有调用方不受影响。
+- **新增** 业务完整性层 `business_verdict`/`coverage_state`/`coverage_warnings`，
+  CLI stdout、报告 `note` 与 SKILL.md 均明确其语义。
+- 条目名含"近N年/最近N年"但未声明具体年份 → 不猜基准年份，判 `needs_confirmation`；
+  必需项业务层 `block`。声明 `required_years` 缺年 → `incomplete`；三年齐备 →
+  `complete`。来源证据保留于 `coverage.evidence`。
+- 覆盖只认"该项已命中的可读证据文件"且文件名含独立年份标记，拒绝"任意年份出现在
+  任意文件即覆盖"的宽松启发式；不确定即提示人工核验。
+- 主控复核补强（保守性）：`required_years` 含**非法年份/重复年份**，或与名称"近N年"
+  的 N **数量不一致** → 即便存在有效命中年份也 `needs_confirmation`/block；
+  **单文件名并列多年份**（如 `审计报告_2021_2022_2023.md`）默认只算一份证据 →
+  `needs_confirmation`（`merged_years_pending`），仅显式 `allow_merged_years: true`
+  才按可核对证据接受。对应新增 4 项黑盒回归。
+- 无年度要求的普通清单 `coverage_state=null`，业务层与旧行为一致。
+
+边界（不宣称）：本层核对的是**按配置的材料覆盖**（是否配置了可核对的对应年度证据），
+**不是审计内容真实性/签章效力鉴别**；不自动推断"近N年"的基准年份，也不判定材料内容
+的跨年度效力（需显式 `required_years` 或人工核验）。
+
 ## 来源与许可
 
 本技能为原创实现（`decision-register.json`: independent_implement；未复制外部代码；
@@ -148,6 +213,8 @@ C:\code\jiuwen\work\skills-comparison-20261013\office-delivery-glm53\venv\Script
   快照，未读竞品正文）。
 - 语义级材料真实性/内容真伪判定：本技能只做文件可读性、模式与数据范围的结构化
   校验，不判定材料内容真实有效。
+- "近N年"基准年份推断：本技能不推断相对哪一年（如"近三年"=哪三年），需显式
+  `required_years` 或人工核验；跨年度覆盖仅按已命中证据文件名的年份标记核对。
 - xlsx 多工作表：data 模式校验 active 工作表（报告标 `sheet` 名），非 active 表不
   在校验范围。
 - 未知扩展名（pdf/doc/图片等）文件：不做内容提取（不判损坏），仅可按文件名命中
