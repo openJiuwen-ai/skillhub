@@ -774,35 +774,684 @@ def _clean_attachment_blob(blob, types, where, depth=0, name=None):
     return blob, []
 
 
+# ---------------------------------------------------------------------------
+# PDF 宽松栈辅助: 字体编解码与内容流算子级删除。
+# 来源: 本仓库 skills/office/pdf-nl-edit/scripts/pdf_edit.py(本仓库自有实现,
+# 随根 LICENSE 分发)。为保持本技能自包含, 复制其字体解码/内容流分词与命中
+# 切除逻辑, 未修改 pdf-nl-edit; 复用目的正是避免重复实现复杂字体缺陷。
+# ---------------------------------------------------------------------------
+try:
+    from pdfminer.fontmetrics import FONT_METRICS as _STD_FONT_METRICS
+except Exception:  # pragma: no cover - pdfminer.six 随 pdfplumber 提供
+    _STD_FONT_METRICS = {}
+
+_NON_TEXT_STANDARD_FONTS = ("Symbol", "ZapfDingbats")
+
+
+def _standard_char_width(basefont, ch):
+    name = (basefont or "").lstrip("/")
+    if "+" in name:
+        name = name.split("+", 1)[1]
+    if not name or name in _NON_TEXT_STANDARD_FONTS:
+        return None
+    entry = _STD_FONT_METRICS.get(name)
+    if not entry:
+        return None
+    w = entry[1].get(ch)
+    return float(w) if w is not None else None
+
+
+def _is_wide(ch):
+    o = ord(ch)
+    return (
+        0x1100 <= o <= 0x115F
+        or 0x2E80 <= o <= 0xA4CF
+        or 0xAC00 <= o <= 0xD7A3
+        or 0xF900 <= o <= 0xFAFF
+        or 0xFE30 <= o <= 0xFE4F
+        or 0xFF00 <= o <= 0xFF60
+        or 0xFFE0 <= o <= 0xFFE6
+    )
+
+
+_WS = b"\x00\x09\x0a\x0c\x0d\x20"
+_DELIM = b"()<>[]{}/%"
+
+
+def _parse_tounicode(data):
+    mapping = {}
+    for blk in re.findall(rb"beginbfchar(.*?)endbfchar", data, re.S):
+        for src, dst in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>", blk):
+            try:
+                mapping[int(src, 16)] = bytes.fromhex(dst.decode()).decode(
+                    "utf-16-be", "replace")
+            except ValueError:
+                continue
+    for blk in re.findall(rb"beginbfrange(.*?)endbfrange", data, re.S):
+        for lo, hi, dst in re.findall(
+                rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", blk):
+            lo_i, hi_i, dv = int(lo, 16), int(hi, 16), int(dst, 16)
+            for k in range(lo_i, hi_i + 1):
+                mapping[k] = chr(dv + (k - lo_i))
+    return mapping
+
+
+class _FontCodec:
+    """把字体资源归一化为 2 字节(CID)或 1 字节(简单字体)编解码。"""
+
+    def __init__(self, name, font_dict):
+        self.name = name
+        self.subtype = str(font_dict.get("/Subtype", ""))
+        self.basefont = str(font_dict.get("/BaseFont", ""))
+        encoding = str(font_dict.get("/Encoding", ""))
+        self.is_cid = self.subtype == "/Type0"
+        self.two_byte = self.is_cid
+        self.tounicode = {}
+        tu = font_dict.get("/ToUnicode")
+        if tu is not None:
+            try:
+                self.tounicode = _parse_tounicode(tu.get_object().get_data())
+            except Exception:
+                self.tounicode = {}
+        self.predefined_unicode = False
+        if self.is_cid:
+            self.predefined_unicode = encoding.startswith("/Uni")
+            if not self.predefined_unicode and encoding.startswith("/Identity"):
+                self.predefined_unicode = True
+        else:
+            self.winansi = encoding in ("/WinAnsiEncoding", "/StandardEncoding", "")
+            self.macroman = encoding == "/MacRomanEncoding"
+        self.widths = {}
+        self.cid_widths = {}
+        self.dw = 1000.0
+        self.missing_width = None
+        self._rev = None
+        try:
+            if self.is_cid:
+                self._load_cid_widths(font_dict)
+            else:
+                self._load_simple_widths(font_dict)
+        except Exception:
+            self.widths = {}
+            self.cid_widths = {}
+
+    def _load_simple_widths(self, font_dict):
+        widths = font_dict.get("/Widths")
+        first = font_dict.get("/FirstChar")
+        if widths is not None and first is not None:
+            try:
+                arr = widths.get_object()
+                base = int(first)
+                for k in range(len(arr)):
+                    try:
+                        self.widths[base + k] = float(arr[k])
+                    except (TypeError, ValueError, IndexError):
+                        pass
+            except Exception:
+                self.widths = {}
+        fd = font_dict.get("/FontDescriptor")
+        if fd is not None:
+            try:
+                mw = fd.get_object().get("/MissingWidth")
+                if mw is not None:
+                    self.missing_width = float(mw)
+            except Exception:
+                pass
+
+    def _load_cid_widths(self, font_dict):
+        desc = font_dict.get("/DescendantFonts")
+        d0 = None
+        if desc is not None:
+            try:
+                d0 = desc.get_object()[0].get_object()
+            except Exception:
+                d0 = None
+        if d0 is None:
+            return
+        dw = d0.get("/DW")
+        if dw is not None:
+            try:
+                self.dw = float(dw)
+            except (TypeError, ValueError):
+                pass
+        warr = d0.get("/W")
+        if warr is None:
+            return
+        try:
+            arr = warr.get_object()
+        except Exception:
+            return
+        i, n = 0, len(arr)
+        while i < n:
+            try:
+                first = int(arr[i])
+            except (TypeError, ValueError):
+                i += 1
+                continue
+            i += 1
+            if i >= n:
+                break
+            item = arr[i]
+            if hasattr(item, "get_object"):
+                item = item.get_object()
+            if isinstance(item, (list, tuple)) or type(item).__name__ == "ArrayObject":
+                for k, v in enumerate(item):
+                    try:
+                        self.cid_widths[first + k] = float(v)
+                    except (TypeError, ValueError):
+                        pass
+                i += 1
+            else:
+                i += 1
+                if i >= n:
+                    break
+                try:
+                    last = int(item)
+                    wv = float(arr[i])
+                except (TypeError, ValueError):
+                    i += 1
+                    continue
+                i += 1
+                for c in range(first, last + 1):
+                    self.cid_widths[c] = wv
+
+    def code_for(self, ch):
+        if self.two_byte:
+            if self.predefined_unicode:
+                cp = ord(ch)
+                return cp if cp <= 0xFFFF else None
+            if self.tounicode:
+                if self._rev is None:
+                    self._rev = {v: k for k, v in self.tounicode.items()}
+                return self._rev.get(ch)
+            return None
+        try:
+            return ch.encode("cp1252")[0]
+        except (UnicodeEncodeError, IndexError):
+            return None
+
+    def width_for_code(self, code, ch=None):
+        if self.is_cid:
+            return self.cid_widths.get(code, self.dw)
+        if code in self.widths:
+            return self.widths[code]
+        w = _standard_char_width(self.basefont, ch) if ch is not None else None
+        if w is not None:
+            return w
+        if self.missing_width is not None:
+            return self.missing_width
+        return 500.0
+
+    def decode(self, raw):
+        out = []
+        if self.two_byte:
+            codes = [int.from_bytes(raw[i:i + 2], "big")
+                     for i in range(0, len(raw) - 1, 2)]
+            if self.tounicode:
+                for c in codes:
+                    out.append(self.tounicode.get(c, "\ufffd"))
+                return "".join(out)
+            return raw.decode("utf-16-be", "replace")
+        else:
+            for b in raw:
+                if self.tounicode and b in self.tounicode:
+                    out.append(self.tounicode[b])
+                elif self.macroman:
+                    out.append(bytes([b]).decode("mac-roman", "replace"))
+                else:
+                    out.append(bytes([b]).decode("cp1252", "replace"))
+            return "".join(out)
+
+
+class _Tok:
+    __slots__ = ("kind", "value", "start", "end", "items")
+
+    def __init__(self, kind, value, start, end, items=None):
+        self.kind = kind
+        self.value = value
+        self.start = start
+        self.end = end
+        self.items = items
+
+
+def _scan_literal(data, i):
+    depth = 1
+    j = i + 1
+    n = len(data)
+    out = bytearray()
+    while j < n:
+        c = data[j]
+        if c == 0x5C:
+            if j + 1 < n:
+                nxt = data[j + 1]
+                simple = {0x6E: 10, 0x72: 13, 0x74: 9, 0x62: 8, 0x66: 12,
+                          0x28: 0x28, 0x29: 0x29, 0x5C: 0x5C}
+                if nxt in simple:
+                    out.append(simple[nxt])
+                    j += 2
+                    continue
+                if 0x30 <= nxt <= 0x37:
+                    oct_digits = []
+                    k = j + 1
+                    while k < n and len(oct_digits) < 3 and 0x30 <= data[k] <= 0x37:
+                        oct_digits.append(data[k])
+                        k += 1
+                    out.append(int(bytes(oct_digits), 8) & 0xFF)
+                    j = k
+                    continue
+                if nxt in (0x0A, 0x0D):
+                    j += 2
+                    if nxt == 0x0D and j < n and data[j] == 0x0A:
+                        j += 1
+                    continue
+                out.append(nxt)
+                j += 2
+                continue
+            j += 1
+            continue
+        if c == 0x28:
+            depth += 1
+            out.append(c)
+            j += 1
+            continue
+        if c == 0x29:
+            depth -= 1
+            if depth == 0:
+                return bytes(out), j + 1
+            out.append(c)
+            j += 1
+            continue
+        out.append(c)
+        j += 1
+    return bytes(out), j
+
+
+def _scan_hex(data, i):
+    j = data.find(b">", i)
+    n = len(data)
+    if j < 0:
+        j = n
+    raw = re.sub(rb"[^0-9A-Fa-f]", b"", data[i + 1:j])
+    if len(raw) % 2:
+        raw += b"0"
+    return bytes.fromhex(raw.decode()), (j + 1 if j < n else n)
+
+
+def _skip_balanced(data, i, opener, closer):
+    depth = 0
+    j = i
+    n = len(data)
+    while j < n:
+        if data[j:j + len(opener)] == opener:
+            depth += 1
+            j += len(opener)
+            continue
+        if data[j:j + len(closer)] == closer:
+            depth -= 1
+            j += len(closer)
+            if depth == 0:
+                return j
+            continue
+        j += 1
+    return n
+
+
+def _next_token(data, i):
+    n = len(data)
+    while i < n and data[i] in _WS:
+        i += 1
+    if i >= n:
+        return None, i
+    c = data[i]
+    if c == 0x25:  # %
+        j = data.find(b"\n", i)
+        return _next_token(data, n if j < 0 else j + 1)
+    if c == 0x2F:  # /
+        j = i + 1
+        while j < n and data[j] not in _WS and data[j] not in _DELIM:
+            j += 1
+        return _Tok("name", data[i + 1:j], i, j), j
+    if c == 0x28:  # (
+        raw, j = _scan_literal(data, i)
+        return _Tok("str", raw, i, j), j
+    if c == 0x3C:  # <
+        if data[i + 1:i + 2] == b"<":
+            j = _skip_balanced(data, i, b"<<", b">>")
+            return _Tok("dict", data[i:j], i, j), j
+        raw, j = _scan_hex(data, i)
+        return _Tok("str", raw, i, j), j
+    if c == 0x5B:  # [
+        items = []
+        j = i + 1
+        while True:
+            t, j = _next_token(data, j)
+            if t is None:
+                break
+            if t.kind == "op" and t.value == b"]":
+                return _Tok("array", None, i, j, items), j
+            items.append(t)
+        return _Tok("array", None, i, i + 1, items), i + 1
+    if c in (0x2B, 0x2D, 0x2E) or 0x30 <= c <= 0x39:  # number
+        j = i
+        while j < n and (data[j] in b"+-.0123456789"):
+            j += 1
+        return _Tok("num", data[i:j], i, j), j
+    if c == 0x5D:  # ]
+        return _Tok("op", b"]", i, i + 1), i + 1
+    j = i
+    while j < n and data[j] not in _WS and data[j] not in _DELIM:
+        j += 1
+    if j == i:
+        return _Tok("op", data[i:i + 1], i, i + 1), i + 1
+    return _Tok("op", data[i:j], i, j), j
+
+
+def _skip_inline_image(data, i):
+    m = re.search(rb"\sEI(?=[\s\[\]<>()/%]|\Z)", data[i:])
+    if not m:
+        return len(data)
+    return i + m.end()
+
+
+def _tokenize(data):
+    toks = []
+    i = 0
+    n = len(data)
+    while i < n:
+        t, i = _next_token(data, i)
+        if t is None:
+            break
+        toks.append(t)
+        if t.kind == "op" and t.value == b"ID":
+            i = _skip_inline_image(data, i)
+    return toks
+
+
+def _decode_op_text(font, tok):
+    if tok.kind == "str":
+        return font.decode(tok.value)
+    if tok.kind == "array":
+        return "".join(font.decode(it.value) for it in tok.items
+                       if it.kind == "str")
+    return ""
+
+
+def _decode_with_codes(font, raw):
+    out = []
+    if font.two_byte:
+        for i in range(0, len(raw) - 1, 2):
+            code = int.from_bytes(raw[i:i + 2], "big")
+            if font.tounicode:
+                ch = font.tounicode.get(code, "\ufffd")
+            else:
+                ch = raw[i:i + 2].decode("utf-16-be", "replace")
+            out.append((ch, code))
+    else:
+        for b in raw:
+            if font.tounicode and b in font.tounicode:
+                ch = font.tounicode[b]
+            elif font.macroman:
+                ch = bytes([b]).decode("mac-roman", "replace")
+            else:
+                ch = bytes([b]).decode("cp1252", "replace")
+            out.append((ch, b))
+    return out
+
+
+def _split_occurrences(pairs, find):
+    text = "".join(ch for ch, _ in pairs)
+    segments = []
+    idx = 0
+    while True:
+        pos = text.find(find, idx)
+        if pos < 0:
+            segments.append(("keep", pairs[idx:]))
+            break
+        segments.append(("keep", pairs[idx:pos]))
+        segments.append(("drop", pairs[pos:pos + len(find)]))
+        idx = pos + len(find)
+    return segments
+
+
+class _UnsupportedEdit(Exception):
+    """无法可靠手术的内容结构(显式失败, 不猜改)。"""
+
+
+def _codes_to_hex(font, seg):
+    if font.two_byte:
+        return b"".join(code.to_bytes(2, "big") for _, code in seg).hex().encode()
+    return bytes(code & 0xFF for _, code in seg).hex().encode()
+
+
+def _segments_to_dump(font, segments):
+    chunks = []
+    has_keep = False
+    for kind, seg in segments:
+        if kind == "keep":
+            if seg:
+                chunks.append(b"<" + _codes_to_hex(font, seg) + b">")
+                has_keep = True
+        else:
+            if seg:
+                total = sum(font.width_for_code(code, ch) for ch, code in seg)
+                kern = -int(round(total))
+                if kern:
+                    chunks.append(b" " + str(kern).encode())
+    return b" ".join(chunks), has_keep
+
+
+def _rewrite_show_token(font, show_tok, find):
+    if show_tok.kind == "str":
+        segments = _split_occurrences(_decode_with_codes(font, show_tok.value), find)
+        dumps, has_keep = _segments_to_dump(font, segments)
+        if has_keep:
+            return b"[" + dumps + b"]TJ"
+        return None
+
+    items = show_tok.items
+    texts = []
+    pos_map = []
+    for idx, it in enumerate(items):
+        if it.kind == "str":
+            d = font.decode(it.value)
+            texts.append(d)
+            pos_map.extend([idx] * len(d))
+    full = "".join(texts)
+    start = 0
+    while True:
+        p = full.find(find, start)
+        if p < 0:
+            break
+        if pos_map[p] != pos_map[p + len(find) - 1]:
+            raise _UnsupportedEdit(
+                "find string spans multiple strings inside one TJ array; "
+                "refusing to guess at kerning")
+        start = p + len(find)
+    parts = []
+    has_keep = False
+    for it in items:
+        if it.kind == "str":
+            seg = _split_occurrences(_decode_with_codes(font, it.value), find)
+            chunk, keep = _segments_to_dump(font, seg)
+            has_keep = has_keep or keep
+            parts.append(chunk)
+        elif it.kind == "num":
+            parts.append(it.value)
+        else:
+            parts.append(b"")
+    if has_keep:
+        body = b" ".join(p for p in parts if p)
+        return b"[" + body + b"]TJ"
+    return None
+
+
+def _edit_content(content, fonts, find):
+    """在内容流中删除 `find` 的字形码, 返回 (新内容字节, 命中列表)。"""
+    if not find:
+        return content, []
+    toks = _tokenize(content)
+    edits = []
+    hits = []
+    operands = []
+    cur_font = None
+    cur_size = 0.0
+    for t in toks:
+        if t.kind != "op":
+            operands.append(t)
+            continue
+        op = t.value
+        if op == b"Tf":
+            if len(operands) >= 2 and operands[-2].kind == "name":
+                cur_font = fonts.get(operands[-2].value.decode("latin-1"))
+                try:
+                    cur_size = float(operands[-1].value)
+                except (TypeError, ValueError):
+                    cur_size = 0.0
+            operands = []
+            continue
+        show_tok = None
+        if op in (b"Tj", b"'", b'"') and operands and operands[-1].kind == "str":
+            show_tok = operands[-1]
+        elif op == b"TJ" and operands and operands[-1].kind == "array":
+            show_tok = operands[-1]
+        if show_tok is None or cur_font is None:
+            operands = []
+            continue
+        decoded = _decode_op_text(cur_font, show_tok)
+        occ = decoded.count(find)
+        if occ:
+            span_start = operands[0].start
+            span_end = t.end
+            replacement = _rewrite_show_token(cur_font, show_tok, find)
+            if replacement is None:
+                edits.append((span_start, span_end, b""))
+            else:
+                edits.append((show_tok.start, span_end, replacement))
+            hits.extend([{"font": cur_font, "size": cur_size}] * occ)
+        operands = []
+    out = bytearray(content)
+    for start, end, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        out[start:end] = repl
+    return bytes(out), hits
+
+
+def _iter_fonts(resources):
+    fonts = resources.get("/Font") if resources else None
+    if fonts is None:
+        return {}
+    if hasattr(fonts, "get_object"):
+        fonts = fonts.get_object()
+    if not isinstance(fonts, dict):
+        return {}
+    out = {}
+    for key, ref in fonts.items():
+        bare = key[1:] if str(key).startswith("/") else str(key)
+        out[bare] = ref
+    return out
+
+
+class _PdfLibs:
+    pypdf = None
+    pdfplumber = None
+
+
+def _pdf_libs():
+    if _PdfLibs.pypdf is None:
+        import pypdf as _pypdf
+        import pdfplumber as _pdfplumber
+        _PdfLibs.pypdf = _pypdf
+        _PdfLibs.pdfplumber = _pdfplumber
+    return _PdfLibs.pypdf, _PdfLibs.pdfplumber
+
+
+def _pdf_string(value):
+    pypdf, _ = _pdf_libs()
+    return pypdf.generic.create_string_object(value)
+
+
+def _pdf_fonts(page_obj):
+    try:
+        resources = page_obj.get("/Resources")
+        if resources is not None:
+            resources = resources.get_object()
+    except Exception:
+        resources = None
+    fonts = {}
+    for name, ref in _iter_fonts(resources).items():
+        try:
+            fdict = ref.get_object() if hasattr(ref, "get_object") else ref
+            fonts[name] = _FontCodec(name, fdict)
+        except Exception:
+            continue
+    return fonts
+
+
+def _redact_content_stream(content, fonts, values):
+    """按值删除内容流中的敏感字形码(实际删除, 非白框覆盖)。"""
+    total = 0
+    cur = content
+    for v in sorted(set(values), key=len, reverse=True):
+        try:
+            cur, hits = _edit_content(cur, fonts, v)
+        except _UnsupportedEdit:
+            continue
+        total += len(hits)
+    return cur, total
+
+
+def _filespec_blob(fs):
+    ef = fs.get("/EF")
+    if ef is None:
+        return None
+    ef = ef.get_object()
+    for key in ("/F", "/UF"):
+        if key in ef:
+            try:
+                return ef[key].get_object().get_data()
+            except Exception:
+                continue
+    return None
+
+
+def _set_filespec_blob(fs, data):
+    ef = fs.get("/EF")
+    if ef is None:
+        return
+    ef = ef.get_object()
+    for key in ("/F", "/UF"):
+        if key in ef:
+            try:
+                ef[key].get_object().set_data(data)
+                return
+            except Exception:
+                continue
+
+
 def _clean_pdf_attachment_annot(annot, result, detected, types, where):
     """文件附件批注: 嵌入内容与文件名含敏感值时清洗重写并保留无关内容;
     无法可靠清洗时抛 UncleanableAttachment(整文件阻断, 不笼统成功)。"""
-    try:
-        blob = annot.get_file()
-    except Exception:
-        blob = None
+    pypdf, _ = _pdf_libs()
+    fs = annot.get("/FS")
+    if fs is None:
+        return
+    fs = fs.get_object()
+    blob = _filespec_blob(fs)
     cleaned = None
     hits_all = []
-    if blob:
+    if blob is not None:
         cleaned, hits_all = _clean_attachment_blob(blob, types, where)
-    info = annot.info or {}
-    fname = info.get("content")
     fhits = []
-    if isinstance(fname, str) and fname:
-        fhits, _ = find_hits(fname, types)
+    for key in ("/F", "/UF", "/Desc"):
+        v = fs.get(key)
+        if isinstance(v, str) and v:
+            hh, _ = find_hits(v, types)
+            if hh:
+                fs[pypdf.generic.NameObject(key)] = _pdf_string(_replace_in(v, hh))
+                fhits.extend(hh)
+    if cleaned is not None and cleaned != blob:
+        _set_filespec_blob(fs, cleaned)
     if not hits_all and not fhits:
         return
-    kw = {}
-    if cleaned is not None:
-        kw["buffer_"] = cleaned
-    if fhits:
-        new_name = _replace_in(fname, fhits)
-        kw["filename"] = new_name
-        kw["ufilename"] = new_name
-    try:
-        annot.update_file(**kw)
-    except Exception:
-        raise UncleanableAttachment("%s: update_file failed" % where)
     for h in hits_all:
         detected.append(h["value"])
     _record(result, [dict(h, location=where) for h in hits_all], [])
@@ -811,278 +1460,726 @@ def _clean_pdf_attachment_annot(annot, result, detected, types, where):
     _record(result, [dict(h, location=where + ":filename") for h in fhits], [])
 
 
-def _pdf_scopes(path):
-    """回读视图: 页面文本/链接目标(URI/启动文件等)/表单域值/批注信息/
-    文件附件批注与文档级附件的内容(zip 递归展开)/元数据/XMP/书签。"""
-    import pymupdf
-    doc = pymupdf.open(path)
-    scopes = []
+def _annot_list(page_obj):
+    annots = page_obj.get("/Annots")
+    if annots is None:
+        return []
     try:
-        for page in doc:
-            scopes.append(page.get_text("text"))
-            try:
-                links = list(page.get_links() or [])
-            except Exception:
-                links = []
-            for lnk in links:
-                for key in ("uri", "file", "name", "nameddest"):
-                    v = lnk.get(key)
-                    if isinstance(v, str) and v:
-                        scopes.append(v)
-            try:
-                widgets = list(page.widgets() or [])
-            except Exception:
-                widgets = []
-            for w in widgets:
-                v = w.field_value
-                if isinstance(v, str) and v:
-                    scopes.append(v)
-            try:
-                annots = list(page.annots() or [])
-            except Exception:
-                annots = []
-            for a in annots:
-                info = a.info or {}
-                scopes.extend(str(v) for v in info.values() if isinstance(v, str))
-                if a.type[0] == pymupdf.PDF_ANNOT_FILE_ATTACHMENT:
-                    try:
-                        blob = a.get_file()
-                    except Exception:
-                        blob = None
-                    if blob:
-                        scopes.extend(_blob_views(blob))
-        md = doc.metadata or {}
-        scopes.extend(str(v) for v in md.values() if isinstance(v, str))
+        return [a.get_object() for a in annots]
+    except Exception:
+        return []
+
+
+def _res_of(obj):
+    try:
+        res = obj.get("/Resources")
+        if res is not None:
+            res = res.get_object()
+    except Exception:
+        res = None
+    return res
+
+
+def _fonts_from_resources(resources):
+    fonts = {}
+    for name, ref in _iter_fonts(resources).items():
         try:
-            scopes.append(doc.get_xml_metadata() or "")
+            fdict = ref.get_object() if hasattr(ref, "get_object") else ref
+            fonts[name] = _FontCodec(name, fdict)
+        except Exception:
+            continue
+    return fonts
+
+
+def _page_content(page_obj):
+    try:
+        return page_obj.get_contents().get_data()
+    except Exception:
+        return b""
+
+
+def _content_decoded_text(content, fonts):
+    """按算子顺序解码内容流中的文本(分离算子以换行避免跨算子误拼接)。"""
+    toks = _tokenize(content)
+    lines = []
+    operands = []
+    cur_font = None
+    for t in toks:
+        if t.kind != "op":
+            operands.append(t)
+            continue
+        op = t.value
+        if op == b"Tf":
+            if len(operands) >= 2 and operands[-2].kind == "name":
+                cur_font = fonts.get(operands[-2].value.decode("latin-1"))
+            operands = []
+            continue
+        show = None
+        if op in (b"Tj", b"'", b'"') and operands and operands[-1].kind == "str":
+            show = operands[-1]
+        elif op == b"TJ" and operands and operands[-1].kind == "array":
+            show = operands[-1]
+        if show is not None and cur_font is not None:
+            lines.append(_decode_op_text(cur_font, show))
+        operands = []
+    return "\n".join(lines)
+
+
+def _pdf_page_texts(path):
+    _, pdfplumber = _pdf_libs()
+    texts = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            texts.append(page.extract_text() or "")
+    return texts
+
+
+def _stream_decoded_text(stream_obj, resources):
+    try:
+        content = stream_obj.get_data()
+    except Exception:
+        return ""
+    return _content_decoded_text(content, _fonts_from_resources(resources))
+
+
+def _redact_stream_obj(stream_obj, values, seen):
+    """递归清洗内容流(Form XObject/外观流): 删除命中字形。"""
+    try:
+        content = stream_obj.get_data()
+    except Exception:
+        return
+    res = _res_of(stream_obj)
+    new, _ = _redact_content_stream(content, _fonts_from_resources(res), values)
+    if new != content:
+        try:
+            stream_obj.set_data(new)
         except Exception:
             pass
+    _redact_form_xobjects(res, values, seen)
+
+
+def _redact_form_xobjects(resources, values, seen):
+    if resources is None:
+        return
+    xo = resources.get("/XObject")
+    if xo is None:
+        return
+    try:
+        xo = xo.get_object()
+    except Exception:
+        return
+    for _, ref in list(xo.items()):
         try:
-            scopes.extend(e[1] or "" for e in doc.get_toc())
+            obj = ref.get_object() if hasattr(ref, "get_object") else ref
         except Exception:
-            pass
+            continue
+        if not hasattr(obj, "get_data") or str(obj.get("/Subtype")) != "/Form":
+            continue
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        _redact_stream_obj(obj, values, seen)
+
+
+def _redact_ap_streams(annot, values, seen):
+    ap = annot.get("/AP")
+    if ap is None:
+        return
+    try:
+        ap = ap.get_object()
+    except Exception:
+        return
+
+    def walk(v):
         try:
-            for name in doc.embfile_names():
-                info = doc.embfile_info(name) or {}
-                scopes.extend(str(v) for v in info.values() if isinstance(v, str))
+            v = v.get_object() if hasattr(v, "get_object") else v
+        except Exception:
+            return
+        if hasattr(v, "get_data"):
+            if id(v) in seen:
+                return
+            seen.add(id(v))
+            _redact_stream_obj(v, values, seen)
+        elif hasattr(v, "items"):
+            for _, sub in list(v.items()):
+                walk(sub)
+
+    for _, sub in list(ap.items()):
+        walk(sub)
+
+
+def _scrub_link(annot, types, result, detected, pno):
+    pypdf, _ = _pdf_libs()
+    if str(annot.get("/Subtype")) != "/Link":
+        return
+    where = "link:page %d" % pno
+
+    def clean(container, key):
+        v = container.get(key)
+        if not isinstance(v, str) or not v:
+            return
+        hh, _ = find_hits(v, types)
+        if not hh:
+            return
+        container[pypdf.generic.NameObject(key)] = _pdf_string(_replace_in(v, hh))
+        for h in hh:
+            detected.append(h["value"])
+        _record(result, [dict(h, location=where) for h in hh], [])
+
+    action = annot.get("/A")
+    if action is not None:
+        action = action.get_object()
+        for key in ("/URI", "/N"):
+            clean(action, key)
+        fval = action.get("/F")
+        if isinstance(fval, str):
+            clean(action, "/F")
+        elif fval is not None and hasattr(fval, "get_object"):
+            fs = fval.get_object()
+            if hasattr(fs, "get"):
+                for fk in ("/F", "/UF"):
+                    clean(fs, fk)
+        clean(action, "/D")
+    clean(annot, "/Dest")
+
+
+def _scrub_annot_strings(annot, keys, types, result, detected, where_prefix):
+    pypdf, _ = _pdf_libs()
+    for key in keys:
+        v = annot.get(key)
+        if isinstance(v, str) and v:
+            hh, _ = find_hits(v, types)
+            if hh:
+                annot[pypdf.generic.NameObject(key)] = _pdf_string(_replace_in(v, hh))
+                for h in hh:
+                    detected.append(h["value"])
+                _record(result, [dict(h, location="%s:%s" % (where_prefix, key))
+                                 for h in hh], [])
+
+
+def _scrub_widget(annot, types, result, detected, where, seen):
+    """清洗逻辑值 /V,/DV 及外观流 /AP, 避免只改 V 而保留旧值外观的假成功。"""
+    pypdf, _ = _pdf_libs()
+    hit_values = []
+    for key in ("/V", "/DV"):
+        v = annot.get(key)
+        if isinstance(v, str) and v:
+            hh, _ = find_hits(v, types)
+            if hh:
+                annot[pypdf.generic.NameObject(key)] = _pdf_string(_replace_in(v, hh))
+                for h in hh:
+                    detected.append(h["value"])
+                    hit_values.append(h["value"])
+                _record(result, [dict(h, location=where) for h in hh], [])
+    if hit_values:
+        _redact_ap_streams(annot, hit_values, seen)
+
+
+def _outline_titles(root_obj):
+    out = []
+    root = root_obj.get("/Outlines")
+    if root is None:
+        return out
+    seen = set()
+    stack = [root]
+    while stack:
+        try:
+            node = stack.pop().get_object()
+        except Exception:
+            continue
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        title = node.get("/Title")
+        if isinstance(title, str):
+            out.append(title)
+        for key in ("/First", "/Next"):
+            if node.get(key) is not None:
+                stack.append(node.get(key))
+    return out
+
+
+def _scrub_outlines(root_obj, types, result, detected):
+    pypdf, _ = _pdf_libs()
+    root = root_obj.get("/Outlines")
+    if root is None:
+        return
+    seen = set()
+    stack = [root]
+    while stack:
+        try:
+            node = stack.pop().get_object()
+        except Exception:
+            continue
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        title = node.get("/Title")
+        if isinstance(title, str) and title:
+            hh, _ = find_hits(title, types)
+            if hh:
+                node[pypdf.generic.NameObject("/Title")] = _pdf_string(
+                    _replace_in(title, hh))
+                for h in hh:
+                    detected.append(h["value"])
+                _record(result, [dict(h, location="toc") for h in hh], [])
+        for key in ("/First", "/Next"):
+            if node.get(key) is not None:
+                stack.append(node.get(key))
+
+
+def _embedded_file_scopes(root_obj):
+    scopes = []
+    names = root_obj.get("/Names")
+    if names is None:
+        return scopes
+    ef = names.get_object().get("/EmbeddedFiles")
+    if ef is None:
+        return scopes
+    stack = [ef]
+    seen = set()
+    while stack:
+        try:
+            node = stack.pop().get_object()
+        except Exception:
+            continue
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        pairs = node.get("/Names")
+        if pairs is not None:
+            i = 0
+            while i + 1 < len(pairs):
+                name, spec = pairs[i], pairs[i + 1]
+                if isinstance(name, str):
+                    scopes.append(name)
                 try:
-                    scopes.extend(_blob_views(doc.embfile_get(name)))
+                    spec = spec.get_object()
                 except Exception:
-                    pass
+                    spec = None
+                if spec is not None and hasattr(spec, "get"):
+                    for key in ("/F", "/UF", "/Desc"):
+                        v = spec.get(key)
+                        if isinstance(v, str):
+                            scopes.append(v)
+                    blob = _filespec_blob(spec)
+                    if blob is not None:
+                        scopes.extend(_blob_views(
+                            blob, 0, spec.get("/UF") or spec.get("/F")))
+                i += 2
+        for kid in (node.get("/Kids") or []):
+            stack.append(kid)
+    return scopes
+
+
+def _scrub_embedded_files(root_obj, types, detected):
+    pypdf, _ = _pdf_libs()
+    from pypdf.generic import ArrayObject
+    names = root_obj.get("/Names")
+    if names is None:
+        return 0
+    ef = names.get_object().get("/EmbeddedFiles")
+    if ef is None:
+        return 0
+    removed = 0
+    seen = set()
+    stack = [ef]
+    while stack:
+        try:
+            node = stack.pop().get_object()
+        except Exception:
+            continue
+        if id(node) in seen or not hasattr(node, "get"):
+            continue
+        seen.add(id(node))
+        pairs = node.get("/Names")
+        if pairs is not None:
+            keep = []
+            i = 0
+            while i + 1 < len(pairs):
+                name, spec = pairs[i], pairs[i + 1]
+                sensitive = False
+                if isinstance(name, str):
+                    hh, _ = find_hits(name, types)
+                    if hh:
+                        sensitive = True
+                        for h in hh:
+                            detected.append(h["value"])
+                try:
+                    spec_obj = spec.get_object()
+                except Exception:
+                    spec_obj = None
+                if spec_obj is not None and hasattr(spec_obj, "get"):
+                    for key in ("/F", "/UF", "/Desc"):
+                        v = spec_obj.get(key)
+                        if isinstance(v, str):
+                            hh, _ = find_hits(v, types)
+                            if hh:
+                                sensitive = True
+                                for h in hh:
+                                    detected.append(h["value"])
+                    blob = _filespec_blob(spec_obj)
+                    if blob is not None:
+                        for view in _blob_views(
+                                blob, 0, spec_obj.get("/UF") or spec_obj.get("/F")):
+                            hh, _ = find_hits(view, types)
+                            if hh:
+                                sensitive = True
+                                for h in hh:
+                                    detected.append(h["value"])
+                                break
+                if sensitive:
+                    removed += 1
+                else:
+                    keep.append(name)
+                    keep.append(spec)
+                i += 2
+            node[pypdf.generic.NameObject("/Names")] = ArrayObject(keep)
+        for kid in (node.get("/Kids") or []):
+            stack.append(kid)
+    return removed
+
+
+def _page_has_image(page_obj):
+    try:
+        res = _res_of(page_obj)
+        if res is None:
+            return False
+        xo = res.get("/XObject")
+        if xo is None:
+            return False
+        xo = xo.get_object()
+        for _, ref in xo.items():
+            obj = ref.get_object() if hasattr(ref, "get_object") else ref
+            if str(obj.get("/Subtype")) == "/Image":
+                return True
+    except Exception:
+        return True
+    return False
+
+
+def _sweep_orphans(writer):
+    """将 writer 中不可达的间接对象替换为 NullObject。
+
+    pypdf 从 reader clone 后, 被替换/移除的旧内容流、旧附件、旧元数据对象
+    可能仍留在对象表中作为孤立对象写回, 从而残留敏感字节。此步从 root/info
+    出发做可达性分析, 断开孤立对象, 确保不残留旧值。"""
+    pypdf, _ = _pdf_libs()
+    from pypdf.generic import (
+        IndirectObject, DictionaryObject, ArrayObject, NullObject)
+    reachable = set()
+
+    def visit(obj):
+        if obj is None or isinstance(obj, (str, bytes, int, float, bool)):
+            return
+        if isinstance(obj, IndirectObject):
+            oid = getattr(obj, "idnum", None)
+            if oid in reachable:
+                return
+            if oid is not None:
+                reachable.add(oid)
+            try:
+                visit(obj.get_object())
+            except Exception:
+                return
+            return
+        ref = getattr(obj, "indirect_reference", None)
+        if ref is not None:
+            rid = getattr(ref, "idnum", None)
+            if rid is not None:
+                reachable.add(rid)
+        if isinstance(obj, DictionaryObject):
+            for v in obj.values():
+                visit(v)
+        elif isinstance(obj, ArrayObject):
+            for v in obj:
+                visit(v)
+
+    try:
+        visit(writer.root_object)
+    except Exception:
+        pass
+    for root in (getattr(writer, "_info", None), getattr(writer, "_encryption", None)):
+        try:
+            visit(root)
         except Exception:
             pass
-    finally:
-        doc.close()
+
+    objs = writer._objects
+    if isinstance(objs, list):
+        for idx in range(len(objs)):
+            obj = objs[idx]
+            if obj is None:
+                continue
+            ref = getattr(obj, "indirect_reference", None)
+            oid = getattr(ref, "idnum", None) if ref is not None else None
+            if oid is None:
+                oid = idx + 1
+            if oid not in reachable:
+                objs[idx] = NullObject()
+    elif isinstance(objs, dict):
+        for k in list(objs.keys()):
+            if k not in reachable:
+                objs[k] = NullObject()
+
+
+def _collect_xobject_text(resources, out, seen):
+    if resources is None:
+        return
+    xo = resources.get("/XObject")
+    if xo is None:
+        return
+    try:
+        xo = xo.get_object()
+    except Exception:
+        return
+    for _, ref in list(xo.items()):
+        try:
+            obj = ref.get_object() if hasattr(ref, "get_object") else ref
+        except Exception:
+            continue
+        if not hasattr(obj, "get_data") or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if str(obj.get("/Subtype")) == "/Form":
+            out.append(_stream_decoded_text(obj, _res_of(obj)))
+            _collect_xobject_text(_res_of(obj), out, seen)
+
+
+def _ap_texts(annot):
+    out = []
+    ap = annot.get("/AP")
+    if ap is None:
+        return out
+    try:
+        ap = ap.get_object()
+    except Exception:
+        return out
+
+    def walk(v):
+        try:
+            v = v.get_object() if hasattr(v, "get_object") else v
+        except Exception:
+            return
+        if hasattr(v, "get_data"):
+            out.append(_stream_decoded_text(v, _res_of(v)))
+        elif hasattr(v, "items"):
+            for _, sub in list(v.items()):
+                walk(sub)
+
+    for _, sub in list(ap.items()):
+        walk(sub)
+    return out
+
+
+def _pdf_scopes(path, types):
+    """回读视图: 页面正文(pdfplumber 与内容流解码双视图)/Form XObject/
+    链接目标/表单 V,DV 与外观 AP/批注信息/附件(zip 递归)/元数据/XMP/书签。"""
+    pypdf, pdfplumber = _pdf_libs()
+    scopes = []
+    reader = pypdf.PdfReader(path)
+    root = reader.trailer["/Root"]
+    seen_xo = set()
+    for page in reader.pages:
+        scopes.append(_stream_decoded_text(page.get_contents(), _res_of(page)))
+        _collect_xobject_text(_res_of(page), scopes, seen_xo)
+        for annot in _annot_list(page):
+            st = str(annot.get("/Subtype"))
+            if st == "/Link":
+                action = annot.get("/A")
+                if action is not None:
+                    action = action.get_object()
+                    for key in ("/URI", "/F", "/N", "/D"):
+                        v = action.get(key)
+                        if isinstance(v, str):
+                            scopes.append(v)
+                dest = annot.get("/Dest")
+                if isinstance(dest, str):
+                    scopes.append(dest)
+            for key in ("/Contents", "/T", "/Subj"):
+                v = annot.get(key)
+                if isinstance(v, str):
+                    scopes.append(v)
+            if st == "/Widget":
+                for key in ("/V", "/DV"):
+                    v = annot.get(key)
+                    if isinstance(v, str):
+                        scopes.append(v)
+                scopes.extend(_ap_texts(annot))
+            if st == "/FileAttachment":
+                fs = annot.get("/FS")
+                if fs is not None:
+                    fs = fs.get_object()
+                    for key in ("/F", "/UF", "/Desc"):
+                        v = fs.get(key)
+                        if isinstance(v, str):
+                            scopes.append(v)
+                    blob = _filespec_blob(fs)
+                    if blob is not None:
+                        scopes.extend(_blob_views(
+                            blob, 0, fs.get("/UF") or fs.get("/F")))
+    md = reader.metadata or {}
+    scopes.extend(str(v) for v in md.values() if isinstance(v, str))
+    if root.get("/Metadata") is not None:
+        try:
+            scopes.append(root["/Metadata"].get_object().get_data().decode(
+                "utf-8", "replace"))
+        except Exception:
+            pass
+    scopes.extend(_outline_titles(root))
+    scopes.extend(_embedded_file_scopes(root))
+    # 关键输出回读: pdfplumber 页面文本抽取失败必须 fail closed,
+    # 不能吞掉异常后仍宣称完整核验(空白页正常返回 "" 不触发)。
+    try:
+        with pdfplumber.open(path) as pdf:
+            for pg in pdf.pages:
+                scopes.append(pg.extract_text() or "")
+    except Exception as e:
+        raise RuntimeError(
+            "pdf_output_text_extraction_failed: %s" % type(e).__name__)
     return scopes
 
 
 def process_pdf(in_path, out_path, types):
-    import pymupdf
-    doc = pymupdf.open(in_path)
+    """PDF 宽松栈实现(pypdf BSD + pdfplumber MIT, 无 PyMuPDF):
+    页面正文按内容流算子级删除(含 Form XObject 递归), 元数据/XMP/书签/
+    批注/链接目标/表单 V,DV 与外观 AP/文件附件(zip/Office 递归清洗)/
+    文档级附件一并清洗; 保存后双视图(内容流解码 + pdfplumber)回读验证。
+    """
+    pypdf, _ = _pdf_libs()
+    reader = pypdf.PdfReader(in_path)
+    if getattr(reader, "is_encrypted", False):
+        try:
+            reader.decrypt("")
+        except Exception:
+            raise RuntimeError("encrypted PDF cannot be reliably rewritten")
+    writer = pypdf.PdfWriter(clone_from=reader)
     result = {"redactions": {}, "needs_review": {}}
     detected = []
     removed_emb = 0
+    seen_xobj = set()
+    seen_ap = set()
+
+    in_text_ok = True
     try:
-        for pno, page in enumerate(doc, start=1):
-            text = page.get_text("text")
-            hits, review = find_hits(text, types)
-            _record(result, [], review)
-            for h in hits:
-                detected.append(h["value"])
-                rects = page.search_for(h["value"])
-                if not rects:
-                    result["needs_review"]["search_miss_needs_manual"] = \
-                        result["needs_review"].get("search_miss_needs_manual", 0) + 1
-                    continue
-                for rect in rects:
-                    page.add_redact_annot(rect, fill=(0, 0, 0))
-                _record(result, [dict(h, location="page %d" % pno)], [])
-            page.apply_redactions()
+        texts = _pdf_page_texts(in_path)
+    except Exception:
+        texts = []
+        in_text_ok = False
 
+    for pno, page in enumerate(writer.pages, start=1):
+        text = texts[pno - 1] if pno - 1 < len(texts) else ""
+        hits, review = find_hits(text, types)
+        _record(result, [], review)
+        values = [h["value"] for h in hits]
+        res = _res_of(page)
+        extra = _content_decoded_text(_page_content(page), _fonts_from_resources(res))
+        ehits, ereview = find_hits(extra, types)
+        _record(result, [], ereview)
+        for h in ehits:
+            if h["value"] not in values:
+                values.append(h["value"])
+        if values:
             try:
-                links = list(page.get_links() or [])
+                content = _page_content(page)
+                new, _n = _redact_content_stream(
+                    content, _fonts_from_resources(res), values)
+                if new != content:
+                    stream = pypdf.generic.DecodedStreamObject()
+                    stream.set_data(new)
+                    page.replace_contents(stream)
             except Exception:
-                links = []
-            for lnk in links:
-                dirty = False
-                for key in ("uri", "file", "name", "nameddest"):
-                    v = lnk.get(key)
-                    if not isinstance(v, str) or not v:
-                        continue
-                    lhits, _ = find_hits(v, types)
-                    if not lhits:
-                        continue
-                    lnk[key] = _replace_in(v, lhits)
-                    dirty = True
-                    for h in lhits:
-                        detected.append(h["value"])
-                    _record(result, [dict(h, location="link:page %d" % pno)
-                                     for h in lhits], [])
-                if dirty:
-                    try:
-                        page.update_link(lnk)
-                    except Exception:
-                        result["needs_review"]["link_update_failed_needs_manual"] = \
-                            result["needs_review"].get(
-                                "link_update_failed_needs_manual", 0) + 1
-
+                pass
             try:
-                widgets = list(page.widgets() or [])
+                _redact_form_xobjects(res, values, seen_xobj)
             except Exception:
-                widgets = []
-            for w in widgets:
-                v = w.field_value
-                if not isinstance(v, str) or not v:
-                    continue
-                whits, _ = find_hits(v, types)
-                if not whits:
-                    continue
-                try:
-                    w.field_value = _replace_in(v, whits)
-                    w.update()
-                    for h in whits:
-                        detected.append(h["value"])
-                    _record(result, [dict(h, location="form_field:page %d" % pno)
-                                     for h in whits], [])
-                except Exception:
-                    result["needs_review"]["form_field_update_failed_needs_manual"] = \
-                        result["needs_review"].get(
-                            "form_field_update_failed_needs_manual", 0) + 1
+                pass
+        for h in hits:
+            detected.append(h["value"])
+        if hits:
+            _record(result, [dict(h, location="page %d" % pno) for h in hits], [])
 
-        md = dict(doc.metadata or {})
-        md_changed = False
-        for k, v in md.items():
-            if isinstance(v, str) and v:
-                hits, _ = find_hits(v, types)
-                if hits:
-                    md[k] = _replace_in(v, hits)
-                    md_changed = True
-                    for h in hits:
-                        detected.append(h["value"])
-                    _record(result, [dict(h, location="metadata:" + k)], [])
-        if md_changed:
-            doc.set_metadata(md)
+        for annot in _annot_list(page):
+            st = str(annot.get("/Subtype"))
+            _scrub_link(annot, types, result, detected, pno)
+            _scrub_annot_strings(annot, ("/Contents", "/T", "/Subj"),
+                                 types, result, detected, "annotation")
+            if st == "/Widget":
+                _scrub_widget(annot, types, result, detected,
+                              "form_field:page %d" % pno, seen_ap)
+            if st == "/FileAttachment":
+                _clean_pdf_attachment_annot(
+                    annot, result, detected, types,
+                    "file_attachment:page %d" % pno)
 
-        try:
-            xmp = doc.get_xml_metadata() or ""
-        except Exception:
-            xmp = ""
-        if xmp:
-            hits, _ = find_hits(xmp, types)
-            if hits:
-                for h in hits:
+    root = writer.root_object
+
+    md = dict(writer.metadata or {})
+    md_hits = False
+    for k, v in md.items():
+        if isinstance(v, str) and v:
+            hh, _ = find_hits(v, types)
+            if hh:
+                md[k] = _replace_in(v, hh)
+                md_hits = True
+                for h in hh:
                     detected.append(h["value"])
-                doc.set_xml_metadata(_replace_in(xmp, hits))
-                _record(result, [dict(h, location="xmp_metadata") for h in hits], [])
+                _record(result, [dict(h, location="metadata:" + k) for h in hh], [])
+    if md_hits:
+        writer.add_metadata(md)
 
+    if root.get("/Metadata") is not None:
         try:
-            toc = doc.get_toc()
+            mobj = root["/Metadata"].get_object()
+            xmp_text = mobj.get_data().decode("utf-8")
         except Exception:
-            toc = []
-        toc_changed = False
-        for entry in toc:
-            hits, _ = find_hits(entry[1] or "", types)
-            if hits:
-                entry[1] = _replace_in(entry[1], hits)
-                toc_changed = True
-                for h in hits:
+            xmp_text = None
+        if xmp_text:
+            hh, _ = find_hits(xmp_text, types)
+            if hh:
+                mobj.set_data(_replace_in(xmp_text, hh).encode("utf-8"))
+                for h in hh:
                     detected.append(h["value"])
-                _record(result, [dict(h, location="toc") for h in hits], [])
-        if toc_changed:
-            doc.set_toc(toc)
+                _record(result, [dict(h, location="xmp_metadata") for h in hh], [])
 
-        for pno, page in enumerate(doc, start=1):
+    _scrub_outlines(root, types, result, detected)
+    removed_emb += _scrub_embedded_files(root, types, detected)
+
+    if root.get("/AcroForm") is not None:
+        af = root["/AcroForm"].get_object()
+        for f in (af.get("/Fields") or []):
             try:
-                annots = list(page.annots() or [])
+                fo = f.get_object()
             except Exception:
-                annots = []
-            for annot in annots:
-                info = annot.info or {}
-                for key in ("content", "title", "subject"):
-                    v = info.get(key)
-                    if not isinstance(v, str) or not v:
-                        continue
-                    hits, _ = find_hits(v, types)
-                    if hits:
-                        try:
-                            annot.set_info(**{key: _replace_in(v, hits)})
-                            annot.update()
-                        except Exception:
-                            pass
-                        for h in hits:
-                            detected.append(h["value"])
-                        _record(result, [dict(h, location="annotation:" + key)], [])
-                if annot.type[0] == pymupdf.PDF_ANNOT_FILE_ATTACHMENT:
-                    _clean_pdf_attachment_annot(
-                        annot, result, detected, types,
-                        "file_attachment:page %d" % pno)
+                continue
+            _scrub_widget(fo, types, result, detected, "form_field", seen_ap)
 
-        if getattr(doc, "is_form_pdf", False):
-            result["needs_review"]["form_fields_present_needs_manual_review"] = 1
+    unverified = {}
+    if not in_text_ok:
+        result["needs_review"]["text_extraction_unverified_needs_manual"] = 1
+        unverified["input_page_text_extraction"] = \
+            "输入页面文本抽取不可用, 未据文本识别/核验"
+    if root.get("/AcroForm") is not None:
+        result["needs_review"]["form_fields_present_needs_manual_review"] = 1
+        unverified["form_fields"] = "表单结构/脚本未逐项核验"
+    img_pages = []
+    for pno, page in enumerate(writer.pages, start=1):
+        if _page_has_image(page):
+            img_pages.append(pno)
+    if img_pages:
+        result["needs_review"]["images_present_not_ocr_scanned"] = len(img_pages)
+        unverified["image_pages_not_ocr_scanned"] = img_pages
 
-        try:
-            names = list(doc.embfile_names())
-        except Exception:
-            names = []
-        for name in names:
-            hit_here = False
-            try:
-                info = doc.embfile_info(name) or {}
-            except Exception:
-                info = {}
-            for key in ("name", "filename", "ufilename", "description"):
-                v = info.get(key)
-                if isinstance(v, str) and v:
-                    hh, _ = find_hits(v, types)
-                    if hh:
-                        hit_here = True
-                        for h in hh:
-                            detected.append(h["value"])
-            try:
-                blob = doc.embfile_get(name)
-            except Exception:
-                blob = None
-            if blob:
-                for view in _blob_views(blob):
-                    hh, _ = find_hits(view, types)
-                    if hh:
-                        hit_here = True
-                        for h in hh:
-                            detected.append(h["value"])
-                        break
-            if hit_here:
-                try:
-                    doc.embfile_del(name)
-                    removed_emb += 1
-                except Exception:
-                    pass
-
-        unverified = {}
-        if getattr(doc, "is_form_pdf", False):
-            unverified["form_fields"] = "表单结构/脚本未逐项核验"
-        img_pages = []
-        for pno, page in enumerate(doc, start=1):
-            try:
-                has_img = bool(page.get_images(full=True))
-            except Exception:
-                has_img = True
-            if has_img:
-                img_pages.append(pno)
-        if img_pages:
-            result["needs_review"]["images_present_not_ocr_scanned"] = len(img_pages)
-            unverified["image_pages_not_ocr_scanned"] = img_pages
-
-        doc.save(out_path, garbage=3, deflate=True)
-    finally:
-        doc.close()
+    _sweep_orphans(writer)
+    with open(out_path, "wb") as fh:
+        writer.write(fh)
 
     uniq = set(detected)
     leaks = []
-    for scope in _pdf_scopes(out_path):
+    for scope in _pdf_scopes(out_path, types):
         hh, _ = find_hits(scope, types)
         if hh:
-            leaks.append("pdf surface (%s): %s"
-                         % (hh[0]["type"], "content/link/annotation/attachment"))
+            leaks.append("pdf surface (%s)" % hh[0]["type"])
             break
         if any(v in scope for v in uniq):
             leaks.append("pdf content/metadata/attachment")

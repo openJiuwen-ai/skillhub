@@ -12,8 +12,10 @@
 | Excel 线程批注（openpyxl 会丢弃） | 是：清洗后回填原包（`threaded_comments_preserved` 计数） |
 | PPT 备注、幻灯片/版式/母版/表格/组合形状文本、域文本 | 是：`a:p` 段落级清洗 |
 | docProps（创建者/最后修改者等）与 rels | 是：文本节点与属性级清洗 |
-| PDF 页面文本底层删除（非画黑框）+ 回提验证 | 是：`apply_redactions` + 保存后回读 |
-| PDF 元数据 / XMP / 书签标题 / 批注信息 / 链接目标（mailto/URI 等字符串字段）/ 表单域值 | 是：逐一清洗并纳入回读验证；无关正常链接保留可用 |
+| PDF 页面文本底层删除（非画黑框、非整页栅格化）+ 回提验证 | 是：内容流算子级删除敏感字形 + 保存后双视图回读 |
+| PDF 正文位于 Form XObject（含 `show_pdf_page` 嵌套表单） | 是：递归清洗 Form XObject 内容流 |
+| PDF 元数据 / XMP / 书签标题 / 批注信息 / 链接目标（mailto/URI 等字符串字段）/ 表单逻辑值 V,DV 与外观流 AP | 是：逐一清洗并纳入回读验证；无关正常链接保留可用 |
+| PDF 被替换/移除后的孤立旧对象残留 | 是：保存前做可达性清理，不可达旧内容流/旧附件/旧元数据不写回 |
 | PDF 文件附件批注（含压缩 Office 附件） | 是：zip/文本视图逐条目重写并保留无关内容；无法可靠重写（二进制明文/加密/超深嵌套）→ 整文件标记 failed、删除输出、退出 2（显式阻断） |
 | PDF 文档级附件含敏感值 | 阻断式处理：移除该附件并在清单计数（`removed_embedded_files`） |
 | 二进制部件（图片/嵌入对象）内明文敏感值 | 否：无法安全清洗 → 整文件标记 failed、删除输出、退出 2（显式阻断，不笼统成功） |
@@ -25,17 +27,18 @@
 
 ## 安装与依赖
 
-- 实测栈：Python 3.12.9（2026-10-15 任务 venv 实测，依据 `inputs/runtime-dependency-metadata.json`）
-- 依赖最低版本：PyMuPDF 1.28.2 要求 Python >=3.10；lxml >=3.8、openpyxl >=3.8。更旧的依赖版本组合未验证、不作承诺
-- lxml（DOCX/PPTX 底层 XML 处理，BSD-3-Clause）
-- openpyxl（XLSX，MIT）
-- PyMuPDF（PDF，AGPL-3.0/商业双许可）
+- 实测栈：Python 3.12.9 独立 clean venv（2026-10-15 实测，仅装宽松依赖，未装 PyMuPDF/fitz）
+- 运行时依赖精确版本见 `requirements.txt`（含 pdfplumber 传递依赖）：lxml 6.0.2（BSD-3-Clause，仅用 `lxml.etree`）、openpyxl 3.1.5（MIT）、pypdf 6.19.0（BSD-3-Clause）、pdfplumber 0.11.10（MIT）及其传递依赖 pdfminer.six/pillow/pypdfium2/charset-normalizer/cryptography/cffi/pycparser/et_xmlfile
+- 全部运行时依赖为 MIT/BSD/Apache/MIT-CMU，无 GPL/AGPL/LGPL；已移除 PyMuPDF（原 AGPL-3.0/商业双许可）
+- 许可精确说明（lxml wheel 可选 isoschematron 资源与 GPL 测试脚本的单独说明、pypdfium2 内嵌原生库）与复用来源见 `DEPENDENCIES.md`
 
 技能包结构：
 
 ```text
 doc-sensitive-redact/
 ├── SKILL.md
+├── requirements.txt
+├── DEPENDENCIES.md
 └── scripts/redact.py
 ```
 
@@ -76,6 +79,17 @@ python scripts/redact.py --input 材料目录_or_单文件 --outdir out/ \
 - `pdf_removed_and_verified` 不再无条件为 true：存在表单或含图像页等未核验表面时为 false，并附 `unverified_surfaces` 与 needs_review 标记（`form_fields_present_needs_manual_review` / `images_present_not_ocr_scanned`），与承诺不冲突；
 - 标准黑盒测试从 12 项增至 16 项，新增：链接目标清洗且无关链接保留、压缩 DOCX 附件批注清洗且无关内容保留、不可重写二进制附件显式阻断、表单/图像页验证限定。
 
+### 2026-10-15 第四轮：PyMuPDF → 宽松栈迁移（发布前准备）
+
+将 PDF 运行时依赖从 PyMuPDF（AGPL-3.0/商业双许可）迁移到 pypdf（BSD）+ pdfplumber（MIT）自有实现，保持原功能与冻结验收，不改其他技能/旧测试/冻结输入：
+
+- 页面正文按内容流算子级删除敏感字形码（字符级定位 + 字距补偿），**实际删除**而非白框覆盖或整页栅格化；递归清洗 Form XObject（含 `show_pdf_page` 形成的嵌套表单）内容流，覆盖 literal `Tj` 与 hex `TJ`/CID 字体。
+- 元数据（Info）、XMP、书签标题、批注 content/title/subject、链接目标（URI/启动文件/命名目标）、表单逻辑值 `/V`,`/DV` 与外观流 `/AP`、文件附件批注（zip/Office 递归、跨 run 拆分）一并清洗；含敏感值的文档级附件移除并计数。
+- 新增可达性孤立对象清理：pypdf 从 reader clone 后被替换/移除的旧内容流、旧附件、旧元数据若不可达则以 NullObject 断链，不把敏感字节作为孤立对象写回。
+- 保存后回读改为“内容流解码视图 + pdfplumber 视图”双通道，并覆盖 Form XObject/AP/附件 zip 递归/元数据/XMP/书签/链接/表单，对**全部启用类型**重新识别而非只搜已识别值；残留即 failed+删输出+退出 2。
+- 迁移前脚本已存档于证据目录 `controller-frozen-extra/redact-before-migration.py`；迁移后对主控新增冻结基准 `controller-frozen-extra/inputs/{literal.pdf,form-xobject.pdf}`（原脚本 e2d963c 均成功）复跑成功，保留 PUBLIC_PREFIX/PUBLIC_SUFFIX、去除邮箱。
+- 新增独立宽松栈验收 `tests/office_skills/test_doc_sensitive_redact_permissive_pdf.py`（5 项，仅用 pypdf/pdfplumber/lxml 构造与回读，不 import 被测模块、不依赖 PyMuPDF）：literal 正文+隐藏面、嵌套 Form XObject、附件跨 run、文档级附件移除、表单 V+AP 且保留 needs_review。
+
 冻结 `verify_fixed.py` 复测（新目录留证，未覆盖 initial）：复合样本（mailto 链接+压缩 DOCX 附件）无泄漏、正文保留，redaction-hidden 冻结回归全项通过。
 
 ### 2026-10-15 第三轮：附件内跨 run 拆分值
@@ -92,6 +106,8 @@ python scripts/redact.py --input 材料目录_or_单文件 --outdir out/ \
 对应 `decision-register.json`: independent_implement；`specs.json` 的 `doc-sensitive-redact`（输入文件或目录，输出 `_REDACTED` 文件 + 清单；异常含 15 位/校验位不符不误杀、批量部分失败记录；金标准为四格式敏感值打码后不可从底层回提、清单计数=实际修改）。
 
 黑盒测试位于 `tests/office_skills/test_doc_sensitive_redact.py`（17 项，独立推导预期值，不 mock 实现，不 import 被测模块；识别期望值用测试内独立实现的 GB11643 校验位与 Luhn 算法构造）：
+
+另新增 `tests/office_skills/test_doc_sensitive_redact_permissive_pdf.py`（5 项，宽松栈独立验收，见“第四轮”说明），doc-sensitive-redact 本技能黑盒测试合计 22 项：
 
 1. 正常（2 项）：DOCX 正文/表格/页眉 + XLSX 字符串 + PPTX 文本框打码、清单计数与读回验证
 2. 复杂（11 项）：冻结缺陷场景复现（删除修订/批注/数值单元格/备注，底层 ZIP 逐部件扫描零残留、清单含 `word/comments.xml`/`notesSlide` 定位）；needs_review 不误打；嵌套目录唯一命名；outdir 嵌入输入目录不递归重扫；`--types` 过滤；重名冲突显式失败；PDF 隐藏面（元数据/XMP/附件/批注/书签+原始字节）清洗；PDF 链接目标清洗且无关正常链接保留；压缩 DOCX 附件批注清洗且无关内容保留；跨 run 拆分邮箱附件结构化清洗且公共附件文本保留；表单域值清洗+表单/图像页 `pdf_removed_and_verified=false` 限定

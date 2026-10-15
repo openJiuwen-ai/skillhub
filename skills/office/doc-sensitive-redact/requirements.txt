@@ -1,0 +1,28 @@
+# doc-sensitive-redact runtime dependencies (all permissive: MIT / BSD / Apache / MIT-CMU).
+# No GPL/AGPL/LGPL runtime dependency. No PyMuPDF/fitz. No external-process fallback, no network.
+# Versions are the tested set installed into an isolated clean venv (Python 3.12.9) on 2026-10-15.
+# License evidence = installed wheel metadata read on 2026-10-15 (see docs/office-skills/doc-sensitive-redact.md).
+#
+# direct:
+lxml==6.0.2                # BSD-3-Clause - https://github.com/lxml/lxml
+                           #   only lxml.etree is used; the wheel's LICENSES.txt additionally covers
+                           #   bundled optional resources (isoschematron) and a GPL test script that are
+                           #   NOT imported/called by this skill. The skill does not redistribute the wheel.
+openpyxl==3.1.5            # MIT - https://functools.org/openpyxl / https://github.com/theorchard/openpyxl
+pypdf==6.19.0              # BSD-3-Clause - https://github.com/py-pdf/pypdf
+pdfplumber==0.11.10        # MIT - https://github.com/jsvine/pdfplumber
+# transitive (pdfplumber):
+pdfminer.six==20260107     # MIT - https://github.com/pdfminer/pdfminer.six
+pillow==12.3.0             # MIT-CMU - https://github.com/python-pillow/Pillow
+pypdfium2==5.14.0          # BSD-3-Clause OR Apache-2.0 (bundled PDFium + native third-party:
+                           #   freetype/icu/libjpeg-turbo/libpng/lcms/openjpeg/zlib/abseil/agg/simdutf/
+                           #   fast_float/llvm-libc, all permissive) - https://github.com/pypdfium2-team/pypdfium2
+# transitive (pdfminer.six):
+charset-normalizer==3.5.2  # MIT - https://github.com/jawah/charset_normalizer
+cryptography==50.0.2       # Apache-2.0 OR BSD-3-Clause - https://github.com/pyca/cryptography
+# transitive (cryptography):
+cffi==2.1.1                # MIT-0 - https://github.com/python-cffi/cffi
+# transitive (cffi):
+pycparser==3.11            # BSD-3-Clause - https://github.com/eliben/pycparser
+# transitive (openpyxl):
+et_xmlfile==2.0.0          # MIT - https://foss.heptapod.net/openpyxl/et_xmlfile
