@@ -1,6 +1,6 @@
 # Office Skills（办公技能包）
 
-本目录包含 18 个办公领域技能包，由 GLM-5.3 会话开发（分支 `codex/office-skills-glm53`），用于 Git 仓库导入（技能根路径 `skills/office`，见《Git仓库导入Skill》）。
+本目录包含 18 个办公领域技能包（分支 `codex/office-skills-glm53`），用于 Git 仓库导入（技能根路径 `skills/office`，见《Git仓库导入Skill》）。技能开发由 GLM-5.3 会话完成；最终独立验收在 GLM 配额耗尽后切换 `deepseek/deepseek-flash` 执行，结果见 [acceptance-and-delivery.md](acceptance-and-delivery.md)。
 
 ## 技能清单
 
@@ -33,11 +33,13 @@
 
 ## 测试
 
-黑盒测试位于 `tests/office_skills/`（62 项，全部通过；金标准为手工推导值，不复用被测实现）：
+黑盒测试位于 `tests/office_skills/`（177 项，2026-10-15 完整套件全量重跑全部通过；金标准为手工推导值，不复用被测实现）：
 
 ```
 python -m pytest tests/office_skills -q
 ```
+
+> Windows 上若默认临时目录不可写（WinError 5），请显式指定可写目录：`python -m pytest tests/office_skills -q --basetemp=<可写目录>`。
 
 ## 许可
 

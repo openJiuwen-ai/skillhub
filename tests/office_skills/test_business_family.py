@@ -364,11 +364,13 @@ def test_online_delivery(workspace):
     r = run_script("online-office-delivery", "online_delivery.py",
                    ["--plan", workspace / "plan.json", "--outdir", workspace / "out"])
     assert r.returncode == 3  # 无授权环境 -> blocked
-    rep = json.loads((workspace / "out" / "delivery-result.json").read_text(encoding="utf-8"))
+    rep = json.loads((workspace / "out" / "delivery-report.json").read_text(encoding="utf-8"))
     assert rep["status"] == "blocked"
-    assert rep["probe"]["clis_found"] == []
-    assert "lark-cli" in rep["missing"]["clis"]
-    assert "不伪造" in rep["note"] or "冒充" in rep["note"]
+    assert rep["probe"]["env_vars_present"] == []
+    assert rep["missing"]["clis"] == ["lark-cli"]
+    assert "results" not in rep  # 未交付，不产出伪造结果
+    assert "https://" not in json.dumps(rep)  # 绝不伪造在线链接
+    assert "伪造" in rep["notes"]
     # 损坏计划
     (workspace / "bad.json").write_text("{", encoding="utf-8")
     r2 = run_script("online-office-delivery", "online_delivery.py",
