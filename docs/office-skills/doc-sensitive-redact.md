@@ -1,0 +1,96 @@
+# doc-sensitive-redact 交付说明
+
+对 DOCX/XLSX/PPTX/PDF 中的身份证/手机号/银行卡/邮箱做识别与打码交付：双轨识别避免误杀，处理范围覆盖**实际可访问的隐藏部件**（删除修订、批注、数值单元格、PPT 备注、docProps、PDF 元数据/XMP/书签/批注/附件），每个输出做底层回读验证，无法清洗的残留被显式阻断而不是笼统成功。全程本地、无第三方 API Key。
+
+## 能力边界
+
+| 场景 | 是否支持 |
+|---|---|
+| 正文/表格/页眉页脚打码（跨 run 完整替换） | 是 |
+| Word 删除修订（`w:delText`）、批注（含作者属性）、脚注尾注 | 是：包内 XML 部件级清洗 |
+| Excel 数值型手机号/证件号、单元格批注（文本+作者） | 是：数值单元格转为打码文本；批注在 `xl/comments` 层清洗 |
+| Excel 线程批注（openpyxl 会丢弃） | 是：清洗后回填原包（`threaded_comments_preserved` 计数） |
+| PPT 备注、幻灯片/版式/母版/表格/组合形状文本、域文本 | 是：`a:p` 段落级清洗 |
+| docProps（创建者/最后修改者等）与 rels | 是：文本节点与属性级清洗 |
+| PDF 页面文本底层删除（非画黑框）+ 回提验证 | 是：`apply_redactions` + 保存后回读 |
+| PDF 元数据 / XMP / 书签标题 / 批注信息 | 是：逐一清洗并纳入回读验证 |
+| PDF 附件含敏感值 | 阻断式处理：移除该附件并在清单计数（`removed_embedded_files`） |
+| 二进制部件（图片/嵌入对象）内明文敏感值 | 否：无法安全清洗 → 整文件标记 failed、删除输出、退出 2（显式阻断，不笼统成功） |
+| 目录批量、嵌套子目录同名文件 | 是：按相对路径展平命名（`a__report_REDACTED.docx`），冲突显式失败不覆盖 |
+| 混合批处理部分失败 | 退出 2 + 清单逐文件记录；不再以 0 掩盖 |
+| 15 位数字 / 校验位不符 18 位号 | 不误打：保留原文，`needs_review` 提示 |
+| 图片/扫描件像素文字、嵌入对象内部、PDF 表单字段值 | 否：不做底层识别，清单标记 needs_review，需人工复核 |
+| 与豆包竞品同题验收 | 未执行（`parity_status=not_verified`），不伪造竞品结果 |
+
+## 安装与依赖
+
+- Python 3.9+
+- lxml（DOCX/PPTX 底层 XML 处理，BSD-3-Clause）
+- openpyxl（XLSX，MIT）
+- PyMuPDF（PDF，AGPL-3.0/商业双许可）
+
+技能包结构：
+
+```text
+doc-sensitive-redact/
+├── SKILL.md
+└── scripts/redact.py
+```
+
+## 用法
+
+```bash
+python scripts/redact.py --input 材料目录_or_单文件 --outdir out/ \
+    [--types id_card,phone,bank_card,email] [--report manifest.json]
+```
+
+退出码：0=全部完成且通过回读验证（可含 needs_review）；2=输入错误或任一文件失败/被阻断。
+
+## 输出（outdir/）
+
+- `<原名>_REDACTED.<ext>`；目录批量按相对路径展平命名，`子目录\名.docx` → `子目录__名_REDACTED.docx`
+- `redact-manifest.json`：逐文件 `{redactions:[{type,count,locations}], needs_review:[{type,count}], pdf_removed_and_verified, removed_embedded_files, dropped_unmodeled_parts, threaded_comments_preserved, failed, error}`；位置精确到部件+段落/单元格/页；清单不含任何原始敏感值
+
+## 修复记录（2026-10-15，相对初版）
+
+主控冻结探针 `benchmarks/redaction-hidden/before-review/controller-results.json` 证实初版真实脱敏失败：退出 0 但 Word 删除修订与批注仍留邮箱、Excel 数值型手机号与批注仍留原值、PPT 备注仍留邮箱。初版只扫可见正文（python-docx 段落直接 run、openpyxl 字符串单元格、python-pptx 文本框），且部分失败退出 0、目录重名输出互相覆盖。重写为包级处理：
+
+- DOCX/PPTX 改为直接在包内全部 XML 部件上做三级清洗（段落 run 级含 `w:delText`/`a:fld`、文本节点级、属性级），未改动部件按原始字节复制；
+- XLSX 增加数值单元格、批注、文档属性、线程批注保留与 openpyxl 丢弃部件的如实清单（`dropped_unmodeled_parts`）；
+- PDF 增加元数据/XMP/书签/批注信息清洗与含敏感值附件移除；
+- 新增保存后**底层回读验证**（逐部件搜索已识别值，二进制按原始字节，PDF 含全部隐藏面），残留即阻断（failed+删输出+退出 2）；
+- 输出命名按相对路径展平、冲突显式失败；任一文件失败即退出 2；实现 SKILL.md 此前承诺但未实现的 `--types`。
+
+对冻结输入复制件复跑（`per-skill/doc-sensitive-redact/benchmark-rerun-20261015/`，未覆盖 `before-review`）：exit 0、3/3 文件处理、6 个 needle 逐部件扫描全部为零残留，与 `expected.json` 规则一致。
+
+## 验收依据与测试
+
+对应 `decision-register.json`: independent_implement；`specs.json` 的 `doc-sensitive-redact`（输入文件或目录，输出 `_REDACTED` 文件 + 清单；异常含 15 位/校验位不符不误杀、批量部分失败记录；金标准为四格式敏感值打码后不可从底层回提、清单计数=实际修改）。
+
+黑盒测试位于 `tests/office_skills/test_doc_sensitive_redact.py`（12 项，独立推导预期值，不 mock 实现，不 import 被测模块；识别期望值用测试内独立实现的 GB11643 校验位与 Luhn 算法构造）：
+
+1. 正常（2 项）：DOCX 正文/表格/页眉 + XLSX 字符串 + PPTX 文本框打码、清单计数与读回验证
+2. 复杂（6 项）：冻结缺陷场景复现（删除修订/批注/数值单元格/备注，底层 ZIP 逐部件扫描零残留、清单含 `word/comments.xml`/`notesSlide` 定位）；needs_review 不误打；嵌套目录唯一命名；outdir 嵌入输入目录不递归重扫；`--types` 过滤；重名冲突显式失败；PDF 隐藏面（元数据/XMP/附件/批注/书签+原始字节）清洗
+3. 异常（3 项）：混合批处理部分失败退出 2 且逐文件记录；二进制部件明文残留被阻断（failed、输出删除、错误含部件名）；输入不存在/不支持的扩展名/空目录/非法 `--types` 退出 2
+
+在仓库根目录运行（使用任务 venv 解释器，临时目录为任务目录下唯一目录）：
+
+```bash
+<python> -m pytest tests/office_skills/test_doc_sensitive_redact.py --basetemp <任务目录下唯一临时目录>
+```
+
+家族回归（同技能，旧契约）：`tests/office_skills/test_pdf_ppt_family.py::test_redact` 通过。仓库 CLI 校验：`(cwd=cli) python -m openjiuwen_plugin.main validate skills/office/doc-sensitive-redact` → Plugin validation passed；`pack` 成功。
+
+## 来源与许可
+
+本技能为原创实现（`decision-register.json`: independent_implement；未复制外部代码；无 1:1 豆包竞品项，workbuddy 无对应方向可搬运）。
+
+- 本技能代码 / SKILL.md / 文档随本仓库按根目录 `LICENSE` 分发。
+- 运行时依赖：lxml（BSD-3-Clause）、openpyxl（MIT）、**PyMuPDF 1.28.2 为 AGPL-3.0 或商业许可双许可**——本包仅通过其公开 API 调用、不复制源码、不打包其本体，但**不免除宿主遵守 AGPL 或购买商业授权**的义务。任务中安装于任务 venv，未全局安装。
+- 初版曾声明 python-docx/python-pptx 为运行时依赖，重写后 DOCX/PPTX 走 lxml 包级处理，二者不再是本技能的直接依赖（Excel/PDF 依赖不变）。
+
+## 未测项（不宣称通过）
+
+- 豆包端同题竞品验收：`parity_status=not_verified`，未伪造竞品结果。
+- WPS/Word 桌面端对重写后 DOCX/PPTX/XLSX 的打开复验：未执行（结构合法性已由 python-docx/openpyxl/python-pptx 读回间接验证，不宣称原生办公引擎验收通过）。
+- 图片/扫描件 OCR 识别：不做，不宣称。
