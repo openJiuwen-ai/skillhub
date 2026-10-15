@@ -6,17 +6,23 @@
   python extract_pdf.py --input file.pdf --outdir out/
 
 退出码: 0=完成 2=输入错误(损坏/加密)
+
+运行时依赖(全部宽松许可; 见 requirements.txt 与 SKILL.md 许可说明):
+  pdfplumber/pdfminer.six (MIT) 文本与表格; pypdfium2/PDFium (BSD-3-Clause OR Apache-2.0) 稀疏页渲染;
+  pypdf (BSD-3-Clause) 结构与加密检查。
 """
 import argparse
 import json
-import math
 import os
 import re
 import sys
 
-import pymupdf
+import pdfplumber
+import pypdf
+import pypdfium2 as pdfium
 
 SPARSE_THRESHOLD = 20
+RENDER_DPI = 150
 
 RE_ID = re.compile(r"(?<![0-9Xx])[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?![0-9Xx])")
 RE_AMBIGUOUS15 = re.compile(r"(?<!\d)\d{15}(?!\d)")
@@ -128,7 +134,10 @@ def to_md_table(rows):
 
 
 def extract_table_blocks(page, page_no):
-    """检测表格并保留来源定位: 页码 + bbox + 结构化行列。"""
+    """检测表格并保留来源定位: 页码 + bbox + 结构化行列。
+
+    pdfplumber 的 Page.find_tables() 基于线框检测，与既有 find_tables 契约一致。
+    """
     blocks = []
     try:
         tabs = page.find_tables()
@@ -145,6 +154,20 @@ def extract_table_blocks(page, page_no):
                        "col_count": max((len(r) for r in rows), default=0),
                        "source": "find_tables"})
     return blocks
+
+
+def render_page_png(pdfium_doc, index0, out_path):
+    """用 PDFium(pypdfium2) 把第 index0 页渲染为真实 PNG。"""
+    page = pdfium_doc[index0]
+    bitmap = page.render(scale=RENDER_DPI / 72.0)
+    try:
+        image = bitmap.to_pil()
+        image.save(out_path, format="PNG")
+    finally:
+        try:
+            bitmap.close()
+        except Exception:
+            pass
 
 
 def build_verify_report(key_numbers):
@@ -178,13 +201,21 @@ def main():
     ap.add_argument("--input", required=True)
     ap.add_argument("--outdir", required=True)
     args = ap.parse_args()
+
+    # 结构与加密检查(pypdf): 损坏/不可读 → 显式失败; 加密 → 显式拒绝, 不暴力破解
     try:
-        doc = pymupdf.open(args.input)
+        reader = pypdf.PdfReader(args.input)
     except Exception as e:
         print(f"ERROR: cannot open PDF: {e}", file=sys.stderr)
         return 2
-    if doc.needs_pass:
+    if reader.is_encrypted:
         print("ERROR: encrypted PDF is not supported", file=sys.stderr)
+        return 2
+
+    try:
+        pdf = pdfplumber.open(args.input)
+    except Exception as e:
+        print(f"ERROR: cannot open PDF: {e}", file=sys.stderr)
         return 2
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -193,9 +224,10 @@ def main():
     structured_tables = []
     key_numbers = []
     md_parts = []
+    pdfium_doc = None
     try:
-        for i, page in enumerate(doc, start=1):
-            text = page.get_text("text")
+        for i, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
             blocks = extract_table_blocks(page, i)
             structured_tables.extend(blocks)
             rows_only = [b["rows"] for b in blocks]
@@ -204,8 +236,9 @@ def main():
             if sparse:
                 os.makedirs(pages_dir, exist_ok=True)
                 rendered = os.path.join("pages", f"page-{i}.png")
-                pix = page.get_pixmap(dpi=150)
-                pix.save(os.path.join(args.outdir, rendered))
+                if pdfium_doc is None:
+                    pdfium_doc = pdfium.PdfDocument(args.input)
+                render_page_png(pdfium_doc, i - 1, os.path.join(args.outdir, rendered))
             pages.append({"page": i, "text": text, "sparse": sparse,
                           "needs_vision": sparse, "rendered_image": rendered,
                           "tables": rows_only})
@@ -219,13 +252,15 @@ def main():
             for b in blocks:
                 md_parts.append(to_md_table(b["rows"]) + "\n")
     finally:
-        doc.close()
+        if pdfium_doc is not None:
+            pdfium_doc.close()
+        pdf.close()
 
     verify_report = build_verify_report(key_numbers)
     uncertain = [f for f in key_numbers if f["pass2"] == "needs_review"]
     result = {
         "input": args.input,
-        "engine": "pymupdf (local, no cloud, no API key)",
+        "engine": "pdfplumber/pdfminer.six (text+tables) + pypdfium2/PDFium (render) + pypdf (structure), local, no cloud, no API key",
         "pages": pages,
         "tables": structured_tables,
         "key_numbers": {

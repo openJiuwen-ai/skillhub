@@ -20,17 +20,36 @@
 
 ## 安装与依赖
 
-- Python 3.9+
-- PyMuPDF（`pip install pymupdf`）
+- Python 3.10+
+- 运行时依赖（全部宽松许可，版本已锁定于 `requirements.txt`）：
+  - `pdfplumber`（MIT，含 `pdfminer.six` MIT）——正文与线框表格提取
+  - `pypdfium2` / PDFium（BSD-3-Clause OR Apache-2.0）——稀疏页真实 PNG 渲染
+  - `pypdf`（BSD-3-Clause）——结构与加密检查
+- 传递依赖（均为宽松许可）：`Pillow`（MIT-CMU）、`charset-normalizer`（MIT）、`cryptography`（Apache-2.0 OR BSD-3-Clause）、`cffi`（MIT）
 - 标准库：argparse / json / os / re / sys
+- 不含 PyMuPDF/fitz；无 GPL/AGPL/LGPL 运行时依赖；不调用联网 OCR，不通过外部进程借用其他 PDF 引擎
 
 技能包结构：
 
 ```text
 pdf-structured-extract/
 ├── SKILL.md
+├── requirements.txt
 └── scripts/extract_pdf.py
 ```
+
+### 依赖许可证据（取自各 wheel METADATA，2026-10-15）
+
+| 包 | 版本 | 许可 | 官方来源 |
+|---|---|---|---|
+| pdfplumber | 0.11.10 | MIT（Classifier: OSI Approved :: MIT） | https://github.com/jsvine/pdfplumber |
+| pdfminer.six | 20260107 | MIT（`License-Expression: MIT`） | https://github.com/pdfminer/pdfminer.six |
+| pypdfium2 | 5.14.0 | BSD-3-Clause OR Apache-2.0（内含 PDFium BSD-3-Clause 及宽松第三方） | https://github.com/pypdfium2-team/pypdfium2 |
+| pypdf | 6.19.0 | BSD-3-Clause（`License-Expression: BSD-3-Clause`） | https://github.com/py-pdf/pypdf |
+| Pillow | 12.3.0 | MIT-CMU（`License-Expression: MIT-CMU`） | https://github.com/python-pillow/Pillow |
+| charset-normalizer | 3.4.6 | MIT | https://github.com/jawah/charset_normalizer |
+| cryptography | 46.0.5 | Apache-2.0 OR BSD-3-Clause | https://github.com/pyca/cryptography |
+| cffi | 2.0.0 | MIT | https://github.com/python-cffi/cffi |
 
 ## 用法
 
@@ -80,4 +99,22 @@ python -m pytest tests/office_skills/test_pdf_structured_extract.py --basetemp <
 本技能为原创实现（`decision-register.json`: independent_implement；无外部代码复制；竞品 doubao/word、workbuddy wps-office-suite、nano-pdf、pdf-image-text-extractor 均 `no_license_found`，仅功能对标未搬运）。
 
 - 本技能代码 / SKILL.md / 文档随本仓库按根目录 `LICENSE`（Apache-2.0）分发。
-- 运行时依赖 **PyMuPDF 1.28.2 为 AGPL-3.0 或商业许可双许可**（`license-register.json` 已登记）。本包仅通过其公开 API 调用、不复制源码、不打包其本体，但这**不免除宿主遵守 AGPL 或购买商业授权**的义务——不是"全链路宽松许可"。若需宽松许可可替换为其他 PDF 库。任务中 PyMuPDF 安装于任务 venv，未全局安装。
+- 运行时依赖已迁移为**全链路宽松许可**（见上文许可证据表）：`pdfplumber`/`pdfminer.six`（MIT）、`pypdfium2`/PDFium（BSD-3-Clause OR Apache-2.0）、`pypdf`（BSD-3-Clause），传递依赖 `Pillow`（MIT-CMU）、`charset-normalizer`（MIT）、`cryptography`（Apache-2.0 OR BSD-3-Clause）、`cffi`（MIT）。**不含 PyMuPDF/fitz，无 GPL/AGPL/LGPL。**
+- 第三方版权声明按其原始许可保留；MIT/BSD 的许可文本随对应依赖包分发。
+
+## 运行时依赖迁移记录（2026-10-15，宽松许可替换）
+
+为发布到官方 SkillHub，本项把运行时 `PyMuPDF/fitz`（AGPL-3.0 或商业许可）替换为明确宽松许可的独立实现，**保持既有功能契约与冻结验收结果**：
+
+- 文本与线框表格：`pdfplumber`（`find_tables()` 线框检测，输出 `page`+`bbox`+结构化 `rows`，契约不变）。
+- 稀疏页渲染：`pypdfium2`（PDFium）渲染 150 dpi 真实 PNG。
+- 结构与加密检查：`pypdf` 打开并检查 `is_encrypted`；损坏/加密显式失败（退出码 2）。
+- 关键数字两轮交叉校验与脱敏逻辑未变。
+- 源码中不再出现 `pymupdf`/`fitz` runtime import；PyMuPDF 仅存在于原测试环境，作为**独立生成 fixture 与验证 oracle**，不进入发布 runtime。
+- 清洁运行环境验收：新建仅安装 `requirements.txt` 宽松依赖的 venv，直接运行冻结普通/复杂/异常输入；再用原 PyMuPDF 环境独立读取核对（不依赖脚本自身 `success` 字段）。详细命令与结果见 `result.json` 的 `clean_runtime` 与 `tests`。
+
+### 迁移验收补充（未改动旧测试/冻结预期）
+
+- 旧测试原样运行：`tests/office_skills/test_pdf_structured_extract.py`（3 项）与 `tests/office_skills/test_pdf_ppt_family.py`（5 项）全部通过。
+- 新增迁移回归：`tests/office_skills/test_pdf_structured_extract_migration.py`（校验宽松栈输出语义、失败行为，并以 PyMuPDF 作 oracle 交叉核对，另静态断言源码无 `pymupdf`/`fitz` import）。
+- 已核实并如实保留的能力边界：无边框/复杂合并单元格表格检出率未系统取样（`find_tables` 依赖线框）；扫描页不调用 OCR，仅渲染并标注 `needs_vision`；豆包竞品同题验收仍 `not_verified`。

@@ -40,10 +40,15 @@ python scripts/extract_pdf.py --input file.pdf --outdir out/
 
 ## 依赖
 
-Python 3.9+，PyMuPDF（`pip install pymupdf`）。
+Python 3.10+，`pip install -r requirements.txt`（版本已锁定）：
+
+- `pdfplumber`（MIT，含 `pdfminer.six` MIT）——正文与线框表格提取
+- `pypdfium2` / PDFium（BSD-3-Clause OR Apache-2.0）——稀疏页真实 PNG 渲染
+- `pypdf`（BSD-3-Clause）——结构与加密检查
 
 ### 许可（区分原创与运行时依赖）
 
 - 本技能代码/SKILL.md/文档为原创，随本仓库按 `LICENSE`（Apache-2.0）分发。
-- 运行时依赖 **PyMuPDF 为 AGPL-3.0 或商业许可双许可**。本包只通过其公开 API 调用、不复制源码、不打包其本体，但**这并不免除宿主遵守 AGPL（若以 AGPL 方式分发需开放相应源码）或购买 Artifex 商业授权**的义务；不是"全链路宽松许可"。可替换为实现同等调用的其他 PDF 库以改变许可约束。
+- 运行时依赖已全部替换为**宽松许可**（MIT / BSD-3-Clause / Apache-2.0 / MIT-CMU），无 GPL/AGPL/LGPL，**不含 PyMuPDF/fitz**。不再有 AGPL 或商业授权义务。确切版本、许可与官方 URL 见 `requirements.txt`；许可证据取自各 wheel 的 METADATA（`License-Expression`/`License`/Classifier），逐项记录于交付说明 docs。
+- 本地运行：不调用联网 OCR、不调用外部进程借用其他 PDF 引擎、不重命名受限代码。第三方版权声明按其原始许可保留（MIT/BSD 的 LICENSE 文本随各依赖包分发）。
 - 竞品（doubao/word、workbuddy wps-office-suite、nano-pdf、pdf-image-text-extractor）均 `no_license_found`，仅功能对标，未复制任何代码或文档。

@@ -1,0 +1,14 @@
+# pdf-structured-extract runtime dependencies (all permissive: MIT / BSD / Apache / MIT-CMU).
+# No GPL/AGPL/LGPL runtime dependency. No PyMuPDF/fitz. No external process fallback, no network OCR.
+# License evidence = installed wheel METADATA (License-Expression/License/Classifier) read on 2026-10-15.
+#
+# direct:
+pdfplumber==0.11.10        # MIT - https://github.com/jsvine/pdfplumber
+pypdf==6.19.0              # BSD-3-Clause - https://github.com/py-pdf/pypdf
+pypdfium2==5.14.0          # BSD-3-Clause OR Apache-2.0 (bundled PDFium: BSD-3-Clause + permissive) - https://github.com/pypdfium2-team/pypdfium2
+# transitive:
+pdfminer.six==20260107     # MIT (License-Expression: MIT) - https://github.com/pdfminer/pdfminer.six
+pillow==12.3.0             # MIT-CMU - https://github.com/python-pillow/Pillow
+charset-normalizer==3.4.6  # MIT - https://github.com/jawah/charset_normalizer
+cryptography==46.0.5       # Apache-2.0 OR BSD-3-Clause - https://github.com/pyca/cryptography
+cffi==2.0.0                # MIT - https://github.com/python-cffi/cffi
