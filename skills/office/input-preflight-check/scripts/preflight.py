@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""input-preflight-check: 清单三态核对 + 数据范围校验。"""
+"""input-preflight-check: 清单三态核对 + 分析前数据范围校验。
+
+checklist 模式：材料清单三态核对（ready/missing/needs_confirm），损坏文件不得因
+文件名命中而判 ready。data 模式：必需列/重复表头/单位/数值列/真实日历日期范围/
+最少行数/公式缓存校验；不可解析或缺失的日期/数值一律阻断，不静默通过。
+verdict=block 时不产出分析结论。
+"""
 import argparse
+import datetime as _dt
 import json
+import math
 import os
 import re
 import sys
 
+TEXT_EXTS = (".md", ".txt", ".csv")
+
 
 def sniff_content(path):
-    """返回文件可提取文本（用于内容模式匹配）。"""
+    """返回 (可提取文本, 可读标志, 错误说明)。可读=False 表示文件存在但解析失败。"""
     ext = os.path.splitext(path)[1].lower()
     try:
-        if ext in (".md", ".txt", ".csv"):
+        if ext in TEXT_EXTS:
             with open(path, encoding="utf-8", errors="ignore") as f:
-                return f.read(200000)
+                return f.read(200000), True, None
         if ext == ".docx":
             from docx import Document
             doc = Document(path)
-            return "\n".join(p.text for p in doc.paragraphs)
+            return "\n".join(p.text for p in doc.paragraphs), True, None
         if ext == ".xlsx":
             from openpyxl import load_workbook
             wb = load_workbook(path, data_only=True, read_only=True)
@@ -27,152 +37,33 @@ def sniff_content(path):
                 for row in ws.iter_rows(max_row=50, values_only=True):
                     parts.append(" ".join(str(c) for c in row if c is not None))
             wb.close()
-            return "\n".join(parts)
-    except Exception:
-        return ""
-    return ""
-
-
-def mode_checklist(args):
-    try:
-        with open(args.checklist, encoding="utf-8") as f:
-            cfg = json.load(f)
+            return "\n".join(parts), True, None
     except Exception as e:
-        print(f"ERROR: bad checklist: {e}", file=sys.stderr)
-        return 2
-    files = []
-    for root, _dirs, names in os.walk(args.dir):
-        for n in sorted(names):
-            files.append(os.path.join(root, n))
-    contents = {}
-    results = []
-    reasons = []
-    for item in cfg.get("items", []):
-        pats = item.get("patterns", [])
-        fuzzy = item.get("fuzzy", [])
-        required = item.get("required", True)
-        matched = []
-        fuzzy_matched = []
-        for f in files:
-            fname = os.path.basename(f)
-            if f not in contents:
-                contents[f] = sniff_content(f)
-            content = contents[f]
-            if pats and all((p in fname) or (p in content) for p in pats):
-                matched.append(os.path.relpath(f, args.dir))
-            elif fuzzy and any(p in fname for p in fuzzy):
-                fuzzy_matched.append(os.path.relpath(f, args.dir))
-        if matched:
-            state = "ready"
-        elif fuzzy_matched:
-            state = "needs_confirm"
-            reasons.append(f"需确认: {item.get('name')}（文件名近似命中但内容模式未验证: "
-                           f"{fuzzy_matched[:3]}）")
-        else:
-            state = "missing"
-            if required:
-                reasons.append(f"缺失: {item.get('name')}（无文件命中全部模式 {pats}）")
-        results.append({"id": item.get("id"), "name": item.get("name"),
-                        "state": state, "matched_files": matched[:5],
-                        "fuzzy_files": fuzzy_matched[:5]})
-    blocking = any(r["state"] == "missing" for r in results
-                   if next((i.get("required", True) for i in cfg.get("items", [])
-                            if i.get("id") == r["id"]), True))
-    confirm = any(r["state"] == "needs_confirm" for r in results)
-    verdict = "block" if blocking else ("confirm_needed" if confirm else "pass")
-    report = {"mode": "checklist", "verdict": verdict, "items": results,
-              "reasons": reasons,
-              "note": "verdict=block时不产出分析结论"}
-    dump(args.report, report)
-    return 0
+        return "", False, "%s: %s" % (type(e).__name__, e)
+    return "", True, None  # 未知扩展名：不提取内容，也不判损坏
 
 
-def mode_data(args):
-    from openpyxl import load_workbook
+def parse_calendar_date(v):
+    """真实日历日期解析。不存在的日期（如 2026-02-30）与无法解析的值返回 None。"""
+    if isinstance(v, _dt.datetime):
+        return v.date()
+    if isinstance(v, _dt.date):
+        return v
+    if v is None or isinstance(v, bool):
+        return None
+    s = str(v).strip().replace("/", "-").replace(".", "-")
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if not m:
+        return None
     try:
-        with open(args.requirements, encoding="utf-8") as f:
-            req = json.load(f)
-    except Exception as e:
-        print(f"ERROR: bad requirements: {e}", file=sys.stderr)
-        return 2
-    try:
-        wb = load_workbook(args.data, data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        wb.close()
-    except Exception as e:
-        print(f"ERROR: cannot read data: {e}", file=sys.stderr)
-        return 2
-    if not rows:
-        dump(args.report, {"mode": "data", "verdict": "block", "reasons": ["空表"]})
-        return 0
-    header = [str(c).strip() if c is not None else "" for c in rows[0]]
-    data_rows = [r for r in rows[1:] if any(c is not None and str(c).strip() for c in r)]
+        return _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
 
-    checks = []
-    reasons = []
-    # 列检查
-    missing_cols = [c for c in req.get("columns", []) if c not in header]
-    checks.append({"check": "required_columns", "ok": not missing_cols,
-                   "missing": missing_cols})
-    if missing_cols:
-        reasons.append(f"必需列缺失: {missing_cols}")
-    # 单位
-    for col, unit in (req.get("units") or {}).items():
-        if col not in header:
-            continue
-        idx = header.index(col)
-        vals = [r[idx] for r in data_rows[:20]
-                if idx < len(r) and isinstance(r[idx], (int, float))]
-        header_has_unit = unit in header[idx]
-        checks.append({"check": "unit", "column": col, "expected_unit": unit,
-                       "header": header[idx], "numeric_values": len(vals),
-                       "ok": header_has_unit or not vals,
-                       "note": None if header_has_unit else
-                       "表头未注明单位且列为数值，需确认口径"})
-        if not header_has_unit and vals:
-            reasons.append(f"单位待确认: {col} 列要求单位'{unit}'但表头'{header[idx]}'未注明")
-    # 日期范围
-    dc = req.get("date_column")
-    dr = req.get("date_range")
-    date_check = None
-    if dc and dr and dc in header:
-        idx = header.index(dc)
-        out_of_range = []
-        parsed = 0
-        for ri, r in enumerate(data_rows, start=2):
-            v = r[idx] if idx < len(r) else None
-            if v is None:
-                continue
-            s = str(v)[:10].replace("/", "-").replace(".", "-")
-            m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
-            if m:
-                parsed += 1
-                iso = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-                if not (dr[0] <= iso <= dr[1]):
-                    out_of_range.append({"row": ri, "value": iso})
-        date_check = {"check": "date_range", "column": dc,
-                      "expected": dr, "parsed_rows": parsed,
-                      "out_of_range": out_of_range[:20],
-                      "ok": not out_of_range}
-        checks.append(date_check)
-        if out_of_range:
-            reasons.append(f"日期超出范围: {len(out_of_range)} 行不在 {dr} 内")
-    # 行数
-    min_rows = req.get("min_rows", 1)
-    checks.append({"check": "min_rows", "ok": len(data_rows) >= min_rows,
-                   "rows": len(data_rows), "min": min_rows})
-    if len(data_rows) < min_rows:
-        reasons.append(f"有效行数不足: {len(data_rows)} < {min_rows}")
-    blocking = (missing_cols or len(data_rows) < min_rows
-                or (date_check and not date_check["ok"]
-                    and req.get("date_range_block", True)))
-    verdict = "block" if blocking else ("confirm_needed" if reasons else "pass")
-    report = {"mode": "data", "verdict": verdict, "checks": checks,
-              "reasons": reasons, "rows": len(data_rows),
-              "note": "verdict=block时不产出分析结论"}
-    dump(args.report, report)
-    return 0
+
+def _short(v, n=40):
+    s = str(v)
+    return s if len(s) <= n else s[:n] + "..."
 
 
 def dump(path, obj):
@@ -180,6 +71,307 @@ def dump(path, obj):
         json.dump(obj, f, ensure_ascii=False, indent=2)
     print(json.dumps({"verdict": obj["verdict"],
                       "reasons": obj.get("reasons", [])[:5]}, ensure_ascii=False))
+
+
+def mode_checklist(args):
+    try:
+        with open(args.checklist, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        print("ERROR: bad checklist: %s" % e, file=sys.stderr)
+        return 2
+    if not isinstance(cfg, dict):
+        print("ERROR: bad checklist: 顶层必须是对象", file=sys.stderr)
+        return 2
+    if not os.path.isdir(args.dir):
+        print("ERROR: materials dir not found: %s" % args.dir, file=sys.stderr)
+        return 2
+    items = cfg.get("items")
+    if not isinstance(items, list) or not items:
+        dump(args.report, {"mode": "checklist", "verdict": "block", "items": [],
+                           "files_scanned": 0,
+                           "reasons": ["清单为空：没有任何条目"],
+                           "note": "verdict=block时不产出分析结论"})
+        return 0
+    # 清单自身问题：缺 id / 重复 id / 条目无任何匹配模式
+    ids = [i.get("id") for i in items]
+    seen, dups = set(), []
+    for i in ids:
+        if i is None:
+            continue
+        if i in seen and i not in dups:
+            dups.append(i)
+        seen.add(i)
+    config_reasons = []
+    missing_ids = [i for i in items if i.get("id") is None]
+    if missing_ids:
+        config_reasons.append("清单项缺少id: %d 个" % len(missing_ids))
+    if dups:
+        config_reasons.append("清单项id重复: %s" % dups)
+    no_pattern = [i.get("id") or i.get("name") for i in items
+                  if not i.get("patterns") and not i.get("fuzzy")]
+    if no_pattern:
+        config_reasons.append("清单项未配置patterns/fuzzy: %s" % no_pattern)
+    files = []
+    for root, _dirs, names in os.walk(args.dir):
+        for n in sorted(names):
+            files.append(os.path.join(root, n))
+    if not files:
+        config_reasons.append("材料目录为空：未找到任何文件")
+    cache = {}
+    results = []
+    reasons = list(config_reasons)
+    for item in items:
+        pats = item.get("patterns", [])
+        fuzzy = item.get("fuzzy", [])
+        required = item.get("required", True)
+        matched, unreadable, fuzzy_matched = [], [], []
+        for f in files:
+            fname = os.path.basename(f)
+            if f not in cache:
+                cache[f] = sniff_content(f)
+            content, readable, err = cache[f]
+            rel = os.path.relpath(f, args.dir)
+            if pats and all((p in fname) or (p in content) for p in pats):
+                if readable:
+                    matched.append(rel)
+                else:
+                    unreadable.append({"file": rel, "error": err})
+            elif fuzzy and any(p in fname for p in fuzzy):
+                fuzzy_matched.append(rel)
+        if matched:
+            state = "ready"
+        elif unreadable:
+            state = "needs_confirm"
+            reasons.append("无法读取: %s（文件命中模式但不可读: %s）"
+                           % (item.get("name"), [u["file"] for u in unreadable[:3]]))
+        elif fuzzy_matched:
+            state = "needs_confirm"
+            reasons.append("需确认: %s（文件名近似命中但内容模式未验证: %s）"
+                           % (item.get("name"), fuzzy_matched[:3]))
+        else:
+            state = "missing"
+            if required:
+                reasons.append("缺失: %s（无文件命中全部模式 %s）"
+                               % (item.get("name"), pats))
+        results.append({"id": item.get("id"), "name": item.get("name"),
+                        "state": state, "matched_files": matched[:5],
+                        "unreadable_files": unreadable[:5],
+                        "fuzzy_files": fuzzy_matched[:5],
+                        "required": required})
+    blocking = bool(dups) or bool(missing_ids) or bool(no_pattern)
+    for r, item in zip(results, items):
+        required = item.get("required", True)
+        if required and r["state"] == "missing":
+            blocking = True
+        if required and r["state"] == "needs_confirm" and r["unreadable_files"]:
+            blocking = True  # 必需材料仅命中损坏文件：不可放行
+    confirm = any(r["state"] == "needs_confirm" for r in results)
+    verdict = "block" if blocking else ("confirm_needed" if (confirm or reasons)
+                                        else "pass")
+    report = {"mode": "checklist", "verdict": verdict, "items": results,
+              "files_scanned": len(files), "reasons": reasons,
+              "note": "verdict=block时不产出分析结论"}
+    dump(args.report, report)
+    return 0
+
+
+def mode_data(args):
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+    try:
+        with open(args.requirements, encoding="utf-8") as f:
+            req = json.load(f)
+    except Exception as e:
+        print("ERROR: bad requirements: %s" % e, file=sys.stderr)
+        return 2
+    if not isinstance(req, dict):
+        print("ERROR: bad requirements: 顶层必须是对象", file=sys.stderr)
+        return 2
+    try:
+        wb = load_workbook(args.data, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        sheet_name = ws.title
+        wb.close()
+    except Exception as e:
+        print("ERROR: cannot read data: %s" % e, file=sys.stderr)
+        return 2
+    if not rows:
+        dump(args.report, {"mode": "data", "verdict": "block", "reasons": ["空表"],
+                           "note": "verdict=block时不产出分析结论"})
+        return 0
+    header = [str(c).strip() if c is not None else "" for c in rows[0]]
+    data_rows = [r for r in rows[1:] if any(c is not None and str(c).strip()
+                                            for c in r)]
+    checks = []
+    reasons = []
+    blocking = False
+
+    # 公式无缓存值：未读取到的范围不得静默通过
+    uncached = []
+    try:
+        wb_raw = load_workbook(args.data, data_only=False)
+        raw_rows = list(wb_raw.active.iter_rows(values_only=True))
+        for ri, (raw, cached) in enumerate(zip(raw_rows, rows), start=1):
+            for ci, (rv, cv) in enumerate(zip(raw, cached), start=1):
+                if isinstance(rv, str) and rv.startswith("=") and cv is None:
+                    uncached.append("%s%d" % (get_column_letter(ci), ri))
+        wb_raw.close()
+    except Exception:
+        uncached = []
+    if uncached:
+        checks.append({"check": "formula_cache", "ok": False,
+                       "count": len(uncached),
+                       "formula_cells_without_cache": uncached[:20]})
+        reasons.append("公式无缓存值: %d 个单元格无法读取数值" % len(uncached))
+        blocking = True
+
+    # requirements 未配置任何校验项：不得静默通过
+    has_any_check = (bool(req.get("columns")) or bool(req.get("units"))
+                     or bool(req.get("date_column"))
+                     or bool(req.get("numeric_columns")) or "min_rows" in req)
+    if not has_any_check:
+        reasons.append("requirements为空：未配置任何校验项")
+        blocking = True
+
+    # 重复表头：列引用歧义
+    non_empty = [h for h in header if h]
+    dup_headers = sorted({h for h in non_empty if non_empty.count(h) > 1})
+    checks.append({"check": "duplicate_headers", "ok": not dup_headers,
+                   "duplicates": dup_headers})
+    if dup_headers:
+        reasons.append("表头重复: %s（列引用歧义）" % dup_headers)
+        blocking = True
+
+    # 必需列
+    missing_cols = [c for c in req.get("columns", []) if c not in header]
+    checks.append({"check": "required_columns", "ok": not missing_cols,
+                   "missing": missing_cols})
+    if missing_cols:
+        reasons.append("必需列缺失: %s" % missing_cols)
+        blocking = True
+
+    # 单位口径
+    for col, unit in (req.get("units") or {}).items():
+        if col not in header:
+            continue
+        idx = header.index(col)
+        vals = [r[idx] for r in data_rows[:20]
+                if idx < len(r) and isinstance(r[idx], (int, float))
+                and not isinstance(r[idx], bool)]
+        header_has_unit = unit in header[idx]
+        checks.append({"check": "unit", "column": col, "expected_unit": unit,
+                       "header": header[idx], "numeric_values": len(vals),
+                       "ok": header_has_unit or not vals,
+                       "note": None if header_has_unit else
+                       "表头未注明单位且列为数值，需确认口径"})
+        if not header_has_unit and vals:
+            reasons.append("单位待确认: %s 列要求单位'%s'但表头'%s'未注明"
+                           % (col, unit, header[idx]))
+
+    # 数值列：不可解析/缺失/非有限数一律阻断
+    for col in req.get("numeric_columns") or []:
+        ncheck = {"check": "numeric", "column": col}
+        if col not in header:
+            ncheck.update(ok=False, error="column_not_in_header")
+            reasons.append("数值列缺失: %s" % col)
+            blocking = True
+        else:
+            idx = header.index(col)
+            bad, miss = [], []
+            for ri, r in enumerate(data_rows, start=2):
+                v = r[idx] if idx < len(r) else None
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    miss.append(ri)
+                elif isinstance(v, bool):
+                    bad.append({"row": ri, "value": str(v)})
+                elif isinstance(v, (int, float)):
+                    if not math.isfinite(v):
+                        bad.append({"row": ri, "value": str(v)})
+                else:
+                    try:
+                        float(str(v).strip())
+                    except ValueError:
+                        bad.append({"row": ri, "value": _short(v)})
+            ok = not bad and not miss
+            ncheck.update(ok=ok, rows=len(data_rows),
+                          unparseable_count=len(bad), unparseable=bad[:20],
+                          missing_count=len(miss), missing_rows=miss[:20])
+            if bad:
+                reasons.append("数值不可解析: %s 列 %d 行" % (col, len(bad)))
+            if miss:
+                reasons.append("数值缺失: %s 列 %d 行" % (col, len(miss)))
+            if not ok:
+                blocking = True
+        checks.append(ncheck)
+
+    # 日期列：真实日历日期解析；不可解析/缺失一律阻断，越界按配置（默认阻断）
+    dc = req.get("date_column")
+    if dc:
+        dr = req.get("date_range")
+        dcheck = {"check": "date_range", "column": dc}
+        if dc not in header:
+            dcheck.update(ok=False, error="date_column_not_in_header")
+            reasons.append("日期列缺失: %s" % dc)
+            blocking = True
+        else:
+            lo = parse_calendar_date(dr[0]) if isinstance(dr, list) and len(dr) == 2 else None
+            hi = parse_calendar_date(dr[1]) if isinstance(dr, list) and len(dr) == 2 else None
+            if lo is None or hi is None or lo > hi:
+                dcheck.update(ok=False, error="bad_date_range_config", expected=dr)
+                reasons.append("date_range配置无效: %s" % dr)
+                blocking = True
+            else:
+                idx = header.index(dc)
+                out_of_range, unparseable, miss, parsed = [], [], [], 0
+                for ri, r in enumerate(data_rows, start=2):
+                    v = r[idx] if idx < len(r) else None
+                    if v is None or (isinstance(v, str) and not v.strip()):
+                        miss.append(ri)
+                        continue
+                    d = parse_calendar_date(v)
+                    if d is None:
+                        unparseable.append({"row": ri, "value": _short(v)})
+                    else:
+                        parsed += 1
+                        if not (lo <= d <= hi):
+                            out_of_range.append({"row": ri, "value": d.isoformat()})
+                dcheck.update(expected=[lo.isoformat(), hi.isoformat()],
+                              parsed_rows=parsed,
+                              out_of_range_count=len(out_of_range),
+                              out_of_range=out_of_range[:20],
+                              unparseable_count=len(unparseable),
+                              unparseable=unparseable[:20],
+                              missing_count=len(miss), missing_rows=miss[:20],
+                              ok=not (out_of_range or unparseable or miss))
+                if unparseable:
+                    reasons.append("日期不可解析: %d 行（值不是有效日历日期）"
+                                   % len(unparseable))
+                if miss:
+                    reasons.append("日期缺失: %d 行" % len(miss))
+                if out_of_range:
+                    reasons.append("日期超出范围: %d 行不在 [%s, %s] 内"
+                                   % (len(out_of_range), lo, hi))
+                if unparseable or miss or (out_of_range
+                                           and req.get("date_range_block", True)):
+                    blocking = True
+        checks.append(dcheck)
+
+    # 最少行数
+    min_rows = req.get("min_rows", 1)
+    checks.append({"check": "min_rows", "ok": len(data_rows) >= min_rows,
+                   "rows": len(data_rows), "min": min_rows})
+    if len(data_rows) < min_rows:
+        reasons.append("有效行数不足: %d < %d" % (len(data_rows), min_rows))
+        blocking = True
+
+    verdict = "block" if blocking else ("confirm_needed" if reasons else "pass")
+    report = {"mode": "data", "verdict": verdict, "sheet": sheet_name,
+              "checks": checks, "reasons": reasons, "rows": len(data_rows),
+              "note": "verdict=block时不产出分析结论"}
+    dump(args.report, report)
+    return 0
 
 
 def main():
