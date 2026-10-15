@@ -62,8 +62,8 @@ NEXT_COMMAND_MAX_RETRIES = 3
 # dws 未授权/未登录时的提示（access token 缺失、未登录等）。
 AUTH_ERROR_PATTERNS = [
     "access token", "resolve access token", "not logged in", "未登录",
-    "unauthorized", "401", "403", "invalid token", "authentication",
-    "credential", "token", "授权", "未授权",
+    "unauthorized", "401", "403", "invalid token", "token expired",
+    "authentication failed", "need login", "请登录", "授权失败", "未授权",
 ]
 ORG_DENIED_PATTERNS = [
     "组织未授权", "需要组织主管理员", "cli访问", "cli access",
