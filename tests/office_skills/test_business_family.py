@@ -182,40 +182,56 @@ def test_tax(workspace):
     doc.add_paragraph("技术服务合同：甲方委托乙方开发数据平台，合同金额50万元。")
     doc.save(str(mat / "合同-技术服务.docx"))
     (mat / "流水.csv").write_text("日期,金额\n2026-07-05,30000\n2026-08-01,12000\n", encoding="utf-8")
-    biz = {"taxpayer_type": "一般纳税人", "activities": ["货物销售", "跨境服务"], "period": "2026Q3"}
+    biz = {"taxpayer_type": "一般纳税人", "activities": ["货物销售", "跨境服务"],
+           "period": "2026Q3", "jurisdiction": "上海市", "entity_type": "居民企业"}
     (workspace / "b.json").write_text(json.dumps(biz, ensure_ascii=False), encoding="utf-8")
     r = run_script("tax-compliance", "tax_review.py",
-                   ["--materials", mat, "--business", workspace / "b.json",
-                    "--outdir", workspace / "out"])
+                    ["--materials", mat, "--business", workspace / "b.json",
+                     "--outdir", workspace / "out"])
     assert r.returncode == 0, r.stderr + r.stdout
     rep = json.loads((workspace / "out" / "rule-analysis.json").read_text(encoding="utf-8"))
     # 材料归集
     assert rep["materials_summary"]["contracts"] == 1
     assert rep["materials_summary"]["invoice_files"] == 1
     assert rep["materials_summary"]["flow_files"] == 1
-    # 规则逐条有来源
+    inv = next(x for x in rep["materials"] if x["class"] == "发票台账")["stats"]
+    assert inv["amount_total_exact"] == "30000.00" and inv["tax_total_exact"] == "3900.00"
+    # 规则逐条有来源（法规名+条款+核查日期+有效期）
     rules = {x["id"]: x for x in rep["rules"]}
-    assert "VAT-G-13" in rules  # 一般纳税人+货物销售
-    assert "VAT-S-3" not in rules  # 非小规模
-    assert "VAT-CROSS-FREE" in rules  # 跨境服务
+    assert "VAT-G-RATES-2026" in rules  # 一般纳税人+货物销售
+    assert "VAT-S-LEVY-2026" not in rules  # 非小规模
+    assert "VAT-CROSS-ZERO-2026" in rules and "VAT-CROSS-EXEMPT-2026" in rules  # 跨境服务
     for x in rep["rules"]:
-        assert x["source"] and "条例" in x["source"] or "法" in x["source"] or "号" in x["source"] or "办法" in x["source"] or "细则" in x["source"]
+        src = x["source"]
+        assert src["regulation"] and src["article"] and src["checked_on"]
+        assert src["effective_from"] or src["effective_to"] or x["id"] == "INV-COMPLIANCE"
+        assert src["url_verified"] in (True, False)
         assert x["scope"]
-    # 有合同材料 -> 跨境规则 applicable；缺项不存在
-    assert rules["VAT-CROSS-FREE"]["status"] == "applicable"
+    vat = rules["VAT-G-RATES-2026"]
+    assert vat["source"]["regulation"] == "中华人民共和国增值税法"
+    assert vat["source"]["url_verified"] is True
+    # 跨境关键词+合同不足以确认零税率/免税：须交易条件事实（服务清单/购买方/境外消费）
+    assert rules["VAT-CROSS-ZERO-2026"]["status"] == "needs_confirmation"
+    assert any("cross_border_service_details" in f
+               for f in rules["VAT-CROSS-ZERO-2026"]["missing_facts"])
     # 免责声明
     assert "不构成专业税务意见" in rep["disclaimer"]
     md = (workspace / "out" / "rule-analysis.md").read_text(encoding="utf-8")
     assert "不构成专业税务意见" in md
     # 小规模分支
-    biz2 = {"taxpayer_type": "小规模纳税人", "activities": ["服务"], "period": "2026Q3"}
+    biz2 = {"taxpayer_type": "小规模纳税人", "activities": ["服务"],
+            "period": "2026Q3", "jurisdiction": "上海市"}
     (workspace / "b2.json").write_text(json.dumps(biz2, ensure_ascii=False), encoding="utf-8")
     r2 = run_script("tax-compliance", "tax_review.py",
                     ["--materials", mat, "--business", workspace / "b2.json",
                      "--outdir", workspace / "out2"])
     rep2 = json.loads((workspace / "out2" / "rule-analysis.json").read_text(encoding="utf-8"))
     ids2 = {x["id"] for x in rep2["rules"]}
-    assert "VAT-S-3" in ids2 and "VAT-G-13" not in ids2
+    assert "VAT-S-LEVY-2026" in ids2 and "VAT-G-RATES-2026" not in ids2
+    # 小规模优惠分条：法定3%可确认，起征点/减按1%须条件
+    rules2 = {x["id"]: x for x in rep2["rules"]}
+    assert rules2["VAT-S-LEVY-2026"]["status"] == "applicable"
+    assert rules2["VAT-S-THRESHOLD-2026"]["status"] == "needs_confirmation"
     # 无合同场景 -> 跨境 needs_confirmation
     mat2 = workspace / "mats2"
     mat2.mkdir()
@@ -225,9 +241,10 @@ def test_tax(workspace):
                      "--outdir", workspace / "out3"])
     rep3 = json.loads((workspace / "out3" / "rule-analysis.json").read_text(encoding="utf-8"))
     rules3 = {x["id"]: x for x in rep3["rules"]}
-    assert rules3["VAT-CROSS-FREE"]["status"] == "needs_confirmation"
+    assert rules3["VAT-CROSS-ZERO-2026"]["status"] == "needs_confirmation"
+    assert any("合同" in f for f in rules3["VAT-CROSS-ZERO-2026"]["missing_facts"])
     conf = json.loads((workspace / "out3" / "confirmations.json").read_text(encoding="utf-8"))
-    assert any(c["rule_id"] == "VAT-CROSS-FREE" for c in conf["confirmations"])
+    assert any(c["rule_id"] == "VAT-CROSS-ZERO-2026" for c in conf["confirmations"])
 
 
 # ---------- proposal-bid-generation ----------

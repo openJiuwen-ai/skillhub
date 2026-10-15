@@ -1,53 +1,286 @@
 {
+  "meta": {
+    "title": "中国税务合规规则库（工程摘录，自研整理）",
+    "maintained_by": "skillhub skills/office/tax-compliance（独立实现）",
+    "checked_on": "2026-10-15",
+    "verification_note": "url_verified=true 的来源已于2026-10-15实际抓取官方页面全文核对所引条款；url_verified=false 的条目未能在开发环境确认官方直链，交付前应在国家税务总局政策法规库（fgk.chinatax.gov.cn）按文号检索现行文本复核条款与施行日期。",
+    "legal_nature": "公开法规条目的工程摘录，用于材料归集与核对范围提示，不构成专业税务意见；适用以主管税务机关解释及现行有效法规文本为准。",
+    "period_semantics": "business.period 支持 YYYY / YYYYQn / YYYY-MM / YYYY-MM-DD；规则按生效/失效窗口与业务期间匹配，期间缺失或不可解析时规则一律 needs_confirmation，不得输出 applicable。",
+    "facts_note": "required_facts 为输出 applicable 前必须具备的事实；global_facts 为 period/jurisdiction/taxpayer_type。is_preference=true 的阶段性优惠规则默认 needs_confirmation，法定税率/征收率与有条件优惠分别成条。"
+  },
+  "global_facts": ["period", "jurisdiction", "taxpayer_type"],
   "rules": [
     {
-      "id": "VAT-G-13",
-      "tax_type": "增值税",
-      "summary": "一般纳税人销售货物、劳务，除另有规定外适用 13% 税率（销售交通运输、邮政、基础电信、建筑、不动产租赁、销售不动产、转让土地使用权适用 9%；销售服务、无形资产除另有规定外适用 6%）。",
-      "source": {"regulation": "中华人民共和国增值税暂行条例", "article": "第二条"},
-      "scope": "一般纳税人；销售货物/劳务/服务/无形资产/不动产；具体税率按应税行为归类",
+      "id": "VAT-G-RATES-2026",
+      "tax_type": "增值税（税率）",
+      "regime": "current",
+      "summary": "一般计税方法税率：销售货物、加工修理修配服务、有形动产租赁服务、进口货物，除另有规定外13%；销售交通运输、邮政、基础电信、建筑、不动产租赁服务，销售不动产，转让土地使用权，销售或进口列举货物（农产品、食用植物油、自来水、图书报刊、饲料化肥农药农机农膜等）9%；销售其他服务、无形资产6%；出口货物零税率（国务院另有规定除外）。兼营不同税率应分别核算销售额，未分别核算的从高适用税率（第十二条）。",
+      "source": {
+        "regulation": "中华人民共和国增值税法",
+        "document_number": "2024年12月25日第十四届全国人民代表大会常务委员会第十三次会议通过",
+        "article": "第十条、第十二条",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+        "url_verified": true,
+        "effective_from": "2026-01-01",
+        "effective_to": null,
+        "supersedes": "中华人民共和国增值税暂行条例（2026-01-01同步废止，见增值税法第三十八条）",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "一般纳税人（一般计税方法）；境内销售货物/服务/无形资产/不动产及进口货物；具体税率按应税交易归类",
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "activities"],
       "applies_when": {"taxpayer_type": ["一般纳税人"], "activities": ["货物销售", "加工修理修配", "服务"]}
     },
     {
-      "id": "VAT-S-3",
-      "tax_type": "增值税",
-      "summary": "小规模纳税人发生应税销售行为，征收率为 3%（阶段性减征政策以现行有效公告为准，需另行核实适用期）。",
-      "source": {"regulation": "中华人民共和国增值税暂行条例", "article": "第十二条"},
-      "scope": "小规模纳税人；应税销售行为；阶段性优惠需按当期公告核实",
-      "applies_when": {"taxpayer_type": ["小规模纳税人"], "activities": ["货物销售", "服务", "加工修理修配"]}
+      "id": "VAT-S-LEVY-2026",
+      "tax_type": "增值税（征收率）",
+      "regime": "current",
+      "summary": "小规模纳税人可以按销售额和征收率计算应纳税额的简易计税方法缴纳增值税（第八条第二款）；适用简易计税方法的征收率为3%（第十一条）。小规模纳税人指年应征增值税销售额未超过500万元的纳税人（第九条）；会计核算健全、能够提供准确税务资料的，可办理登记按一般计税方法计税。",
+      "source": {
+        "regulation": "中华人民共和国增值税法",
+        "document_number": "2024年12月25日第十四届全国人民代表大会常务委员会第十三次会议通过",
+        "article": "第八条第二款、第九条、第十一条",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+        "url_verified": true,
+        "effective_from": "2026-01-01",
+        "effective_to": null,
+        "supersedes": "中华人民共和国增值税暂行条例（2026-01-01同步废止，见增值税法第三十八条）",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "小规模纳税人；简易计税方法；征收率为法定征收率，阶段性减征另见 VAT-S-THRESHOLD-2026 / VAT-S-LEVY1-2026",
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "activities"],
+      "applies_when": {"taxpayer_type": ["小规模纳税人"], "activities": ["货物销售", "加工修理修配", "服务"]}
+    },
+    {
+      "id": "VAT-S-THRESHOLD-2026",
+      "tax_type": "增值税（小规模起征点，阶段性优惠）",
+      "regime": "current",
+      "is_preference": true,
+      "summary": "阶段性优惠：自2026年1月1日至2027年12月31日，小规模纳税人发生应税交易，以一个月为计税期间的起征点为月销售额10万元，以一个季度为计税期间的起征点为季度销售额30万元，按次纳税的起征点为每次（日）销售额1000元；销售额未达到起征点的免征增值税，达到起征点的全额计算缴纳（增值税法第二十三条）。以扣除相关价款后的不含税余额适用起征点标准。",
+      "source": {
+        "regulation": "财政部 税务总局关于增值税法施行后增值税优惠政策衔接事项的公告（增值税法第二十三条）",
+        "document_number": "财政部 税务总局公告2026年第10号（成文日期2026-01-30）第一条",
+        "article": "第一条；增值税法第二十三条",
+        "url": "https://fgk.chinatax.gov.cn/zcfgk/c102416/c5247434/content.html",
+        "url_verified": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2027-12-31",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "小规模纳税人；2026-01-01至2027-12-31期间的应税交易；优惠窗口结束后须按当期有效文件重新核实",
+      "conditions_to_confirm": ["计税期间口径（一个月/一个季度/按次）", "销售额口径（按规定扣除相关价款后的不含税余额）", "当期销售额是否达到起征点（按申报口径核算）"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "activities", "filing_period_type", "sales_computation_basis"],
+      "applies_when": {"taxpayer_type": ["小规模纳税人"], "activities": ["货物销售", "加工修理修配", "服务"]}
+    },
+    {
+      "id": "VAT-S-LEVY1-2026",
+      "tax_type": "增值税（小规模3%减按1%，阶段性优惠）",
+      "regime": "current",
+      "is_preference": true,
+      "summary": "阶段性优惠：自2026年1月1日至2027年12月31日，小规模纳税人发生除销售、出租不动产或者转让土地使用权之外的增值税应税交易，依照3%征收率减按1%征收率征收增值税；按规定预缴增值税的项目，当期在预缴地实现的全部价款、预收款合计达到起征点的，减按1%预征率预缴。",
+      "source": {
+        "regulation": "财政部 税务总局关于增值税法施行后增值税优惠政策衔接事项的公告",
+        "document_number": "财政部 税务总局公告2026年第10号（成文日期2026-01-30）",
+        "article": "第三条第（三）项第6目",
+        "url": "https://fgk.chinatax.gov.cn/zcfgk/c102416/c5247434/content.html",
+        "url_verified": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2027-12-31",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "小规模纳税人；不含销售、出租不动产或转让土地使用权的应税交易；2026-01-01至2027-12-31",
+      "conditions_to_confirm": ["应税交易类别构成（不动产销售/出租、土地使用权转让部分不得减按1%）", "是否放弃优惠（放弃后36个月内不得再享受，小规模纳税人除外）", "预缴项目口径（如有）"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "activities", "sales_by_category", "preference_election"],
+      "applies_when": {"taxpayer_type": ["小规模纳税人"], "activities": ["货物销售", "加工修理修配", "服务"]}
     },
     {
       "id": "CIT-25",
       "tax_type": "企业所得税",
-      "summary": "居民企业适用 25% 的基本税率；小型微利企业等优惠按现行有效公告另行核实适用条件与执行期。",
-      "source": {"regulation": "中华人民共和国企业所得税法", "article": "第四条"},
-      "scope": "居民企业；应纳税所得额；优惠资格需另行核实",
+      "regime": "current",
+      "summary": "企业所得税税率为25%（第四条）。适用于居民企业境内外所得，以及非居民企业在华机构场所取得的境内所得和与其有实际联系的境外所得（第三条）。小型微利企业、高新技术企业等优惠资格与执行期须按现行有效文件另行核实，未知资格不得自动适用。",
+      "source": {
+        "regulation": "中华人民共和国企业所得税法",
+        "document_number": "2007年3月16日通过，2018年12月29日修正",
+        "article": "第三条、第四条",
+        "url": null,
+        "url_verified": false,
+        "url_note": "开发环境未能核验官方直链（搜索引擎不可用）；交付前在国家税务总局政策法规库 fgk.chinatax.gov.cn 检索《中华人民共和国企业所得税法》现行文本复核",
+        "effective_from": "2008-01-01",
+        "effective_to": null,
+        "checked_on": "2026-10-15"
+      },
+      "scope": "居民企业/非居民企业（应税所得类型见第三条）；基本税率；优惠资格另行核实",
+      "required_facts": ["period", "jurisdiction", "entity_type"],
       "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": []}
-    },
-    {
-      "id": "VAT-CROSS-FREE",
-      "tax_type": "增值税",
-      "summary": "境内单位和个人发生的跨境应税行为（如向境外单位提供的符合条件的技术服务等）可适用免征增值税；具体项目清单与备案要求按文件执行。",
-      "source": {"regulation": "财政部 国家税务总局关于全面推开营业税改征增值税试点的通知（财税〔2016〕36号）", "article": "附件4"},
-      "scope": "跨境应税行为；需满足服务完全在境外消费等条件；需备案/材料支撑",
-      "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": ["跨境服务"]}
     },
     {
       "id": "INV-COMPLIANCE",
       "tax_type": "发票合规",
-      "summary": "开具发票应当按照规定的时限、顺序、栏目，全部联次一次性如实开具；不符合规定的发票不得作为税收凭证。",
-      "source": {"regulation": "中华人民共和国发票管理办法及其实施细则", "article": "总则及开具要求条款"},
-      "scope": "所有开票行为；发票要素完整性、如实开具",
+      "regime": "current",
+      "summary": "开具发票应当按照规定的时限、顺序、栏目，全部联次一次性如实开具；不符合规定的发票不得作为税收凭证。增值税法第三十四条要求依法开具和使用增值税发票，电子发票与纸质发票具有同等法律效力；实施条例第五条要求开具增值税专用发票应分别列明销售额和增值税税额。",
+      "source": {
+        "regulation": "中华人民共和国发票管理办法及其实施细则；中华人民共和国增值税法",
+        "document_number": "发票管理办法2023年修订（国务院令第764号）；增值税法2024年12月25日通过",
+        "article": "发票管理办法开具要求条款；增值税法第三十四条；增值税法实施条例第五条",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+        "url_verified": false,
+        "url_note": "所引URL为增值税法官方页面（已核验）；发票管理办法2023年修订版官方直链与具体条款号未能在开发环境核验，交付前在总局法规库按国务院令第764号检索复核；2023年前期间适用当时版本",
+        "effective_from": null,
+        "effective_to": null,
+        "checked_on": "2026-10-15"
+      },
+      "scope": "所有开票行为；发票要素完整性、如实开具、以合规发票作为税收凭证",
+      "required_facts": ["period", "jurisdiction", "taxpayer_type"],
       "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": []}
     },
     {
-      "id": "EXPORT-REFUND",
-      "tax_type": "增值税（出口）",
-      "summary": "纳税人出口货物适用退（免）税政策的，按出口货物退（免）税管理办法执行，需单证齐全（报关单、发票、收汇凭证等）。",
-      "source": {"regulation": "出口货物劳务增值税和消费税管理办法（国家税务总局公告2012年第24号）", "article": "总则及申报要求"},
-      "scope": "出口货物；单证备案与申报期限",
+      "id": "VAT-CROSS-ZERO-2026",
+      "tax_type": "增值税（跨境零税率）",
+      "regime": "current",
+      "summary": "境内单位和个人跨境销售国务院规定范围内的服务、无形资产，税率为零（增值税法第十条第五项）；适用零税率的应向主管税务机关申报办理退（免）税（第三十三条）。实施条例第九条列举范围：向境外单位销售的完全在境外消费的研发、合同能源管理、设计、广播影视制作发行、软件、电路设计及测试、信息系统、业务流程管理、离岸服务外包服务，向境外单位转让的完全在境外使用的技术，以及国际运输、航天运输、对外修理修配服务。退（免）税按免抵退税或免退税办法办理（2026年第11号第二条）。",
+      "source": {
+        "regulation": "中华人民共和国增值税法；增值税法实施条例；财政部 税务总局关于出口业务增值税和消费税政策的公告",
+        "document_number": "增值税法2024年12月25日通过；实施条例国务院令第826号；财政部 税务总局公告2026年第11号（发文日期2026-01-30）",
+        "article": "增值税法第十条第五项、第三十三条；实施条例第九条；2026年第11号第一条第（二）项、第二条",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+        "url_verified": true,
+        "cross_refs": [
+          "https://tianjin.chinatax.gov.cn/11200000000/0300/030004/03000418/20251231101843846.shtml",
+          "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202602/t479284.html"
+        ],
+        "effective_from": "2026-01-01",
+        "effective_to": null,
+        "checked_on": "2026-10-15"
+      },
+      "scope": "跨境销售服务/无形资产；须同时满足：服务在实施条例第九条清单内、销售给境外单位、完全在境外消费（与境内货物/不动产/自然资源无关）；关键词命中跨境服务不等于零税率适用",
+      "conditions_to_confirm": ["跨境服务具体类别是否属于实施条例第九条清单", "购买方是否为境外单位", "服务是否完全在境外消费（实施条例第四条）", "退（免）税备案与申报"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "cross_border_service_details"],
+      "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": ["跨境服务"]}
+    },
+    {
+      "id": "VAT-CROSS-EXEMPT-2026",
+      "tax_type": "增值税（跨境免税）",
+      "regime": "current",
+      "summary": "跨境销售服务免税按2026年第11号第六条清单执行（如工程项目在境外的建筑服务、工程监理、勘察勘探，会议展览地点在境外的会展服务，标的物在境外使用的有形动产租赁，为出口货物提供的邮政、收派、保险服务等）；向境外单位提供的完全在境外消费的电信、知识产权、物流辅助、鉴证咨询、专业技术、商务辅助、广告投放地在境外的广告服务及无形资产（技术除外）等免税。技术转让、技术开发和与之相关的技术咨询、技术服务自2026-01-01至2027-12-31免征增值税（2026年第10号第二条第二项，须持书面合同经省级科技、工信主管部门认定并报主管税务机关备查）。不满足退（免）税或免税条件的出口业务按2026年第11号第七条征税。",
+      "source": {
+        "regulation": "财政部 税务总局关于出口业务增值税和消费税政策的公告；财政部 税务总局关于增值税法施行后增值税优惠政策衔接事项的公告",
+        "document_number": "财政部 税务总局公告2026年第11号；财政部 税务总局公告2026年第10号",
+        "article": "2026年第11号第六条第（一）项第2目、第七条；2026年第10号第二条第（二）项第2目",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202602/t479284.html",
+        "url_verified": true,
+        "cross_refs": ["https://fgk.chinatax.gov.cn/zcfgk/c102416/c5247434/content.html"],
+        "effective_from": "2026-01-01",
+        "effective_to": null,
+        "checked_on": "2026-10-15"
+      },
+      "scope": "跨境销售服务；免税/征税按业务条件区分；技术服务类免税窗口至2027-12-31",
+      "conditions_to_confirm": ["跨境服务类别与11号第六条清单的对应关系", "是否完全在境外消费/境外使用", "技术开发转让类须合同认定与备查", "不满足条件时按第七条征税的判断"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "cross_border_service_details"],
+      "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": ["跨境服务"]}
+    },
+    {
+      "id": "EXPORT-REFUND-2026",
+      "tax_type": "增值税（出口退（免）税）",
+      "regime": "current",
+      "summary": "出口货物适用退（免）税须同时符合：销售给境外单位或个人、向海关报关并实际离境、按会计制度规定做销售、按规定收汇（2026年第11号第一条）。按免抵退税或免退税办法办理（第二条）；退税率一般为适用税率（第三条）。程序要求：首次申报前办理出口退（免）税备案（2026年第5号第四条）；在货物报关出口之日次月起至次年4月30日前的各增值税纳税申报期内申报（2026年第11号第九条，未按期申报的36个月内补报）；申报后15日内留存购销合同、运输单据、委托报关单据等备案单证（5号第四十五条）；报关出口之日的次年4月30日前收汇（5号第四十八条）。",
+      "source": {
+        "regulation": "财政部 税务总局关于出口业务增值税和消费税政策的公告；国家税务总局关于发布《出口业务增值税和消费税退（免）税管理办法》的公告",
+        "document_number": "财政部 税务总局公告2026年第11号；国家税务总局公告2026年第5号（均成文2026-01-30，自2026-01-01施行）",
+        "article": "2026年第11号第一、二、三、九条；2026年第5号第四、十五、四十四、四十五、四十八、六十四条",
+        "url": "https://fgk.chinatax.gov.cn/zcfgk/c100012/c5247423/content.html",
+        "url_verified": true,
+        "cross_refs": ["https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202602/t479284.html"],
+        "supersedes": "出口货物劳务增值税和消费税管理办法（国家税务总局公告2012年第24号，2026-01-01废止）",
+        "effective_from": "2026-01-01",
+        "effective_to": null,
+        "checked_on": "2026-10-15"
+      },
+      "scope": "出口货物及跨境销售服务/无形资产的退（免）税；2025-12-31（含）前发生的出口业务仍按原政策规定执行（11号第九条）",
+      "conditions_to_confirm": ["出口货物报关单、出口发票、收汇材料、备案单证是否齐全", "退（免）税备案状态", "申报期限（次年4月30日前）与收汇期限", "货物是否属于取消退（免）税/免税/征税清单"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "export_documents"],
+      "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": ["货物出口"]}
+    },
+    {
+      "id": "VAT-G-RATES-HIST",
+      "tax_type": "增值税（税率，历史期间）",
+      "regime": "historical",
+      "summary": "（历史期间规则）一般纳税人销售货物/劳务/服务/无形资产/不动产按增值税暂行条例第二条税率档执行（2019年4月起为13%/9%/6%档），出口货物零税率。阶段性税率调整以业务期间有效公告为准。增值税法自2026-01-01施行时暂行条例废止。",
+      "source": {
+        "regulation": "中华人民共和国增值税暂行条例（2017年修订）",
+        "document_number": "国务院令第691号（2017年修订）",
+        "article": "第二条",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+        "url_verified": false,
+        "url_note": "所引URL为增值税法官方页面（已核验，其第三十八条载明暂行条例于2026-01-01废止）；暂行条例原文官方直链未在本环境核验，历史期间适用时应在总局法规库检索当时有效版本",
+        "effective_from": null,
+        "effective_to": "2025-12-31",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "2025-12-31（含）前业务期间的一般纳税人税率档",
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "activities"],
+      "applies_when": {"taxpayer_type": ["一般纳税人"], "activities": ["货物销售", "加工修理修配", "服务"]}
+    },
+    {
+      "id": "VAT-S-LEVY-HIST",
+      "tax_type": "增值税（征收率，历史期间）",
+      "regime": "historical",
+      "summary": "（历史期间规则）小规模纳税人增值税征收率为3%（暂行条例第十二条）。2023年至2025年间的阶段性减征（如减按1%征收率）按业务期间有效公告另行核实，不得默认享受。",
+      "source": {
+        "regulation": "中华人民共和国增值税暂行条例（2017年修订）",
+        "document_number": "国务院令第691号（2017年修订）",
+        "article": "第十二条",
+        "url": "https://shanghai.chinatax.gov.cn/zcfw/zcfgk/zzs/202412/t474694.html",
+        "url_verified": false,
+        "url_note": "同 VAT-G-RATES-HIST；阶段性优惠文号按业务期间在总局法规库另行检索核验",
+        "effective_from": null,
+        "effective_to": "2025-12-31",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "2025-12-31（含）前业务期间的小规模纳税人简易计税",
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "activities"],
+      "applies_when": {"taxpayer_type": ["小规模纳税人"], "activities": ["货物销售", "加工修理修配", "服务"]}
+    },
+    {
+      "id": "VAT-CROSS-FREE-HIST",
+      "tax_type": "增值税（跨境免税，历史期间）",
+      "regime": "historical",
+      "summary": "（历史期间规则）境内单位和个人销售规定的跨境应税行为免征增值税（须服务完全在境外消费并按规定备案）。2026年起的衔接政策按2026年第10号、2026年第11号执行。",
+      "source": {
+        "regulation": "财政部 国家税务总局关于全面推开营业税改征增值税试点的通知",
+        "document_number": "财税〔2016〕36号",
+        "article": "附件4《跨境应税行为适用增值税零税率和免税政策的规定》",
+        "url": "https://fgk.chinatax.gov.cn/zcfgk/c102416/c5247434/content.html",
+        "url_verified": false,
+        "url_note": "所引URL为2026年第10号官方页面（已核验，其衔接公告承接原优惠）；36号文原文官方直链未在本环境核验，历史期间适用时应在总局法规库检索当时有效版本",
+        "effective_from": "2016-05-01",
+        "effective_to": "2025-12-31",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "2025-12-31（含）前业务期间的跨境应税行为免税",
+      "conditions_to_confirm": ["跨境服务类别与附件4清单对应", "完全在境外消费", "备案要求"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "cross_border_service_details"],
+      "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": ["跨境服务"]}
+    },
+    {
+      "id": "EXPORT-REFUND-HIST",
+      "tax_type": "增值税（出口退（免）税，历史期间）",
+      "regime": "historical",
+      "summary": "（历史期间规则）出口货物劳务增值税和消费税退（免）税按2012年第24号管理办法执行（备案、申报期限、单证要求）。该办法自2026-01-01起被2026年第5号取代并废止；2025-12-31（含）前发生的适用退（免）税或免税政策的出口业务仍按原政策规定执行（2026年第11号第九条）。",
+      "source": {
+        "regulation": "国家税务总局关于发布《出口货物劳务增值税和消费税管理办法》的公告",
+        "document_number": "国家税务总局公告2012年第24号（2026-01-01废止）",
+        "article": "申报、单证备案及期限相关条款",
+        "url": "https://fgk.chinatax.gov.cn/zcfgk/c100012/c5247423/content.html",
+        "url_verified": false,
+        "url_note": "所引URL为2026年第5号官方页面（已核验，公告正文载明2012年第24号等文件同时废止）；24号原文官方直链未在本环境核验",
+        "effective_from": null,
+        "effective_to": "2025-12-31",
+        "checked_on": "2026-10-15"
+      },
+      "scope": "2025-12-31（含）前发生的出口业务退（免）税",
+      "conditions_to_confirm": ["原办法下的申报期限与单证备案要求", "历史业务是否已按原政策办结"],
+      "required_facts": ["period", "jurisdiction", "taxpayer_type", "export_documents"],
       "applies_when": {"taxpayer_type": ["一般纳税人", "小规模纳税人"], "activities": ["货物出口"]}
     }
   ],
-  "disclaimer": "本规则库为公开法规条目的高层摘录，用于材料归集与核对范围提示，不构成专业税务意见；适用以主管税务机关解释及现行有效文本为准。"
+  "disclaimer": "本规则库为公开法规条目的工程摘录，用于材料归集与核对范围提示，不构成专业税务意见；适用以主管税务机关解释及现行有效法规文本为准。规则条目按核查日期维护，业务期间跨越法规更替时须分别匹配有效期窗口。"
 }
