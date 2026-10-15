@@ -1,0 +1,18 @@
+# pdf-nl-edit runtime dependencies (all permissive: MIT / BSD / Apache / MIT-CMU / FTL).
+# No GPL/AGPL/LGPL runtime dependency. No PyMuPDF/fitz. No external-process fallback, no network.
+# License evidence = installed wheel METADATA read on 2026-10-15 (see docs/office-skills/pdf-nl-edit.md).
+#
+# direct:
+pdfplumber==0.11.10        # MIT - https://github.com/jsvine/pdfplumber
+pypdf==6.19.0              # BSD-3-Clause - https://github.com/py-pdf/pypdf
+# transitive (pdfplumber):
+pdfminer.six==20260107     # MIT (License-Expression: MIT) - https://github.com/pdfminer/pdfminer.six
+pillow==12.3.0             # MIT-CMU - https://github.com/python-pillow/Pillow
+pypdfium2==5.14.0          # BSD-3-Clause OR Apache-2.0 (bundled PDFium: BSD-3-Clause; bundled third-party all permissive: freetype/icu/libjpeg-turbo/libpng/lcms/openjpeg/zlib/abseil/agg/simdutf/fast_float/llvm-libc) - https://github.com/pypdfium2-team/pypdfium2
+# transitive (pdfminer.six):
+charset-normalizer==3.5.2  # MIT - https://github.com/jawah/charset_normalizer
+cryptography==50.0.2       # Apache-2.0 OR BSD-3-Clause - https://github.com/pyca/cryptography
+# transitive (cryptography):
+cffi==2.1.1                # MIT-0 - https://github.com/python-cffi/cffi
+# transitive (cffi):
+pycparser==3.11            # BSD-3-Clause - https://github.com/eliben/pycparser
