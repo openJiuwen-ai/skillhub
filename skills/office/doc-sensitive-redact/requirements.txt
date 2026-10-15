@@ -8,7 +8,7 @@ lxml==6.0.2                # BSD-3-Clause - https://github.com/lxml/lxml
                            #   only lxml.etree is used; the wheel's LICENSES.txt additionally covers
                            #   bundled optional resources (isoschematron) and a GPL test script that are
                            #   NOT imported/called by this skill. The skill does not redistribute the wheel.
-openpyxl==3.1.5            # MIT - https://functools.org/openpyxl / https://github.com/theorchard/openpyxl
+openpyxl==3.1.5            # MIT - https://openpyxl.readthedocs.io
 pypdf==6.19.0              # BSD-3-Clause - https://github.com/py-pdf/pypdf
 pdfplumber==0.11.10        # MIT - https://github.com/jsvine/pdfplumber
 # transitive (pdfplumber):

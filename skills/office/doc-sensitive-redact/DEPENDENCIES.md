@@ -32,3 +32,7 @@ lxml 6.0.2 wheel 的 `LICENSES.txt` 除 BSD-3-Clause 外，还列入：isoschema
 ## 已移除依赖
 
 初版运行时依赖 PyMuPDF（AGPL-3.0/商业双许可）。本次迁移将其全部移除：PDF 路径改用上述宽松栈自行实现（内容流算子级删除、Form XObject 递归、元数据/XMP/书签/批注/链接/表单 V&AP/附件清洗、孤立对象清理），不再 import PyMuPDF，也不调用其子进程。
+
+## 发布准备复核
+
+主控另建仅安装上述发布依赖的 Python 3.12 环境，共 12 个依赖发行包，未安装 PyMuPDF、fitz 或 pytest。已归档 30 份随 wheel 提供的许可文件及其 SHA-256。此清单针对实际运行模块；不把 lxml 可选组件或 pypdfium2 的文档许可笼统归入顶层代码许可证。
