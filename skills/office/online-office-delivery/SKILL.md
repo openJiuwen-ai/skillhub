@@ -17,13 +17,16 @@ description: 在线办公文档交付与回读：探测宿主环境已授权的�
 
 - PATH 中无 CLI → `blocked`（退出码 3），报告列出缺失项
 - CLI 存在但必需命令未出现在其 `--help` 输出中 → `blocked`：**不猜测子命令**
-- CLI 调用被拒绝（401/403/未授权类错误）→ `blocked`，缺失项为有效授权
+- CLI 调用被拒绝（401/403/未授权/缺 scope 类错误）→ `blocked`，缺失项为有效
+  授权，缺 scope 时报告只回传 `missing_scopes` 与官方授权页 `console_url`，
+  不申请与本任务无关的权限
 - 任何环节（导入/URL/回读/可编辑）失败 → `failed`（退出码 4），绝不判成功
 
 ## 用法
 
 ```
 python scripts/online_delivery.py --plan plan.json --outdir out/ [--cli lark-cli]
+                              [--as user|bot]
 ```
 
 plan.json：
@@ -32,10 +35,13 @@ plan.json：
 {
   "target": {"type": "lark_sheet", "folder_token": "可选，飞书云空间文件夹"},
   "files": [{"local": "merged.xlsx", "name": "Q3对账表"}],
+  "identity": "user",
   "keep_check_sheet": false
 }
 ```
 
+- `identity`/`--as` 显式指定交付身份（CLI 参数优先），全程不被 CLI 隐式切换；
+  请求身份与 CLI 信封 `identity` 不一致即 failed
 - `local` 支持相对计划文件的路径；`files` 不允许为空（空清单是输入错误）
 - 仅支持 `.xlsx`/`.csv`；`.xls` 无可信本地值读取器，请先转为 `.xlsx`
 - `readback` 恒定执行（计划里写 false 会被忽略并记 warning）
@@ -51,7 +57,9 @@ plan.json：
    信封 `ready=true` 且 `job_status=0` 才算完成；`timed_out=true` 时按返回的
    `next_command` 续查（上限 3 次）
 3. **真实 URL**：从 CLI 返回信封/输出提取，只提取不构造；无 URL 即失败
-4. **内容回读**：`+workbook-info` 核对子表集合；`+csv-get` 抽样比对本地基准
+4. **内容回读**：`+workbook-info` 核对子表集合（`title`，缺省回退
+   `sheet_name`）；`+csv-get`（主入口 `data.annotated_csv`，先去掉每逻辑行
+   `[row=N] ` 前缀）按 `sheet_id` 优先定位、抽样比对本地基准
    （xlsx 用 openpyxl 缓存值、csv 用标准库；数值按容差、文本按字面，
    "001"≠"1"），任何不一致即失败
 5. **可编辑校验**：新建 `__delivery_check__` 子表 → `+csv-put` 写入金丝雀

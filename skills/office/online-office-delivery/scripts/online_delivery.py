@@ -50,8 +50,16 @@ CALL_TIMEOUT = 60
 NEXT_COMMAND_MAX_RETRIES = 3
 AUTH_ERROR_PATTERNS = [
     "unauthorized", "401", "403", "invalid token", "authentication",
-    "credential", "not logged in", "no valid token", "登录", "授权失败", "未授权",
+    "credential", "not logged in", "no valid token", "need_user_authorization",
+    "token_missing", "missing_scope", "登录", "授权失败", "未授权",
 ]
+# +csv-get 默认给每逻辑行加 "[row=N] " 前缀（annotated_csv）；解析前必须去前缀。
+ROW_PREFIX_RE = re.compile(r"(?m)^\[row=\d+\] ?")
+# JSON 信封机器解析前静音 CLI 升级/skills 提示，避免 _notice 混入 stdout。
+QUIET_ENV = {
+    "LARKSUITE_CLI_NO_UPDATE_NOTIFIER": "1",
+    "LARKSUITE_CLI_NO_SKILLS_NOTIFIER": "1",
+}
 
 
 class BlockedError(Exception):
@@ -96,6 +104,29 @@ def parse_envelope(stdout):
                     except ValueError:
                         break
         start = text.find("{", start + 1)
+    return None
+
+
+def strip_row_prefix(text):
+    """去掉 +csv-get annotated_csv 每逻辑行前的 "[row=N] " 前缀。"""
+    return ROW_PREFIX_RE.sub("", text or "")
+
+
+def csv_text_to_matrix(text):
+    """annotated_csv/csv 文本 → 二维值矩阵（先去 [row=N] 前缀）。"""
+    return [row for row in csv.reader(strip_row_prefix(text).splitlines())]
+
+
+def parse_error_envelope(text):
+    """解析 CLI 错误信封（stderr）：返回 error 内的权限/修复字段；解析不出返回 None。"""
+    env = parse_envelope(text)
+    if isinstance(env, dict) and env.get("ok") is False and isinstance(
+            env.get("error"), dict):
+        err = env["error"]
+        out = {k: err.get(k) for k in
+               ("type", "subtype", "code", "message", "hint",
+                "missing_scopes", "console_url")}
+        return {k: v for k, v in out.items() if v is not None}
     return None
 
 
@@ -144,11 +175,22 @@ def split_command(cmd):
 
 
 class CliRunner:
-    """执行宿主 CLI 并留全量调用审计日志。"""
+    """执行宿主 CLI 并留全量调用审计日志。
 
-    def __init__(self, exe, invocation_log):
+    identity 非空时给 sheets 操作显式追加 `--as <identity>`（跳过 --help 探测），
+    避免 CLI 自动在 bot/user 间隐式选择身份。
+    """
+
+    def __init__(self, exe, invocation_log, identity=None):
         self.exe = exe
         self.log = invocation_log
+        self.identity = identity
+
+    def _with_identity(self, argv):
+        if (self.identity and "sheets" in argv and "--help" not in argv
+                and "--as" not in argv):
+            return argv + ["--as", self.identity]
+        return argv
 
     def run(self, args, cwd, timeout=CALL_TIMEOUT):
         return self.run_argv([self.exe] + [str(a) for a in args], cwd,
@@ -156,15 +198,17 @@ class CliRunner:
 
     def run_argv(self, argv, cwd, timeout=CALL_TIMEOUT):
         """执行完整命令（next_command 续查）；首 token 按需经 PATH 解析。"""
-        argv = [str(a) for a in argv]
+        argv = self._with_identity([str(a) for a in argv])
         if not os.path.isfile(argv[0]):
             resolved = shutil.which(argv[0])
             if resolved:
                 argv = [resolved] + argv[1:]
+        env = dict(os.environ)
+        env.update(QUIET_ENV)
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, encoding="utf-8",
-                errors="replace", cwd=cwd, timeout=timeout)
+                errors="replace", cwd=cwd, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             self.log.append({"argv": argv, "cwd": cwd, "timeout": timeout})
             return None
@@ -246,7 +290,11 @@ def a1_range(nrows, ncols):
 
 
 def extract_matrix(envelope, stdout):
-    """从 +csv-get 信封提取二维值矩阵；容忍 data.values / data.csv / 原始CSV。"""
+    """从 +csv-get 信封提取二维值矩阵。
+
+    真实 lark-cli 的主入口是 data.annotated_csv（含 "[row=N] " 前缀），
+    去前缀后解析；同时容忍 data.values / data.csv / data.cells / 纯 CSV 回退。
+    """
     if envelope:
         data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
         for holder in (data, envelope):
@@ -254,16 +302,17 @@ def extract_matrix(envelope, stdout):
             if isinstance(values, list) and all(
                     isinstance(r, list) for r in values):
                 return values
-            csv_text = holder.get("csv")
-            if isinstance(csv_text, str) and csv_text.strip():
-                return [row for row in csv.reader(csv_text.splitlines())]
+            for key in ("annotated_csv", "csv"):
+                csv_text = holder.get(key)
+                if isinstance(csv_text, str) and csv_text.strip():
+                    return csv_text_to_matrix(csv_text)
             cells = holder.get("cells")
             if isinstance(cells, list) and cells and isinstance(cells[0], list):
                 return cells
     text = (stdout or "").strip()
-    if text and "\n" in text or ("," in text and not text.startswith("{")):
+    if text and not text.startswith("{"):
         try:
-            rows = [row for row in csv.reader(text.splitlines())]
+            rows = csv_text_to_matrix(text)
             if rows and any(any(c.strip() for c in r) for r in rows):
                 return rows
         except csv.Error:
@@ -271,8 +320,12 @@ def extract_matrix(envelope, stdout):
     return None
 
 
-def run_import(runner, local_path, name, folder_token):
-    """执行 +workbook-import；ready/job_status 闭环，timed_out 按 next_command 续查。"""
+def run_import(runner, local_path, name, folder_token, identity=None):
+    """执行 +workbook-import；ready/job_status 闭环，timed_out 按 next_command 续查。
+
+    要求交付使用的身份（identity）与 CLI 信封 identity 一致，避免以错误身份
+    （如 bot 而非 user）静默落在错误账号下。
+    """
     cwd = os.path.dirname(os.path.abspath(local_path))
     args = ["sheets", "+workbook-import",
             "--file", os.path.basename(local_path)]
@@ -283,7 +336,8 @@ def run_import(runner, local_path, name, folder_token):
     record = {"argv_display": " ".join(["<cli>", "sheets", "+workbook-import",
                                         "--file", os.path.basename(local_path)]
                                        + (["--name", name] if name else [])),
-              "attempts": 0, "followed_next_command": False}
+              "attempts": 0, "followed_next_command": False,
+              "identity_requested": identity}
     proc = runner.run(args, cwd=cwd, timeout=IMPORT_TIMEOUT)
     record["attempts"] = 1
     if proc is None:
@@ -297,12 +351,21 @@ def run_import(runner, local_path, name, folder_token):
         record["returncode"] = proc.returncode
         record["error"] = (err_text.strip()[:400] or "CLI 无输出")
         if looks_like_auth_error(err_text):
+            missing = {"cli_authorization":
+                       "CLI 已安装但未通过授权校验：%s" % err_text.strip()[:200]}
+            err_env = (parse_error_envelope(proc.stderr)
+                       or parse_error_envelope(proc.stdout))
+            if err_env:
+                missing["error"] = err_env
+                if err_env.get("missing_scopes"):
+                    missing["missing_scopes"] = err_env["missing_scopes"]
+                if err_env.get("console_url"):
+                    missing["console_url"] = err_env["console_url"]
             raise BlockedError(
-                "CLI 存在但调用被拒绝（疑似未授权）",
-                {"cli_authorization": "CLI 已安装但未通过授权校验：%s"
-                 % err_text.strip()[:200]})
+                "CLI 存在但调用被拒绝（疑似未授权）", missing)
         return None, record
     data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+    record["identity"] = envelope.get("identity")
     retries = 0
     while (data.get("timed_out") is True and retries < NEXT_COMMAND_MAX_RETRIES):
         next_cmd = data.get("next_command")
@@ -323,6 +386,7 @@ def run_import(runner, local_path, name, folder_token):
             record["error"] = ((proc.stderr or "") + (proc.stdout or "")).strip()[:400]
             return None, record
         data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+        record["identity"] = envelope.get("identity")
     record["timed_out_retries"] = retries
     url, url_source = extract_url(envelope, proc.stdout)
     token = deep_find(envelope, "token")
@@ -340,6 +404,10 @@ def run_import(runner, local_path, name, folder_token):
         problems.append("导入任务状态异常（job_status=%r）" % (job_status,))
     if job_status is None and ready is not True:
         problems.append("信封缺少 ready/job_status 完成信号")
+    env_identity = record.get("identity")
+    if identity and env_identity and env_identity != identity:
+        problems.append("身份不符：请求 %r，CLI 实际 %r（拒绝在错误身份账号下交付）"
+                        % (identity, env_identity))
     if problems:
         record["ok"] = False
         record["error"] = "; ".join(problems)
@@ -370,10 +438,13 @@ def readback_content(runner, url, local_path):
     online_titles = []
     online_ids = {}
     for s in sheets_info:
-        if isinstance(s, dict) and s.get("title"):
-            online_titles.append(s["title"])
+        if not isinstance(s, dict):
+            continue
+        title = s.get("title") or s.get("sheet_name")
+        if title:
+            online_titles.append(title)
             if s.get("sheet_id"):
-                online_ids[s["title"]] = s["sheet_id"]
+                online_ids[title] = s["sheet_id"]
     result["sheets_online"] = online_titles
     try:
         local_sheets = load_local_sheets(local_path)
@@ -405,8 +476,10 @@ def readback_content(runner, url, local_path):
         if not target_name:
             result["reasons"].append("无法确定回读目标子表")
             return result
-        args = ["sheets", "+csv-get", "--url", url, "--sheet-name", target_name,
-                "--range", rng]
+        locate = (["--sheet-id", online_ids[target_name]]
+                  if target_name in online_ids
+                  else ["--sheet-name", target_name])
+        args = ["sheets", "+csv-get", "--url", url] + locate + ["--range", rng]
         proc = runner.run(args, cwd=os.getcwd())
         if proc is None or proc.returncode != 0:
             result["reasons"].append("+csv-get 调用失败（%s）" % target_name)
@@ -507,9 +580,12 @@ def probe_cli(cli_name, invocation_log):
     runner = CliRunner(cli_path, invocation_log)
     top = runner.run(["--help"], cwd=os.getcwd())
     sub = runner.run(["sheets", "--help"], cwd=os.getcwd())
+    version = runner.run(["--version"], cwd=os.getcwd())
     verification = {
         "source": "CLI 自身 --help 输出（不猜测子命令）",
         "cli_resolved": cli_path,
+        "cli_version": ((version.stdout or "").strip()[:100]
+                        if version is not None else None),
         "top_level_help_ok": bool(top is not None and top.returncode == 0),
         "commands_verified": {},
     }
@@ -590,6 +666,10 @@ def main():
     ap.add_argument("--cli", default=None,
                     help="宿主授权 CLI 可执行名（默认依次探测 %s）"
                          % "/".join(CLI_CANDIDATES))
+    ap.add_argument("--as", dest="identity", default=None,
+                    choices=["user", "bot"],
+                    help="交付使用的显式身份（透传 CLI --as）；计划里的 "
+                         "identity 优先级低于本参数")
     args = ap.parse_args()
     invocation_log = []
     warnings = []
@@ -663,7 +743,14 @@ def main():
                           "missing": report["missing"]["reason"]},
                          ensure_ascii=False))
         return 3
-    runner = CliRunner(cli_path, invocation_log)
+    identity = args.identity or (plan.get("identity") if isinstance(plan, dict)
+                                 else None)
+    if identity not in (None, "user", "bot"):
+        warnings.append("计划 identity=%r 非法，已忽略（仅支持 user/bot）"
+                        % identity)
+        identity = None
+    report["identity_requested"] = identity
+    runner = CliRunner(cli_path, invocation_log, identity=identity)
     target = plan.get("target") or {}
     folder_token = target.get("folder_token") or ""
     keep = bool(plan.get("keep_check_sheet"))
@@ -680,7 +767,7 @@ def main():
                  "local_sha256": file_sha256(local)}
         try:
             imported, import_rec = run_import(runner, local, entry["name"],
-                                              folder_token)
+                                              folder_token, identity)
         except BlockedError as e:
             report["status"] = "blocked"
             report["missing"] = e.missing

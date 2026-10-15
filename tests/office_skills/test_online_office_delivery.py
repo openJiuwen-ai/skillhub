@@ -2,12 +2,13 @@
 
 正常/复杂路径用受控的 lark-cli 测试替身验证真实管线。替身严格按官方文档
 核对过的行为实现（content-comparison 审计材料中的 lark-cli 语义）：
-+shortcut 命令、{ok, data} 信封、+workbook-import 的 ready/job_status/
-timed_out/next_command 续查、--file 仅接受 cwd 相对路径、
-+sheet-delete 为 high-risk 需 --yes。替身只用于管线逻辑验证，
-不冒充真实在线交付（本环境无授权 lark-cli，真实在线验收 not_run，
-见 per-skill handoff）。异常路径（无 CLI/计划非法/语法无法核实）直接
-验证真实行为。测试不 import 被测模块，全部经子进程黑盒执行。
++shortcut 命令、{ok, identity, data} 信封、+workbook-import 的 ready/job_status/
+timed_out/next_command 续查、+csv-get 返回带 "[row=N] " 前缀的 annotated_csv、
+--file 仅接受 cwd 相对路径、显式 --as user/bot 身份、结构化错误信封
+（missing_scopes/console_url）、+sheet-delete 为 high-risk 需 --yes。替身只用于
+管线逻辑验证，不冒充真实在线交付（真实在线交付见 online-live-review-20261015）。
+异常路径（无 CLI/计划非法/语法无法核实）直接验证真实行为。测试不 import
+被测模块，全部经子进程黑盒执行。
 """
 import json
 import os
@@ -24,6 +25,7 @@ SCRIPT = "online_delivery.py"
 
 DOUBLE_SOURCE = r'''
 import csv
+import io
 import json
 import os
 import re
@@ -42,6 +44,18 @@ SHEETS_HELP_LINES = [
     "  +sheet-delete      delete a sheet (high-risk, requires --yes)",
     "  +sheet-list        list sheets",
 ]
+
+_IDENTITY = "bot"
+
+
+def current_identity():
+    return os.environ.get("DOUBLE_IDENTITY") or _IDENTITY
+
+
+def note_identity(fl):
+    global _IDENTITY
+    if fl.get("as"):
+        _IDENTITY = fl["as"]
 
 
 def state_path():
@@ -62,6 +76,9 @@ def save_state(st):
 
 
 def out(obj):
+    if isinstance(obj, dict) and "identity" not in obj:
+        obj = dict(obj)
+        obj["identity"] = current_identity()
     print(json.dumps(obj, ensure_ascii=False))
 
 
@@ -142,9 +159,21 @@ def finish_import(st, ticket, pend):
 
 def cmd_import(argv):
     fl = flags(argv)
+    note_identity(fl)
     if os.environ.get("DOUBLE_AUTH_FAIL"):
         out({"ok": False, "error": {"code": 401,
                                     "message": "unauthorized: invalid token"}})
+        return 1
+    if os.environ.get("DOUBLE_SCOPE_FAIL"):
+        sys.stderr.write(json.dumps({
+            "ok": False, "identity": current_identity(),
+            "error": {"type": "authorization", "subtype": "missing_scope",
+                      "code": 99991679,
+                      "message": "permission denied: missing scope",
+                      "hint": "grant the scope then retry",
+                      "missing_scopes": ["sheets:spreadsheet:create"],
+                      "console_url": "https://open.example/app/auth?q=sheets"}},
+            ensure_ascii=False) + "\n")
         return 1
     if fl.get("ticket"):
         st = load_state()
@@ -201,6 +230,7 @@ def find_sheet(wbk, fl):
 
 def cmd_info(argv):
     fl = flags(argv)
+    note_identity(fl)
     st, wbk = get_workbook(fl)
     if not wbk:
         return 1
@@ -212,8 +242,18 @@ def cmd_info(argv):
     return 0
 
 
+def _annotated_csv(values, first_row):
+    lines = []
+    for i, row in enumerate(values):
+        buf = io.StringIO()
+        csv.writer(buf).writerow(["" if v is None else v for v in row])
+        lines.append("[row=%d] %s" % (first_row + i, buf.getvalue().rstrip("\r\n")))
+    return "\n".join(lines)
+
+
 def cmd_csv_get(argv):
     fl = flags(argv)
+    note_identity(fl)
     st, wbk = get_workbook(fl)
     if not wbk:
         return 1
@@ -231,12 +271,17 @@ def cmd_csv_get(argv):
         row = s["rows"][r] if r < len(s["rows"]) else []
         values.append([row[c] if c < len(row) else ""
                        for c in range(c0, c1 + 1)])
-    out({"ok": True, "data": {"sheet_id": s["sheet_id"], "values": values}})
+    data = {"sheet_id": s["sheet_id"],
+            "col_indices": [chr(65 + c) for c in range(c0, c1 + 1)],
+            "row_indices": list(range(r0 + 1, r1 + 2)),
+            "annotated_csv": _annotated_csv(values, r0 + 1)}
+    out({"ok": True, "data": data})
     return 0
 
 
 def cmd_csv_put(argv):
     fl = flags(argv)
+    note_identity(fl)
     if os.environ.get("DOUBLE_DENY_WRITE"):
         out({"ok": False, "error": {"message": "write denied by policy"}})
         return 1
@@ -272,6 +317,7 @@ def cmd_csv_put(argv):
 
 def cmd_sheet_create(argv):
     fl = flags(argv)
+    note_identity(fl)
     st, wbk = get_workbook(fl)
     if not wbk:
         return 1
@@ -288,6 +334,7 @@ def cmd_sheet_create(argv):
 
 def cmd_sheet_delete(argv):
     fl = flags(argv)
+    note_identity(fl)
     if fl.get("yes") is not True:
         sys.stderr.write(
             "high-risk shortcut: confirmation flag --yes is required\n")
@@ -318,6 +365,9 @@ COMMANDS = {
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.stdout.write(HELP)
+        return 0
+    if argv[0] in ("-v", "--version"):
+        sys.stdout.write("lark-cli version 1.0.98-double\n")
         return 0
     if argv[0] == "sheets" and (len(argv) < 2 or argv[1] in ("-h", "--help")):
         hidden = os.environ.get("DOUBLE_HIDE_CMD")
@@ -443,9 +493,10 @@ def test_help_gate_blocks_unverified_command(tmp_path):
     assert rep["missing"]["commands_from_help"] == ["+csv-put"]
     assert "results" not in rep
     argvs = [e["argv"] for e in rep["cli_invocation_log"]]
-    assert len(argvs) == 2
+    assert len(argvs) == 3
     assert argvs[0][1:] == ["--help"]
     assert argvs[1][1:] == ["sheets", "--help"]
+    assert argvs[2][1:] == ["--version"]
 
 
 def test_input_errors(tmp_path):
@@ -684,3 +735,86 @@ def test_multi_file_partial_failure(tmp_path):
     assert bad_entry["status"] == "failed"
     m = bad_entry["readback"]["sampled"][0]["mismatches"][0]
     assert m["cell"] == "A1" and m["online"] == "MUTATED"
+
+
+def build_special_xlsx(path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "人员"
+    ws.append(["序号", "姓名", "编号", "金额", "备注"])
+    ws.append([1, "张三", "001", 1999.5, "正常"])
+    ws.append([2, "李四", "010", 12345.67, "含 空格"])
+    wb.save(str(path))
+
+
+def test_row_prefix_and_leading_zero_readback(tmp_path):
+    # +csv-get 默认返回带 [row=N] 前缀的 annotated_csv：脚本必须去前缀后逐格
+    # 比对，否则首列会因前缀判不一致。文本前导零 "001" 必须按字面保真，"001"!=1。
+    build_special_xlsx(tmp_path / "special.xlsx")
+    plan = write_plan(tmp_path,
+                      files=[{"local": str(tmp_path / "special.xlsx")}])
+    outdir = tmp_path / "out"
+    double_dir = write_double(tmp_path)
+    env = make_env(tmp_path / "st.json", double_dir)
+    r = run_delivery(plan, outdir, env)
+    assert r.returncode == 0, r.stderr + r.stdout
+    rep = read_report(outdir)
+    entry = rep["results"][0]
+    assert entry["status"] == "delivered"
+    assert entry["readback"]["verified"] is True
+    assert entry["readback"]["sampled"][0]["mismatch_count"] == 0
+    csvlog = [e for e in rep["cli_invocation_log"] if "+csv-get" in e["argv"]]
+    assert csvlog and "annotated_csv" in csvlog[0]["stdout_excerpt"]
+    assert "--sheet-id" in csvlog[0]["argv"]
+
+
+def test_identity_passthrough_and_recorded(tmp_path):
+    build_xlsx(tmp_path / "data.xlsx")
+    plan = write_plan(tmp_path, files=[{"local": str(tmp_path / "data.xlsx")}],
+                      identity="user")
+    outdir = tmp_path / "out"
+    double_dir = write_double(tmp_path)
+    env = make_env(tmp_path / "st.json", double_dir)
+    r = run_delivery(plan, outdir, env)
+    assert r.returncode == 0, r.stderr + r.stdout
+    rep = read_report(outdir)
+    assert rep["identity_requested"] == "user"
+    entry = rep["results"][0]
+    assert entry["import"]["identity"] == "user"
+    assert entry["import"]["identity_requested"] == "user"
+    sheets_calls = [e for e in rep["cli_invocation_log"]
+                    if e["argv"][1:2] == ["sheets"]
+                    and "--help" not in e["argv"]]
+    assert sheets_calls
+    assert all("--as" in e["argv"] and "user" in e["argv"]
+               for e in sheets_calls)
+
+
+def test_identity_mismatch_fails(tmp_path):
+    build_xlsx(tmp_path / "data.xlsx")
+    plan = write_plan(tmp_path, files=[{"local": str(tmp_path / "data.xlsx")}],
+                      identity="user")
+    outdir = tmp_path / "out"
+    double_dir = write_double(tmp_path)
+    env = make_env(tmp_path / "st.json", double_dir, IDENTITY="bot")
+    r = run_delivery(plan, outdir, env)
+    assert r.returncode == 4, r.stderr + r.stdout
+    rep = read_report(outdir)
+    entry = rep["results"][0]
+    assert entry["status"] == "failed"
+    assert any("身份不符" in x for x in entry["reasons"])
+
+
+def test_missing_scope_surfaces_scopes_and_console_url(tmp_path):
+    build_xlsx(tmp_path / "data.xlsx")
+    plan = write_plan(tmp_path, files=[{"local": str(tmp_path / "data.xlsx")}])
+    outdir = tmp_path / "out"
+    double_dir = write_double(tmp_path)
+    env = make_env(tmp_path / "st.json", double_dir, SCOPE_FAIL=1)
+    r = run_delivery(plan, outdir, env)
+    assert r.returncode == 3, r.stderr + r.stdout
+    rep = read_report(outdir)
+    assert rep["status"] == "blocked"
+    assert rep["missing"]["missing_scopes"] == ["sheets:spreadsheet:create"]
+    assert rep["missing"]["console_url"].startswith("https://")
+    assert rep["missing"]["error"]["subtype"] == "missing_scope"
