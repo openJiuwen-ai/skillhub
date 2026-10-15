@@ -1,6 +1,6 @@
 ---
 name: online-office-delivery
-description: 在线办公文档交付与回读：探测宿主环境已授权的官方 CLI（如 lark-cli），先用 CLI 自身 --help 核对命令语法再执行导入/回读/可编辑校验；交付成功必须同时满足真实导入完成（ready/job_status 闭环）、CLI 返回的真实 URL、内容回读一致、金丝雀写入回读通过，缺任何一环即失败；无授权 CLI、语法无法核实或未授权时显式 blocked 并以非零退出，绝不伪造链接或以本地文件/截图冒充在线交付。当用户要求"把表格发布到线上/创建在线文档并修改"时使用。
+description: 在线办公文档交付与回读：探测宿主环境已授权的官方 CLI（默认飞书 lark-cli，可选钉钉官方 dws），先用 CLI 自身 --help 核对命令语法再执行导入/回读/可编辑校验；交付成功必须同时满足真实导入完成、CLI 返回的真实 URL、内容回读一致、金丝雀写入回读通过，缺任何一环即失败；无授权 CLI、语法无法核实或未授权时显式 blocked 并以非零退出，绝不伪造链接或以本地文件/截图冒充在线交付。当用户要求"把表格发布到线上/创建在线文档并修改"时使用。
 ---
 
 # 在线办公文档交付与回读
@@ -12,8 +12,10 @@ description: 在线办公文档交付与回读：探测宿主环境已授权的�
 
 ## 前提（诚实边界）
 
-本技能**依赖宿主环境提供已授权的官方 CLI**（当前唯一经过语法核对的目标是
-`lark-cli sheets`）。技能不内置任何凭据，不假设环境自带专属工具：
+本技能**依赖宿主环境提供已授权的官方 CLI**。默认后端为飞书 `lark-cli sheets`
+（已真实链路验证）；另提供可选钉钉后端 `dingtalk_sheet`（官方 DingTalk
+Workspace CLI `dws`），仅在计划显式选择时使用，不是其它办公技能的必需依赖。
+技能不内置任何凭据，不假设环境自带专属工具：
 
 - PATH 中无 CLI → `blocked`（退出码 3），报告列出缺失项
 - CLI 存在但必需命令未出现在其 `--help` 输出中 → `blocked`：**不猜测子命令**
@@ -70,6 +72,59 @@ plan.json：
 权限校验、全量 CLI 调用审计日志（argv/返回码/输出摘录）。
 
 退出码：0=delivered，2=输入错误，3=blocked，4=failed。
+
+## 钉钉后端（可选 dingtalk_sheet）
+
+保留上表 `lark_sheet` 契约不变；当计划 `target.type` 为 `dingtalk_sheet` 时，
+`online_delivery.py` 分派到独立小模块 `scripts/dingtalk_delivery.py`（也可直接
+运行该模块）。命令事实仅来自官方 **DingTalk Workspace CLI (dws) v1.0.64** 的
+`--help`/`schema`/包内 reference，运行时仍以 CLI 自身 `--help` 复核。
+
+plan.json（钉钉）：
+
+```json
+{
+  "target": {"type": "dingtalk_sheet", "folder_token": "云盘文件夹ID",
+             "workspace": "可选，知识库ID（folder_token 与 workspace 至少一个）"},
+  "files": [{"local": "merged.xlsx", "name": "Q3对账表"}],
+  "keep_check_sheet": false
+}
+```
+
+用法：
+
+```
+python scripts/dingtalk_delivery.py --plan plan.json --outdir out/ \
+        [--cli <dws 可执行文件>] [--profile <corpId:userId>]
+```
+
+核对过的命令集（依据 dws v1.0.64 `--help`，运行时复核；不猜测子命令）：
+`sheet import create --file (--folder-token|--workspace) [--name]`、
+`sheet +list-sheets --node`、`sheet +read --node --sheet-id --range`
+（严格，截断失败关闭）、`sheet csv-get/csv-put`、`sheet new`、
+`sheet delete-sheet --yes`（user_required）。命令失败即 blocked/failed。
+
+钉钉与飞书的契约差异（不照搬）：
+- 官方 `sheet import` **要求** `--folder-token` 或 `--workspace` 至少一个，
+  缺失按输入错误拒绝（不猜测默认位置）；只支持 xlsx/xls，**不支持 csv**；
+  本后端本地回读基准用 openpyxl，故只接受 `.xlsx`（`.xls` 请先转存）。
+- 无 `ready/job_status`：成功信封为
+  `{success:true, taskId, documentUrl, documentName, documentType, nodeId}`；
+  轮询超时 `{success:false, timed_out:true, taskId, status, next_command}`
+  （退出码 0），按 `next_command` 续查（≤3 次）。
+- 身份不是 `--as user/bot`，而是组织/账号 `--profile`；授权只读
+  `dws auth status --readonly --format json`，不含任何密文。
+- `+read` 严格读取要求 `complete/hasMore/truncationReasons` 无截断才判回读通过；
+  `+list-sheets` 缺集合即失败，绝不把未知结构当空结果。
+- 未登录或**组织未开启 CLI 访问**（需组织主管理员在
+  https://open-dev.dingtalk.com/fe/old#/developerSettings 开启后重新登录）
+  记 `blocked`（非能力缺失），报告含 `admin_url`。
+
+**真实线上状态**：截至 2026-10-15，本机用户设备授权成功，但 dws 组织 CLI
+访问被拒（`authorization-blocker.json`），因此钉钉线上交付在 Jiuwen/WorkBuddy
+两边均 **not_run**，产品能力未失败判定；脚本级管线用明确标注的 dws 测试替身
+回归（`tests/office_skills/test_online_office_delivery_dingtalk.py`），
+不冒充线上成功。
 
 ## 依赖
 

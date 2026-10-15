@@ -97,10 +97,45 @@ lark-cli 1.0.98，用户 `auth status --json --verify` 为 ready/verified，以
 真实 URL 与独立回读记录见 `work/skills-comparison-20261013/office-delivery-glm53/
 online-live-review-20261015/`。竞品同题对齐未验证（parity_status=not_verified）。
 
+## 钉钉后端（可选 dingtalk_sheet，2026-10-15 新增）
+
+保留 `lark_sheet` 契约不变；`online_delivery.py` 对 `target.type=dingtalk_sheet`
+分派到独立模块 `scripts/dingtalk_delivery.py`（也可直接运行）。命令事实仅取自
+官方 DingTalk Workspace CLI (dws) v1.0.64 的 `--help`/`schema`/包内 reference，
+运行时仍以 CLI 自身 `--help` 复核：
+
+- 导入 `sheet import create --file (--folder-token|--workspace) [--name]`：
+  成功 `{success:true, taskId, documentUrl, documentName, documentType, nodeId}`；
+  超时 `{success:false, timed_out:true, next_command}`（退出码 0）按 `next_command` 续查。
+- `sheet +list-sheets --node`（严格，缺集合即失败）；`sheet +read --node --sheet-id
+  --range`（严格，`complete/hasMore/truncationReasons` 截断即失败关闭）；
+  `sheet csv-get/csv-put`；`sheet new`；`sheet delete-sheet --yes`。
+- 差异：钉钉 import **要求** folder_token 或 workspace 之一、**不支持 csv**、
+  只接受 xlsx（本地回读基准 openpyxl 不读 xls）；身份用 `--profile`（非 `--as`）；
+  `auth status --readonly` 只读查看授权状态。
+- 未登录/组织未开启 CLI 访问记 `blocked`（非能力缺失），报告含 `admin_url`
+  （https://open-dev.dingtalk.com/fe/old#/developerSettings）。
+
+**线上状态**：2026-10-15 用户设备授权成功但 dws 组织 CLI 访问被拒
+（`dingtalk-adapter-review-20261015/authorization-blocker.json`）；钉钉线上交付在
+Jiuwen/WorkBuddy 两边 **not_run**，不能判定产品能力失败。同题基准与双宿主任务
+prompt 冻结于 `work/skills-comparison-20261013/office-delivery-glm53/
+dingtalk-comparison-20261015/`；脚本级管线用明确标注的 dws 测试替身回归
+（`tests/office_skills/test_online_office_delivery_dingtalk.py`，13 项），不冒充线上成功。
+
 ## 来源与许可
 
 原创实现（decision-register：independent_implement_env_blocked；未复制
-豆包包体代码，仅引用其文档中公开的 lark-cli 命令语法事实）。代码与文档随
+豆包包体代码，仅引用其文档中公开的 lark-cli 命令语法事实）。钉钉后端同样为
+原创适配代码，仅使用官方 DingTalk Workspace CLI (dws) 包内公开的 `--help`/
+`schema`/reference 所陈述的接口事实，未搬运任何 skill 内容。代码与文档随
 仓库根 LICENSE（Apache-2.0）分发；运行时依赖 openpyxl 3.1.5（MIT），已登记
-license-register.json runtime_dependencies。lark-cli/飞书为外部宿主工具，
-其账号授权与许可由宿主环境承担。
+license-register.json runtime_dependencies。
+
+外部工具（不随本技能分发、以独立进程调用，不在 license-register 复制其代码）：
+- 飞书 `lark-cli`（@larksuite/cli，宿主自行授权）。
+- 官方 DingTalk Workspace CLI `dws`（npm `dingtalk-workspace-cli` 1.0.64，
+  Apache-2.0，Copyright 2026 Alibaba Group，仓库
+  https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli ；其 vendor/NOTICE
+  另含 Unicode V3、regexp2(MIT)、OpenSSL 等第三方声明），账号授权与许可由宿主
+  环境与组织管理员承担。

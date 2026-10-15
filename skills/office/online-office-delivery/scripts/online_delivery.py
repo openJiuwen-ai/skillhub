@@ -670,6 +670,8 @@ def main():
                     choices=["user", "bot"],
                     help="交付使用的显式身份（透传 CLI --as）；计划里的 "
                          "identity 优先级低于本参数")
+    ap.add_argument("--profile", default=None,
+                    help="仅 dingtalk_sheet 后端使用：透传 dws --profile")
     args = ap.parse_args()
     invocation_log = []
     warnings = []
@@ -697,6 +699,14 @@ def main():
         print(json.dumps({"status": "input_error",
                           "error": report["errors"][0]}, ensure_ascii=False))
         return 2
+    # 可选钉钉后端：仅当计划显式选择 dingtalk_sheet 时分派到独立小模块；
+    # lark_sheet（默认）路径完全不变，钉钉/dws 不是本技能的必需依赖。
+    if (isinstance(plan, dict) and isinstance(plan.get("target"), dict)
+            and plan["target"].get("type") == "dingtalk_sheet"):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import dingtalk_delivery
+        return dingtalk_delivery.run(args.plan, args.outdir, cli=args.cli,
+                                     profile=getattr(args, "profile", None))
     errors, ttype = validate_plan(plan, args.plan)
     if isinstance(plan, dict) and plan.get("readback") is False:
         warnings.append("readback=false 被忽略：交付必须完成内容回读校验")
