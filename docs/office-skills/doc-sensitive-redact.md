@@ -76,16 +76,25 @@ python scripts/redact.py --input 材料目录_or_单文件 --outdir out/ \
 - `pdf_removed_and_verified` 不再无条件为 true：存在表单或含图像页等未核验表面时为 false，并附 `unverified_surfaces` 与 needs_review 标记（`form_fields_present_needs_manual_review` / `images_present_not_ocr_scanned`），与承诺不冲突；
 - 标准黑盒测试从 12 项增至 16 项，新增：链接目标清洗且无关链接保留、压缩 DOCX 附件批注清洗且无关内容保留、不可重写二进制附件显式阻断、表单/图像页验证限定。
 
-冻结 `verify_fixed.py` 复测（新目录留证，未覆盖 initial）：复合样本（mailto 链接+压缩 DOCX 附件）7 项检查全部通过（sanitized、无泄漏、正文保留）；redaction-hidden 冻结回归 7 项检查全部通过。
+冻结 `verify_fixed.py` 复测（新目录留证，未覆盖 initial）：复合样本（mailto 链接+压缩 DOCX 附件）无泄漏、正文保留，redaction-hidden 冻结回归全项通过。
+
+### 2026-10-15 第三轮：附件内跨 run 拆分值
+
+主控冻结样本 `benchmarks/redaction-pdf-sidechannels/split-attachment-initial-result/controller-results.json` 证实上一轮仍漏检：PDF 内嵌 DOCX 的邮箱被拆成两个 Word run（`split@` + `example.test`），旧实现只按条目原始文本视图清洗，无法跨 run 识别，退出 0 且 `pdf_removed_and_verified=true` 却仍可回读到 `split@example.test`。修复（仅本技能）：
+
+- 附件包内 OOXML 部件（`word/`、`ppt/`、`xl/sharedStrings.xml`）改用与正文相同的结构化跨 run 清洗（按段落拼接 run 文本识别并按 `_splice_runs` 替换），保留其余段落与公共附件文本；
+- 回读视图对上述部件增加跨 run 结构化文本视图，回读不再只依赖条目原始字节；
+- 标准黑盒测试增至 17 项（复杂类新增跨 run 拆分附件清洗 + 公共附件文本保留）；
+- 扩展冻结 `verify_fixed.py` 覆盖该样本（`split_attachment_scrubbed_or_blocked` / `split_attachment_public_preserved` / `split_attachment_source_unchanged`），冻结 `split-attachment.pdf` 与 `split-attachment-expected.json` 保持不变。
 
 ## 验收依据与测试
 
 对应 `decision-register.json`: independent_implement；`specs.json` 的 `doc-sensitive-redact`（输入文件或目录，输出 `_REDACTED` 文件 + 清单；异常含 15 位/校验位不符不误杀、批量部分失败记录；金标准为四格式敏感值打码后不可从底层回提、清单计数=实际修改）。
 
-黑盒测试位于 `tests/office_skills/test_doc_sensitive_redact.py`（16 项，独立推导预期值，不 mock 实现，不 import 被测模块；识别期望值用测试内独立实现的 GB11643 校验位与 Luhn 算法构造）：
+黑盒测试位于 `tests/office_skills/test_doc_sensitive_redact.py`（17 项，独立推导预期值，不 mock 实现，不 import 被测模块；识别期望值用测试内独立实现的 GB11643 校验位与 Luhn 算法构造）：
 
 1. 正常（2 项）：DOCX 正文/表格/页眉 + XLSX 字符串 + PPTX 文本框打码、清单计数与读回验证
-2. 复杂（10 项）：冻结缺陷场景复现（删除修订/批注/数值单元格/备注，底层 ZIP 逐部件扫描零残留、清单含 `word/comments.xml`/`notesSlide` 定位）；needs_review 不误打；嵌套目录唯一命名；outdir 嵌入输入目录不递归重扫；`--types` 过滤；重名冲突显式失败；PDF 隐藏面（元数据/XMP/附件/批注/书签+原始字节）清洗；PDF 链接目标清洗且无关正常链接保留；压缩 DOCX 附件批注清洗且无关内容保留；表单域值清洗+表单/图像页 `pdf_removed_and_verified=false` 限定
+2. 复杂（11 项）：冻结缺陷场景复现（删除修订/批注/数值单元格/备注，底层 ZIP 逐部件扫描零残留、清单含 `word/comments.xml`/`notesSlide` 定位）；needs_review 不误打；嵌套目录唯一命名；outdir 嵌入输入目录不递归重扫；`--types` 过滤；重名冲突显式失败；PDF 隐藏面（元数据/XMP/附件/批注/书签+原始字节）清洗；PDF 链接目标清洗且无关正常链接保留；压缩 DOCX 附件批注清洗且无关内容保留；跨 run 拆分邮箱附件结构化清洗且公共附件文本保留；表单域值清洗+表单/图像页 `pdf_removed_and_verified=false` 限定
 3. 异常（4 项）：不可重写二进制附件显式阻断（failed、输出删除、错误含 UncleanableAttachment）；混合批处理部分失败退出 2 且逐文件记录；二进制部件明文残留被阻断（failed、输出删除、错误含部件名）；输入不存在/不支持的扩展名/空目录/非法 `--types` 退出 2
 
 在仓库根目录运行（使用任务 venv 解释器，临时目录为任务目录下唯一目录）：

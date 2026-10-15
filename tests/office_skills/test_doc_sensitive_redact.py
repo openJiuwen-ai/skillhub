@@ -69,6 +69,9 @@ PDF_NORMAL_URI = "https://example.com/public"
 ATTACH_DOC_EMAIL = "fujianneirong@chuangyi.test"
 ATTACH_PUBLIC = "Attachment public unchanged text."
 FORM_EMAIL = "biaodan@chuangyi.test"
+SPLIT_EMAIL_HEAD = "split-across-runs@"
+SPLIT_EMAIL_TAIL = "chuangyi.test"
+SPLIT_EMAIL = SPLIT_EMAIL_HEAD + SPLIT_EMAIL_TAIL
 
 
 def build_plain_docx(path):
@@ -484,6 +487,58 @@ def test_redact_pdf_attachment_annot_cleaned(workspace):
             for loc in x["locations"]]
     assert any("file_attachment" in loc for loc in locs), locs
     assert ATTACH_DOC_EMAIL not in json.dumps(man, ensure_ascii=False)
+
+
+def build_pdf_split_run_attachment(path):
+    buf = io.BytesIO()
+    docx = Document()
+    docx.add_paragraph(ATTACH_PUBLIC)
+    p = docx.add_paragraph()
+    p.add_run(SPLIT_EMAIL_HEAD)
+    p.add_run(SPLIT_EMAIL_TAIL)
+    docx.save(buf)
+    pdf = pymupdf.open()
+    pg = pdf.new_page()
+    pg.insert_text((72, 72), "Public unchanged body", fontname="helv")
+    pg.add_file_annot((72, 200), buf.getvalue(), "split.docx", desc="split material")
+    pdf.save(str(path))
+    pdf.close()
+
+
+def test_redact_pdf_split_run_attachment_cleaned(workspace):
+    # 跨 run 拆分的邮箱(对应冻结样本 split-attachment.pdf): 结构化 OOXML
+    # 清洗必须按段落 run 拼接识别, 保留无关公共附件文本。
+    build_pdf_split_run_attachment(workspace / "split.pdf")
+    r = run_script("doc-sensitive-redact", "redact.py",
+                   ["--input", workspace / "split.pdf", "--outdir", workspace / "out"])
+    assert r.returncode == 0, r.stderr + r.stdout
+    out = workspace / "out" / "split_REDACTED.pdf"
+    d = pymupdf.open(str(out))
+    blobs = []
+    for pg in d:
+        for a in (pg.annots() or []):
+            if a.type[0] == pymupdf.PDF_ANNOT_FILE_ATTACHMENT:
+                blobs.append(a.get_file())
+    d.close()
+    assert len(blobs) == 1
+    with zipfile.ZipFile(io.BytesIO(blobs[0])) as z:
+        names = z.namelist()
+        leaks = [n for n in names if SPLIT_EMAIL.encode() in z.read(n)]
+        doc_xml = z.read("word/document.xml").decode("utf-8")
+    assert leaks == [], leaks
+    assert SPLIT_EMAIL not in doc_xml
+    assert ATTACH_PUBLIC in doc_xml
+    assert SPLIT_EMAIL.encode() not in out.read_bytes()
+    man = load_manifest(workspace / "out")
+    pf = man["files"][0]
+    assert pf["failed"] is False
+    assert pf["pdf_removed_and_verified"] is True
+    counts = {x["type"]: x["count"] for x in pf["redactions"]}
+    assert counts.get("email", 0) >= 1
+    locs = [loc for x in pf["redactions"] if x["type"] == "email"
+            for loc in x["locations"]]
+    assert any("file_attachment" in loc for loc in locs), locs
+    assert SPLIT_EMAIL not in json.dumps(man, ensure_ascii=False)
 
 
 def test_redact_pdf_form_and_image_qualification(workspace):

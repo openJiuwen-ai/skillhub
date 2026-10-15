@@ -15,8 +15,9 @@
         保存后再对包内剩余 XML 部件做底层清洗，并保留（清洗后的）线程批注。
   PDF: 页面文本 redaction 底层删除 + 元数据/XMP/书签/批注信息/链接目标
        (URI/启动文件等字符串字段)/表单域值清洗 + 文件附件批注内容清洗
-       (zip/Office 附件逐条目重写并保留无关内容, 无法可靠重写的二进制
-       明文/加密/超深嵌套显式阻断) + 含敏感值的文档级附件移除;
+       (zip/Office 附件逐条目重写并保留无关内容, 附件包内 OOXML 部件按
+        段落 run 拼接做跨 run 清洗, 无法可靠重写的二进制
+        明文/加密/超深嵌套显式阻断) + 含敏感值的文档级附件移除;
        保存后对页面文本/链接/批注/附件(zip 递归展开)/元数据/XMP/书签
        做全类型回读验证, 表单/含图像页等未核验范围以 needs_review
        标注且不宣称 pdf_removed_and_verified。
@@ -62,10 +63,30 @@ W_P, W_R = "{%s}p" % W_NS, "{%s}r" % W_NS
 W_T, W_DELTEXT = "{%s}t" % W_NS, "{%s}delText" % W_NS
 A_P, A_R, A_FLD, A_T = "{%s}p" % A_NS, "{%s}r" % A_NS, "{%s}fld" % A_NS, "{%s}t" % A_NS
 SS_V = "{%s}v" % SS_NS
+SS_SI, SS_R, SS_T = "{%s}si" % SS_NS, "{%s}r" % SS_NS, "{%s}t" % SS_NS
 PARA_SPECS = {
     "docx": (W_P, (W_R,), (W_T, W_DELTEXT)),
     "pptx": (A_P, (A_R, A_FLD), (A_T,)),
 }
+# 附件包内 OOXML 部件 => 按格式选择结构化跨 run 清洗规格。
+# word/ppt 走段落 run 拼接; xl/sharedStrings 的富文本 <r><t> 同样可能
+# 跨 run 拆分敏感值, 以 <si> 为"段落"做同等拼接处理。
+ATTACH_PART_SPECS = (
+    ("word/", PARA_SPECS["docx"]),
+    ("ppt/", PARA_SPECS["pptx"]),
+    ("xl/sharedstrings.xml", (SS_SI, (SS_R,), (SS_T,))),
+)
+
+
+def _attach_para_spec(name):
+    """附件包内条目名 => OOXML 结构化清洗规格(无匹配返回 None)。"""
+    if not name:
+        return None
+    low = name.lower()
+    for prefix, spec in ATTACH_PART_SPECS:
+        if low.startswith(prefix):
+            return spec
+    return None
 THREADED_CT = "application/vnd.ms-excel.threadedcomments+xml"
 THREADED_REL_TYPE = "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment"
 DROP_WARN_RE = re.compile(r"(chart|oleobject|activex|control|customxml|querytable|connection)", re.I)
@@ -644,39 +665,81 @@ def _text_blob_clean(data, types):
     return None
 
 
-def _blob_views(data, depth=0):
+def _ooxml_part_text(name, data):
+    """附件包内 OOXML 部件的结构化文本视图: 逐段拼接 run 文本,
+    使跨 run 拆分的敏感值(如 split@ + example.test)可被识别;
+    部件名/XML 不匹配时返回 None。"""
+    spec = _attach_para_spec(name)
+    if spec is None:
+        return None
+    root = parse_xml(data)
+    if root is None:
+        return None
+    para_tag, run_tags, text_tags = spec
+    parts = []
+    for p in root.iter(para_tag):
+        parts.append("".join(
+            t.text or "" for r in _direct_runs(p, para_tag, run_tags)
+            for t in r if t.tag in text_tags))
+    return "\n".join(parts)
+
+
+def _blob_views(data, depth=0, name=None):
     """字节内容的可读文本视图: utf-8 / 带 BOM 的 utf-16 / latin-1;
-    zip 容器递归展开条目(深度受限)。"""
+    zip 容器递归展开条目(深度受限); OOXML 条目额外给出跨 run 结构化视图。"""
+    views = []
+    if name:
+        structured = _ooxml_part_text(name, data)
+        if structured is not None:
+            views.append(structured)
     if _is_zip_data(data):
         if depth >= MAX_NEST_DEPTH:
-            return [data.decode("latin-1", errors="ignore")]
-        views = []
+            views.append(data.decode("latin-1", errors="ignore"))
+            return views
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 for n in z.namelist():
-                    views.extend(_blob_views(z.read(n), depth + 1))
+                    views.extend(_blob_views(z.read(n), depth + 1, n))
         except Exception:
             views.append(data.decode("latin-1", errors="ignore"))
         return views
     try:
-        return [data.decode("utf-8")]
+        views.append(data.decode("utf-8"))
+        return views
     except UnicodeDecodeError:
         pass
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         codec = "utf-16-le" if data[:2] == b"\xff\xfe" else "utf-16-be"
         try:
-            return [data[2:].decode(codec)]
+            views.append(data[2:].decode(codec))
+            return views
         except UnicodeDecodeError:
             pass
-    return [data.decode("latin-1", errors="ignore")]
+    views.append(data.decode("latin-1", errors="ignore"))
+    return views
 
 
-def _clean_attachment_blob(blob, types, where, depth=0):
+def _clean_ooxml_part(name, data, types, where):
+    """结构化清洗包内 OOXML 部件: 跨 run 拆分的敏感值按段落拼接识别并替换,
+    保留其余段落/结构。非目标部件或无法解析返回 None。"""
+    spec = _attach_para_spec(name)
+    if spec is None:
+        return None
+    root = parse_xml(data)
+    if root is None:
+        return None
+    hits, _review, modified = scrub_tree(root, spec, types, loc_prefix=where)
+    if not modified:
+        return data, []
+    return serialize_xml(root), hits
+
+
+def _clean_attachment_blob(blob, types, where, depth=0, name=None):
     """清洗附件内容, 返回 (cleaned_bytes, all_hits)。
 
-    zip 容器逐条目递归重写(保留无关条目); 文本视图做全类型替换;
-    二进制明文命中或超深嵌套/加密压缩包 => 抛 UncleanableAttachment
-    阻断整份交付。
+    zip 容器逐条目递归重写(保留无关条目), OOXML 部件走结构化跨 run 清洗;
+    文本视图做全类型替换; 二进制明文命中或超深嵌套/加密压缩包 =>
+    抛 UncleanableAttachment 阻断整份交付。
     """
     if _is_zip_data(blob):
         if depth >= MAX_NEST_DEPTH:
@@ -694,10 +757,13 @@ def _clean_attachment_blob(blob, types, where, depth=0):
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
             for n, data in items:
                 cleaned, hits = _clean_attachment_blob(
-                    data, types, "%s:%s" % (where, n), depth + 1)
+                    data, types, "%s:%s" % (where, n), depth + 1, n)
                 zout.writestr(n, cleaned)
                 all_hits.extend(hits)
         return out.getvalue(), all_hits
+    sres = _clean_ooxml_part(name, blob, types, where)
+    if sres is not None and sres[1]:
+        return sres
     res = _text_blob_clean(blob, types)
     if res is not None:
         return res
