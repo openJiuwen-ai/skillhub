@@ -40,6 +40,16 @@ def _int_env_seconds(name: str, default: int, *, min_s: int = 60, max_s: int = 6
         return default
 
 
+def _resolve_s3_ssl_verify() -> bool:
+    """是否校验对象存储 HTTPS 证书。默认 true。
+
+    自建 OBS 必须走 https、但证书不可信时，设 MARKET_S3_SSL_VERIFY=false，
+    boto3 客户端使用 verify=False。未设置或其它值保持校验。
+    """
+    raw = os.getenv("MARKET_S3_SSL_VERIFY", "").strip().lower()
+    return raw not in {"false", "0", "off", "no"}
+
+
 def _resolve_sts_session_duration_seconds() -> int:
     """OBS IAM 换临时凭证时的会话时长（秒），未配置则 3600。"""
     if os.getenv("MARKET_S3_STS_DURATION_SECONDS", "").strip():
@@ -133,6 +143,15 @@ class S3StorageConfig:
             else:
                 self.use_ssl = True
 
+        # verify_ssl 与 use_ssl 独立：use_ssl 决定是否走 https，verify_ssl 决定是否校验证书。
+        self.verify_ssl = _resolve_s3_ssl_verify()
+        if not self.verify_ssl:
+            logger.warning(
+                "MARKET_S3_SSL_VERIFY is disabled; boto3 will not verify TLS certificates "
+                "(endpoint=%s)",
+                self.endpoint_url,
+            )
+
         # GET 预签名有效期（秒），默认 1800（30 分钟）；插件包与图标仅通过预签名 URL 访问
         self.presigned_expires_seconds = _int_env_seconds(
             "MARKET_S3_PRESIGNED_EXPIRES", 1800
@@ -204,6 +223,7 @@ class S3StorageClient:
             "aws_secret_access_key": secret_key,
             "region_name": self.config.region_name,
             "use_ssl": self.config.use_ssl,
+            "verify": self.config.verify_ssl,
             "config": _new_botocore_config(s3_subconfig=self._s3_botocore_subconfig()),
         }
         if session_token:

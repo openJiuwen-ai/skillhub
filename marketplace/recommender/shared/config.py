@@ -46,6 +46,7 @@ class StorageConfig:
     use_ssl: bool
     addressing_style: str
     storage_type: str = "MinIO"  # MinIO | OBS
+    verify_ssl: bool = True
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,14 @@ def _resolve_storage_type() -> str:
     if raw.upper() == "OBS":
         return "OBS"
     return "MinIO"
+
+
+def _resolve_storage_ssl_verify() -> bool:
+    """MARKET_S3_SSL_VERIFY 默认 true；false/0/off/no 时 boto3 verify=False。"""
+    raw = os.getenv("MARKET_S3_SSL_VERIFY")
+    if raw is None or str(raw).strip() == "":
+        return True
+    return str(raw).strip().lower() not in {"false", "0", "off", "no"}
 
 
 def _resolve_storage_use_ssl(storage_type: str, endpoint: str) -> bool:
@@ -198,6 +207,7 @@ def load_config() -> AppConfig:
             use_ssl=_resolve_storage_use_ssl(storage_type, endpoint),
             addressing_style=_resolve_addressing_style(storage_type),
             storage_type=storage_type,
+            verify_ssl=_resolve_storage_ssl_verify(),
         ),
         redis=RedisConfig(
             host=_env("REDIS_HOST", "MARKET_REDIS_HOST", default="127.0.0.1"),

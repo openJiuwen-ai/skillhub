@@ -40,6 +40,7 @@ MARKET_REDIS_PASSWORD=********
 | `MARKET_CREDENTIALS_MODE` | 默认 `static` | 默认 `dynamic`（IAM）；可设 `static` |
 | `MARKET_S3_REGION` | 可空 | 建议填写区域 |
 | `MARKET_S3_USE_SSL` | 可空（随 endpoint） | 默认推断 **true** |
+| `MARKET_S3_SSL_VERIFY` | 默认 **true** | 自建 OBS 证书不可信时设 **false**（仍走 https，boto3 `verify=False`） |
 | addressing | 默认 `path` | 默认 `virtual`（可用 `MARKET_S3_ADDRESSING_STYLE` 覆盖） |
 
 示例（本地）：
