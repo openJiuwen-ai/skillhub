@@ -25,10 +25,12 @@ def test_obs_https_keeps_ssl_and_skips_cert_verify_when_disabled(monkeypatch) ->
     assert config.use_ssl is True
     assert config.verify_ssl is False
 
-    holder = S3StorageClient.__new__(S3StorageClient)
-    holder.config = config
+    # dynamic 构造会去换 IAM 临时凭证。ssl/verify 与凭证模式无关，这里改走 static 公开构造。
+    config.credentials_mode = "static"
+    config.access_key = "ak"
+    config.secret_key = "sk"
     with patch("plugins_market.core.s3_storage_client.boto3.client") as client:
-        holder._new_boto3_s3_client("ak", "sk", None)
+        S3StorageClient(config)
 
     kwargs = client.call_args.kwargs
     assert kwargs["endpoint_url"] == "https://obs.internal.example"

@@ -17,6 +17,19 @@ from .db_pool import sqlalchemy_pool_kwargs
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
 
+_DEFAULT_MYSQL_PORT = 3306
+
+
+def _mysql_port_from_env() -> int:
+    """DB_PORT 缺省或空串用 3306。非法值直接点名环境变量，避免导入期 int('')。"""
+    port_text = (os.getenv("DB_PORT", str(_DEFAULT_MYSQL_PORT)) or "").strip()
+    if not port_text:
+        return _DEFAULT_MYSQL_PORT
+    try:
+        return int(port_text)
+    except ValueError:
+        raise ValueError(f"DB_PORT 必须是整数，当前为: {port_text!r}") from None
+
 
 def _build_database_url_from_shared_env() -> str | None:
     db_type = os.getenv("DB_TYPE")
@@ -27,7 +40,6 @@ def _build_database_url_from_shared_env() -> str | None:
 
     if db_type == "mysql":
         host = os.getenv("DB_HOST", "localhost")
-        port = os.getenv("DB_PORT", "3306")
         user = os.getenv("DB_USER", "root")
         password = SecurityUtils.get_decrypt_secret("DB_PASSWORD", default="") or ""
 
@@ -39,7 +51,7 @@ def _build_database_url_from_shared_env() -> str | None:
             username=user,
             password=password,
             host=host,
-            port=int(port),
+            port=_mysql_port_from_env(),
             database=store_db_name,
             query={"charset": "utf8mb4"},
         )

@@ -21,7 +21,8 @@ _SENSITIVE_QUERY_PARAM = re.compile(
 _BEARER_TOKEN = re.compile(r"(Bearer\s+)([^\s\"']+)", re.IGNORECASE)
 # llm_proxy 签发的 pod token，格式 pod- + token_urlsafe
 _POD_TOKEN = re.compile(r"\bpod-[A-Za-z0-9._\-]{8,}")
-# key=value / key: value。值取到空白或分隔符为止，覆盖 base64 / JWT 里的 + / =。
+# key=value / key: value。值取到空白或分隔符为止，覆盖 base64 / JWT 里的 + / =，
+# 以及百分号编码。含 %，所以不能直接套到尚未插值的 logging 格式串上。
 _SECRET_KV = re.compile(
     r"(?i)(api[_-]?key|secret|access[_-]?key|password|passwd|token)"
     r"([\"']?\s*[=:]\s*[\"']?)"
@@ -49,8 +50,6 @@ class SensitiveLogFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if isinstance(record.msg, str):
-                record.msg = redact_sensitive_text(record.msg)
             # args 仅在 tuple 即 %-位置参数时逐个处理；dict 即 %(name)s 原样放行，
             # 避免把 dict 误转成 tuple 破坏格式化。
             if isinstance(record.args, tuple):
@@ -58,6 +57,21 @@ class SensitiveLogFilter(logging.Filter):
                     redact_sensitive_text(a) if isinstance(a, str) else a
                     for a in record.args
                 )
+            # msg 在 Formatter 之前仍是格式串。_SECRET_KV 的值里包含 %，
+            # 若把 api_key=%s 擦成 api_key=***，随后 msg % args 会 TypeError，
+            # 整条日志被 handleError 丢掉并打到 stderr。先按 logging 规则插值，
+            # 再对成品脱敏，并清掉 args，避免 Formatter 再格式化一次。
+            if isinstance(record.msg, str) and record.args:
+                try:
+                    rendered = record.getMessage()
+                except Exception as exc:
+                    # 插值失败就保留原格式串，交给 Formatter 报原始错误；这里只记一笔，避免吞掉异常。
+                    _log.debug("log message format failed, leave format string: %s", exc)
+                else:
+                    record.msg = rendered
+                    record.args = None
+            if isinstance(record.msg, str) and not record.args:
+                record.msg = redact_sensitive_text(record.msg)
             # Formatter 会复用已生成的 exc_text；只改 exc_info 挡不住后续 handler。
             if record.exc_info and record.exc_info != (None, None, None):
                 if not record.exc_text:

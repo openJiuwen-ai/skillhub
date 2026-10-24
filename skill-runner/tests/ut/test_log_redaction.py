@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import sys
 
@@ -45,3 +46,32 @@ def test_exc_info_and_stack_are_redacted() -> None:
     assert "sk-REALKEY123456" not in record.exc_text
     assert "P@ssw0rd!2026" not in record.stack_info
     assert "***" in record.exc_text
+
+
+def test_percent_encoded_secret_is_fully_redacted() -> None:
+    assert redact_sensitive_text("api_key=abc%2Fdef+/=") == "api_key=***"
+
+
+def test_format_placeholder_is_interpolated_before_redaction(capsys) -> None:
+    """api_key=%s 不能在插值前被擦掉，否则 Formatter 抛 TypeError，日志被丢掉。"""
+    logger = logging.getLogger("skill_runner.redaction_format")
+    logger.handlers.clear()
+    logger.filters.clear()
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    logger.addFilter(SensitiveLogFilter())
+
+    logger.info("api_key=%s", "abc%2Fdef+/=")
+    logger.info("api_key=%(key)s", {"key": "sk-REALKEY123456"})
+
+    captured = capsys.readouterr()
+    assert "TypeError" not in captured.err
+    assert "not all arguments converted" not in captured.err
+    lines = [line for line in buf.getvalue().splitlines() if line]
+    assert lines == ["api_key=***", "api_key=***"]
+    assert "abc%2Fdef" not in buf.getvalue()
+    assert "sk-REALKEY123456" not in buf.getvalue()

@@ -92,7 +92,16 @@ class _MemoryOAuthStore:
 
 
 class _RedisOAuthStore:
-    def __init__(self, *, host: str, port: int, db: int, password: str, ssl: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        db: int,
+        password: str,
+        ssl: bool = False,
+        username: str = "",
+    ) -> None:
         import redis  # type: ignore[import-not-found]
 
         kwargs: dict = {
@@ -105,6 +114,10 @@ class _RedisOAuthStore:
             "socket_timeout": 2.0,
             "health_check_interval": 30,
         }
+        # default 用户被禁用时，只发 AUTH <password> 会认证失败，必须带 ACL 用户名。
+        username = (username or "").strip()
+        if username:
+            kwargs["username"] = username
         if password:
             kwargs["password"] = password
         if ssl:
@@ -168,6 +181,7 @@ def get_oauth_str_store() -> OAuthStrStore:
                 db=int(settings.redis_db),
                 password=_resolve_redis_password(),
                 ssl=ssl,
+                username=(settings.redis_username or "").strip(),
             )
             logger.info(
                 "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",
