@@ -73,6 +73,7 @@ class RedisConfig:
     ssl: bool
     topk_install: TopKInstallSettings
     user_seq: UserSeqSettings
+    username: str = ""
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,7 @@ def load_config() -> AppConfig:
             db=int(_env("REDIS_DB", "MARKET_REDIS_DB", default="0")),
             password=redis_password,
             ssl=_resolve_redis_ssl(),
+            username=_env("REDIS_USERNAME", "MARKET_REDIS_USERNAME", default=""),
             topk_install=TopKInstallSettings(
                 key=_env("REDIS_TOPK_INSTALL_KEY", "MARKET_REDIS_TOPK_INSTALL_KEY", default="skill_rec:topk:install"),
                 # 0 = full ranked catalog (兜底「全部」); >0 = classic TopK

@@ -277,10 +277,12 @@ async def lifespan(app: FastAPI):
                 SecurityUtils.get_decrypt_secret("MARKET_REDIS_PASSWORD", default="")
                 or None
             )
+            redis_username = (settings.redis_username or "").strip() or None
             redis_client = redis_lib.Redis(
                 host=settings.redis_host,
                 port=settings.redis_port,
                 db=settings.redis_db,
+                username=redis_username,
                 password=redis_password,
                 decode_responses=False,
                 socket_connect_timeout=3,

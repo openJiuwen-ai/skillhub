@@ -18,6 +18,8 @@ PLAYGROUND_MULTI_INSTANCE=true
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 REDIS_DB=0
+# 禁止 default 用户时填写 Redis ACL 用户名；留空则不传
+# REDIS_USERNAME=
 MARKET_REDIS_PASSWORD=your-redis-password
 ```
 

@@ -11,6 +11,7 @@ DCS（Redis 版）协议与 Redis 相同，改连接参数即可。
 | `CACHE_BACKEND` | `redis`（默认） | `dcs` |
 | `REDIS_HOST` / `MARKET_REDIS_HOST` | `127.0.0.1` | DCS 内网地址 |
 | `REDIS_PORT` | `6379` | 控制台端口（常为 6379） |
+| `REDIS_USERNAME` / `MARKET_REDIS_USERNAME` | 可空（不传，即 default） | ACL 用户名；禁止 default 时必填 |
 | `MARKET_REDIS_PASSWORD` | 可空 | DCS 密码 |
 | `MARKET_REDIS_SSL` / `REDIS_SSL` | 一般不设（false） | **可不设**：`CACHE_BACKEND=dcs` 时默认 **true** |
 

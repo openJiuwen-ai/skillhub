@@ -51,6 +51,8 @@ data:
   REDIS_HOST: ""
   REDIS_PORT: "6379"
   REDIS_DB: "0"
+  # Redis 6 ACL 用户名。禁止 default 用户时填写；留空则不传 username。
+  REDIS_USERNAME: ""
 
   # 检索系统（语义搜索；填入 Embedding 服务地址后启用，留空则退化为关键词搜索）
   MARKET_RETRIEVAL_EMBEDDING_API_BASE_URL: ""

@@ -30,6 +30,7 @@ def resolve_redis_ssl() -> bool:
 def redis_connection_kwargs(*, decode_responses: bool = True) -> dict[str, Any]:
     """Build kwargs for redis.Redis / redis.asyncio.Redis."""
     host = (settings.redis_host or "").strip()
+    username = (settings.redis_username or "").strip()
     password = (SecurityUtils.get_decrypt_secret("MARKET_REDIS_PASSWORD", default="") or "").strip()
     kwargs: dict[str, Any] = {
         "host": host,
@@ -40,6 +41,8 @@ def redis_connection_kwargs(*, decode_responses: bool = True) -> dict[str, Any]:
         "socket_timeout": 2.0,
         "health_check_interval": 30,
     }
+    if username:
+        kwargs["username"] = username
     if password:
         kwargs["password"] = password
     if resolve_redis_ssl():
