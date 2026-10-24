@@ -18,4 +18,4 @@ CREATE TABLE IF NOT EXISTS `market_group_join_requests` (
   KEY `idx_group_join_user_id` (`user_id`),
   KEY `idx_group_join_status` (`status`),
   CONSTRAINT `fk_group_join_group_id` FOREIGN KEY (`group_id`) REFERENCES `market_groups` (`group_id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

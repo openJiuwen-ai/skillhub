@@ -10,4 +10,4 @@ CREATE TABLE `market_asset_interactions` (
   KEY `idx_mai_asset_id` (`asset_id`),
   KEY `idx_mai_user_id` (`user_id`),
   KEY `idx_mai_action_type` (`action_type`)
-) ENGINE=InnoDB AUTO_INCREMENT=166 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=166 DEFAULT CHARSET=utf8mb4;

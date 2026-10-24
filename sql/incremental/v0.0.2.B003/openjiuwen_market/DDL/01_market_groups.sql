@@ -19,4 +19,4 @@ CREATE TABLE IF NOT EXISTS `market_groups` (
   KEY `idx_market_groups_visibility` (`visibility`),
   KEY `idx_market_groups_status` (`status`),
   KEY `idx_market_groups_update_time` (`update_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -34,4 +34,4 @@ CREATE TABLE IF NOT EXISTS `market_skill_reviews` (
   KEY `idx_skill_review_status` (`review_status`),
   CONSTRAINT `fk_market_skill_reviews_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `market_assets` (`asset_id`),
   CONSTRAINT `fk_market_skill_reviews_version_id` FOREIGN KEY (`version_id`) REFERENCES `market_asset_versions` (`version_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

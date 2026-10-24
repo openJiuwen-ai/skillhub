@@ -41,7 +41,7 @@ cd skillhub
 
 ```sql
 CREATE DATABASE IF NOT EXISTS openjiuwen_market
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+  CHARACTER SET utf8mb4;
 
 CREATE USER IF NOT EXISTS 'skillhub'@'%' IDENTIFIED BY '请替换为强密码';
 GRANT ALL PRIVILEGES ON openjiuwen_market.* TO 'skillhub'@'%';

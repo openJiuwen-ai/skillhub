@@ -25,7 +25,7 @@ class MarketGroupDB(Base):
         Index("idx_market_groups_visibility", visibility),
         Index("idx_market_groups_status", status),
         Index("idx_market_groups_update_time", update_time),
-        {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
+        {"mysql_charset": "utf8mb4"},
     )
 
 
@@ -48,7 +48,7 @@ class MarketGroupMemberDB(Base):
         UniqueConstraint("group_id", "user_id", name="uk_group_member_user"),
         Index("idx_group_members_group_id", group_id),
         Index("idx_group_members_user_id", user_id),
-        {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
+        {"mysql_charset": "utf8mb4"},
     )
 
 
@@ -75,7 +75,7 @@ class MarketGroupJoinRequestDB(Base):
         Index("idx_group_join_group_id", group_id),
         Index("idx_group_join_user_id", user_id),
         Index("idx_group_join_status", status),
-        {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
+        {"mysql_charset": "utf8mb4"},
     )
 
 
@@ -104,5 +104,5 @@ class MarketGroupSkillGrantDB(Base):
         Index("idx_group_skill_grants_group_id", group_id),
         Index("idx_group_skill_grants_asset_id", asset_id),
         Index("idx_group_skill_grants_status", status),
-        {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
+        {"mysql_charset": "utf8mb4"},
     )

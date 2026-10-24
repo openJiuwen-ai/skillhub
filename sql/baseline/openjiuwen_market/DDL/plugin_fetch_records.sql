@@ -7,4 +7,4 @@ CREATE TABLE `plugin_fetch_records` (
   PRIMARY KEY (`id`),
   KEY `idx_asset_id` (`asset_id`),
   KEY `idx_fetch_user_id` (`fetch_user_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=44725 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=44725 DEFAULT CHARSET=utf8mb4;

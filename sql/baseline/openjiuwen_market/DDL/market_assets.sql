@@ -39,4 +39,4 @@ CREATE TABLE `market_assets` (
   KEY `idx_pin_order` (`pin_order`),
   KEY `idx_moderation_status` (`moderation_status`),
   KEY `idx_star_count` (`star_count`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

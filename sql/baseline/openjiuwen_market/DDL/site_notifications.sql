@@ -7,4 +7,4 @@ CREATE TABLE `site_notifications` (
   PRIMARY KEY (`id`),
   KEY `ix_site_notifications_created_at_ms` (`created_at_ms`),
   KEY `idx_inbox_created` (`inbox_key`,`created_at_ms`)
-) ENGINE=InnoDB AUTO_INCREMENT=2550 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2550 DEFAULT CHARSET=utf8mb4;
