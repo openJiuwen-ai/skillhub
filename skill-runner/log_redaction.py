@@ -21,10 +21,15 @@ _SENSITIVE_QUERY_PARAM = re.compile(
 _BEARER_TOKEN = re.compile(r"(Bearer\s+)([^\s\"']+)", re.IGNORECASE)
 # llm_proxy 签发的 pod token，格式 pod- + token_urlsafe
 _POD_TOKEN = re.compile(r"\bpod-[A-Za-z0-9._\-]{8,}")
-# key=value / key: value 形式
+# key=value / key: value。值取到空白或分隔符为止，覆盖 base64 / JWT 里的 + / =。
 _SECRET_KV = re.compile(
     r"(?i)(api[_-]?key|secret|access[_-]?key|password|passwd|token)"
-    r"([\"']?\s*[=:]\s*[\"']?)([A-Za-z0-9._\-]{6,})"
+    r"([\"']?\s*[=:]\s*[\"']?)"
+    r"([^\s\"',;&]+)"
+)
+# scheme://user:password@host。密码可含 @，取到该段最后一个 @ 之前。
+_URL_CREDENTIAL = re.compile(
+    r"(?i)(\b[a-z][a-z0-9+.\-]*://[^/\s:]+:)(\S*)(@[^/\s@]+)"
 )
 
 
@@ -34,6 +39,7 @@ def redact_sensitive_text(text: str) -> str:
     out = _SENSITIVE_QUERY_PARAM.sub(r"\1***", text)
     out = _BEARER_TOKEN.sub(r"\1***", out)
     out = _POD_TOKEN.sub("pod-***", out)
+    out = _URL_CREDENTIAL.sub(r"\1***\3", out)
     out = _SECRET_KV.sub(lambda m: f"{m.group(1)}{m.group(2)}***", out)
     return out
 
@@ -52,8 +58,15 @@ class SensitiveLogFilter(logging.Filter):
                     redact_sensitive_text(a) if isinstance(a, str) else a
                     for a in record.args
                 )
+            # Formatter 会复用已生成的 exc_text；只改 exc_info 挡不住后续 handler。
+            if record.exc_info and record.exc_info != (None, None, None):
+                if not record.exc_text:
+                    record.exc_text = logging.Formatter().formatException(record.exc_info)
+                record.exc_text = redact_sensitive_text(record.exc_text)
+            if isinstance(record.stack_info, str) and record.stack_info:
+                record.stack_info = redact_sensitive_text(record.stack_info)
         except Exception as exc:
-            _log.debug("log redaction failed: %s", exc, exc_info=True)
+            _log.debug("log redaction failed: %s", exc)
         return True
 
 
