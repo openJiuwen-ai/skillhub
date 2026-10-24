@@ -199,6 +199,7 @@ def create_s3_client(
         use_ssl = False
     else:
         use_ssl = endpoint.startswith("https://") if endpoint else True
+    verify_ssl = _resolve_s3_ssl_verify()
 
     resolved_payload_signing = payload_signing_enabled
     if resolved_payload_signing is None:
@@ -216,6 +217,7 @@ def create_s3_client(
         "service_name": "s3",
         "region_name": region,
         "use_ssl": use_ssl,
+        "verify": verify_ssl,
         "config": config,
     }
     if endpoint:
@@ -237,6 +239,12 @@ def _new_botocore_config(config_cls, *, s3_subconfig: Dict[str, object]):
         )
     except TypeError:
         return config_cls(signature_version="s3v4", s3=s3_subconfig)
+
+
+def _resolve_s3_ssl_verify() -> bool:
+    """MARKET_S3_SSL_VERIFY 默认 true；false/0/off/no 时 boto3 verify=False。"""
+    raw = os.getenv("MARKET_S3_SSL_VERIFY", "").strip().lower()
+    return raw not in {"false", "0", "off", "no"}
 
 
 def _first_env(*names: str) -> str:

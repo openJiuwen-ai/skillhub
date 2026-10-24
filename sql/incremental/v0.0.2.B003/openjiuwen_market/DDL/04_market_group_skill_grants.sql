@@ -17,4 +17,4 @@ CREATE TABLE IF NOT EXISTS `market_group_skill_grants` (
   KEY `idx_group_skill_grants_status` (`status`),
   CONSTRAINT `fk_group_skill_grants_group_id` FOREIGN KEY (`group_id`) REFERENCES `market_groups` (`group_id`) ON DELETE CASCADE,
   CONSTRAINT `fk_group_skill_grants_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `market_assets` (`asset_id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -8,5 +8,5 @@ CREATE TABLE `playground_usage` (
   `updated_at`    bigint       NOT NULL COMMENT '最后更新时间（Unix 毫秒）',
   PRIMARY KEY (`user_id`, `usage_date`),
   KEY `idx_usage_date` (`usage_date`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   COMMENT='Playground 每日使用配额跟踪；PLAYGROUND_DAILY_LIMIT 控制上限，0=不限制';

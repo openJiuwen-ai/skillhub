@@ -14,4 +14,4 @@ CREATE TABLE `market_asset_versions` (
   UNIQUE KEY `uk_asset_version` (`asset_id`,`version`),
   KEY `ix_market_asset_versions_asset_id` (`asset_id`),
   CONSTRAINT `market_asset_versions_ibfk_1` FOREIGN KEY (`asset_id`) REFERENCES `market_assets` (`asset_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

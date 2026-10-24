@@ -195,5 +195,5 @@ class MarketAssetInteractionDB(Base):
         Index("idx_mai_asset_id", asset_id),
         Index("idx_mai_user_id", user_id),
         Index("idx_mai_action_type", action_type),
-        {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
+        {"mysql_charset": "utf8mb4"},
     )

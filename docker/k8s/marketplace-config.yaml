@@ -28,6 +28,8 @@ data:
   MARKET_S3_ENDPOINT: "REPLACE_WITH_S3_ENDPOINT"
   MARKET_S3_REGION: ""
   MARKET_S3_USE_SSL: "false"
+  # 自建 OBS 使用 https 但证书不可信时改为 "false"（boto3 verify=False）。公有云保持 true。
+  MARKET_S3_SSL_VERIFY: "true"
 
   # OAuth（默认启用 GitCode 登录；需在 Secret 中配置 Client ID/Secret，见安装指导 4.2 节；端口 9002 见通信矩阵第 24 条，公网 443 见第 1~6 条）
   MARKET_GITCODE_OAUTH_ENABLED: "true"
@@ -49,6 +51,8 @@ data:
   REDIS_HOST: ""
   REDIS_PORT: "6379"
   REDIS_DB: "0"
+  # Redis 6 ACL 用户名。禁止 default 用户时填写；留空则不传 username。
+  REDIS_USERNAME: ""
 
   # 检索系统（语义搜索；填入 Embedding 服务地址后启用，留空则退化为关键词搜索）
   MARKET_RETRIEVAL_EMBEDDING_API_BASE_URL: ""

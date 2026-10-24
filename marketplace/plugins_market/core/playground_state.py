@@ -126,7 +126,16 @@ return 0
 
 
 class RedisPlaygroundStateStore:
-    def __init__(self, *, host: str, port: int, db: int, password: str, ssl: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        db: int,
+        password: str,
+        ssl: bool = False,
+        username: str = "",
+    ) -> None:
         from redis import asyncio as aioredis
 
         kwargs: dict = {
@@ -139,6 +148,10 @@ class RedisPlaygroundStateStore:
             "socket_timeout": 2.0,
             "health_check_interval": 30,
         }
+        # default 用户被禁用时，只发 AUTH <password> 会认证失败，必须带 ACL 用户名。
+        username = (username or "").strip()
+        if username:
+            kwargs["username"] = username
         if password:
             kwargs["password"] = password
         if ssl:
@@ -259,6 +272,7 @@ def get_playground_state_store() -> PlaygroundStateStore:
                 db=int(settings.redis_db),
                 password=_resolve_redis_password(),
                 ssl=ssl,
+                username=(settings.redis_username or "").strip(),
             )
             logger.info(
                 "playground state store: redis (host=%s port=%s db=%s ssl=%s)",

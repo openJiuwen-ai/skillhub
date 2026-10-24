@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     redis_host: str = Field(default="", validation_alias=AliasChoices("MARKET_REDIS_HOST", "REDIS_HOST"))
     redis_port: int = Field(default=6379, validation_alias=AliasChoices("MARKET_REDIS_PORT", "REDIS_PORT"))
     redis_db: int = Field(default=0, validation_alias=AliasChoices("MARKET_REDIS_DB", "REDIS_DB"))
+    redis_username: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_REDIS_USERNAME", "REDIS_USERNAME"),
+    )
     redis_password: str = Field(default="", validation_alias="MARKET_REDIS_PASSWORD")
     cache_backend: str = Field(
         default="redis",

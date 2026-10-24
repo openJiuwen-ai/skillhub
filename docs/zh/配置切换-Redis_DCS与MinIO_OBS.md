@@ -11,6 +11,7 @@ DCS（Redis 版）协议与 Redis 相同，改连接参数即可。
 | `CACHE_BACKEND` | `redis`（默认） | `dcs` |
 | `REDIS_HOST` / `MARKET_REDIS_HOST` | `127.0.0.1` | DCS 内网地址 |
 | `REDIS_PORT` | `6379` | 控制台端口（常为 6379） |
+| `REDIS_USERNAME` / `MARKET_REDIS_USERNAME` | 可空（不传，即 default） | ACL 用户名；禁止 default 时必填 |
 | `MARKET_REDIS_PASSWORD` | 可空 | DCS 密码 |
 | `MARKET_REDIS_SSL` / `REDIS_SSL` | 一般不设（false） | **可不设**：`CACHE_BACKEND=dcs` 时默认 **true** |
 
@@ -40,6 +41,7 @@ MARKET_REDIS_PASSWORD=********
 | `MARKET_CREDENTIALS_MODE` | 默认 `static` | 默认 `dynamic`（IAM）；可设 `static` |
 | `MARKET_S3_REGION` | 可空 | 建议填写区域 |
 | `MARKET_S3_USE_SSL` | 可空（随 endpoint） | 默认推断 **true** |
+| `MARKET_S3_SSL_VERIFY` | 默认 **true** | 自建 OBS 证书不可信时设 **false**（仍走 https，boto3 `verify=False`） |
 | addressing | 默认 `path` | 默认 `virtual`（可用 `MARKET_S3_ADDRESSING_STYLE` 覆盖） |
 
 示例（本地）：

@@ -24,4 +24,4 @@ CREATE TABLE IF NOT EXISTS `git_sources` (
   KEY `idx_gs_created_by` (`created_by_user_id`),
   KEY `idx_gs_visibility` (`visibility_scope`),
   KEY `idx_gs_repo_url_canonical` (`repo_url_canonical`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

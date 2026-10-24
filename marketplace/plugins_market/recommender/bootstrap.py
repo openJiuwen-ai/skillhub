@@ -32,6 +32,10 @@ def apply_recommender_settings_to_env() -> None:
         pairs["MILVUS_PASSWORD"] = settings.milvus_password
     if settings.redis_password and not os.getenv("MARKET_REDIS_PASSWORD"):
         pairs["MARKET_REDIS_PASSWORD"] = settings.redis_password
+    if (settings.redis_username or "").strip() and not (
+        os.getenv("REDIS_USERNAME") or os.getenv("MARKET_REDIS_USERNAME")
+    ):
+        pairs["REDIS_USERNAME"] = settings.redis_username.strip()
     # Propagate resolved SSL so offline jobs / online seeds match marketplace clients.
     if not os.getenv("REDIS_SSL") and not os.getenv("MARKET_REDIS_SSL"):
         pairs["REDIS_SSL"] = "true" if resolve_redis_ssl() else "false"

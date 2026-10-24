@@ -36,6 +36,7 @@ def create_s3_client(storage: StorageConfig):
         aws_secret_access_key=storage.secret_key,
         region_name=storage.region or None,
         use_ssl=storage.use_ssl,
+        verify=storage.verify_ssl,
         config=BotoConfig(
             signature_version="s3v4",
             s3={"addressing_style": storage.addressing_style},

@@ -6,6 +6,7 @@ from typing import Generator
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 
 from common.security.security_utils import SecurityUtils
@@ -15,6 +16,19 @@ from .db_pool import sqlalchemy_pool_kwargs
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
+
+_DEFAULT_MYSQL_PORT = 3306
+
+
+def _mysql_port_from_env() -> int:
+    """DB_PORT 缺省或空串用 3306。非法值直接点名环境变量，避免导入期 int('')。"""
+    port_text = (os.getenv("DB_PORT", str(_DEFAULT_MYSQL_PORT)) or "").strip()
+    if not port_text:
+        return _DEFAULT_MYSQL_PORT
+    try:
+        return int(port_text)
+    except ValueError:
+        raise ValueError(f"DB_PORT 必须是整数，当前为: {port_text!r}") from None
 
 
 def _build_database_url_from_shared_env() -> str | None:
@@ -26,16 +40,22 @@ def _build_database_url_from_shared_env() -> str | None:
 
     if db_type == "mysql":
         host = os.getenv("DB_HOST", "localhost")
-        port = os.getenv("DB_PORT", "3306")
         user = os.getenv("DB_USER", "root")
         password = SecurityUtils.get_decrypt_secret("DB_PASSWORD", default="") or ""
 
         store_db_name = os.getenv("STORE_DB_NAME", "openjiuwen_market")
 
-        return (
-            f"mysql+pymysql://{user}:{password}@"
-            f"{host}:{port}/{store_db_name}?charset=utf8mb4"
+        # 密码里的 @、% 等必须编码，否则会被当成 URL 分隔符，连接串被拆开。
+        url = URL.create(
+            drivername="mysql+pymysql",
+            username=user,
+            password=password,
+            host=host,
+            port=_mysql_port_from_env(),
+            database=store_db_name,
+            query={"charset": "utf8mb4"},
         )
+        return url.render_as_string(hide_password=False)
 
     raise ValueError(f"DB_TYPE 当前仅支持 mysql，当前为: {db_type!r}")
 
