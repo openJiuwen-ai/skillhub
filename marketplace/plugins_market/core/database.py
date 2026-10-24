@@ -6,6 +6,7 @@ from typing import Generator
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 
 from common.security.security_utils import SecurityUtils
@@ -32,10 +33,17 @@ def _build_database_url_from_shared_env() -> str | None:
 
         store_db_name = os.getenv("STORE_DB_NAME", "openjiuwen_market")
 
-        return (
-            f"mysql+pymysql://{user}:{password}@"
-            f"{host}:{port}/{store_db_name}?charset=utf8mb4"
+        # 密码里的 @、% 等必须编码，否则会被当成 URL 分隔符，连接串被拆开。
+        url = URL.create(
+            drivername="mysql+pymysql",
+            username=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=store_db_name,
+            query={"charset": "utf8mb4"},
         )
+        return url.render_as_string(hide_password=False)
 
     raise ValueError(f"DB_TYPE 当前仅支持 mysql，当前为: {db_type!r}")
 
