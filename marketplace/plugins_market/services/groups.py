@@ -35,6 +35,7 @@ from plugins_market.repositories.groups_repository import (
     GROUP_VISIBILITY_PRIVATE,
     JOIN_STATUS_APPROVED,
     JOIN_STATUS_PENDING,
+    JOIN_STATUS_REJECTED,
     GRANT_STATUS_ACTIVE,
     GRANT_STATUS_PENDING,
     GRANT_STATUS_REJECTED,
