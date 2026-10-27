@@ -1,0 +1,48 @@
+# Build from the repository root. The final runtime keeps the full UBI dnf.
+ARG UBI_IMAGE=registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f652c915b3e052256ddf66ee95cd04dc0362191f302c4e94a
+
+FROM ${UBI_IMAGE} AS builder
+ARG INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${INDEX_URL} PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN dnf install -y python3.11 python3.11-pip ca-certificates \
+    && dnf clean all
+
+WORKDIR /build
+COPY marketplace/ ./
+RUN python3.11 -m pip wheel --no-deps --wheel-dir /build/dist /build
+
+# Customers can FROM this target and RUN dnf during their own image build.
+# Never deploy this root build target as a workload.
+FROM ${UBI_IMAGE} AS derivative-base
+ARG INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${INDEX_URL} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/site-packages \
+    HOME=/app/home
+
+RUN dnf install -y python3.11 python3.11-pip git ca-certificates \
+    && dnf clean all
+
+WORKDIR /app
+COPY --from=builder /build/dist/*.whl /app/dist/
+RUN python3.11 -m pip install --no-cache-dir --target=/app/site-packages /app/dist/*.whl \
+    && rm -rf /app/site-packages/retrieval /app/dist
+
+# The retrieval package uses bare imports from its own source tree.
+COPY --from=builder /build/retrieval /app/retrieval
+COPY --from=builder /build/privacy-statement.md /app/privacy-statement.md
+
+# OpenShift assigns a different non-root UID in each project. Writable paths
+# use group 0 permissions; installed code remains read-only.
+RUN mkdir -p /app/data /app/logs /app/home \
+    && chgrp -R 0 /app/data /app/logs /app/home \
+    && chmod -R g=u /app/data /app/logs /app/home
+
+EXPOSE 8100
+CMD ["python3.11", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8100"]
+
+FROM derivative-base AS runtime
+USER 10001:0

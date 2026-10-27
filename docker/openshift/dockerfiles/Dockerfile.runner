@@ -1,0 +1,36 @@
+# Build from the repository root. Runner controls dynamic Worker Pods.
+ARG UBI_IMAGE=registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f652c915b3e052256ddf66ee95cd04dc0362191f302c4e94a
+
+FROM ${UBI_IMAGE} AS derivative-base
+ARG INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${INDEX_URL} \
+    UV_INDEX_URL=${INDEX_URL} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_HTTP_TIMEOUT=180 \
+    PYTHONPATH=/app \
+    HOME=/app/home
+
+RUN dnf install -y python3.11 python3.11-pip git ca-certificates \
+    && dnf clean all
+RUN python3.11 -m pip install --no-cache-dir uv==0.8.15
+
+COPY skill-runner/ /app/skill_runner/
+WORKDIR /app/skill_runner
+# The upstream runner does not commit uv.lock; retain its dependency resolution.
+RUN uv sync --python /usr/bin/python3.11 --no-dev --no-cache
+
+ENV PATH=/app/.venv/bin:${PATH}
+WORKDIR /app
+RUN mkdir -p /app/home /app/workspaces \
+    && chgrp -R 0 /app/home /app/workspaces \
+    && chmod -R g=u /app/home /app/workspaces
+
+EXPOSE 8900
+CMD ["python", "-m", "uvicorn", "skill_runner.app:app", "--host", "0.0.0.0", "--port", "8900"]
+
+FROM derivative-base AS runtime
+USER 10001:0

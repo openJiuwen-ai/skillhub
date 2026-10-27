@@ -1,0 +1,208 @@
+# Marketplace 的 OpenShift 配置样例。现有生效项用于本轮单副本基础市场试部署。
+# 下面按功能列出更多可选变量；行首带 # 的项目不会生效，启用前按说明修改。
+# 只放非敏感值；密码、令牌和 API Key 见 marketplace-secret.yaml。
+# 优先列当前代码读取的正式变量名，不重复列兼容旧别名。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: skillhub-backend-config
+data:
+  # 服务与数据库：密码在 Secret；MariaDB 的特殊 sql_mode 需单独验证。
+  STORE_PORT: "8100"                       # Backend 服务端口，与 Deployment/Service 一致。
+  DB_TYPE: "mysql"                        # MariaDB 也走 mysql+pymysql 驱动。
+  DB_HOST: "REPLACE_WITH_DB_HOST"         # 数据库主机，Pod 可解析可访问。
+  DB_PORT: "3306"                         # 数据库端口。
+  DB_USER: "skillhub"                     # 数据库账号，需建表和读写权限。
+  STORE_DB_NAME: "openjiuwen_market"      # 数据库名称。
+  # 对象存储：静态 AK/SK 在 Secret；预签名地址还需由浏览器访问。
+  STORAGE_TYPE: "MinIO"                   # MinIO 或 OBS。
+  MARKET_CREDENTIALS_MODE: "static"       # OBS 可改为 dynamic 以换取临时凭据。
+  MARKET_BUCKET_NAME: "REPLACE_WITH_BUCKET_NAME" # 预先创建的桶。
+  MARKET_S3_ENDPOINT: "REPLACE_WITH_BROWSER_AND_POD_REACHABLE_S3_ENDPOINT" # Pod 与浏览器均可访问。
+  MARKET_S3_REGION: "us-east-1"           # OBS 改为对应区域。
+  MARKET_S3_USE_SSL: "false"              # HTTPS 端点改 true。
+  MARKET_S3_SSL_VERIFY: "true"            # 校验 TLS 证书。
+  # 登录/审核：先关闭 OAuth，Route 主机确定后补回调地址并创建新 Backend Pod。
+  SYSTEM_ADMIN_USER: "system_admin"        # 系统令牌请求的用户标识，令牌本身放 Secret。
+  MARKET_GITCODE_OAUTH_ENABLED: "false"   # 回调、Client ID/Secret 配齐后改 true。
+  MARKET_GITHUB_OAUTH_ENABLED: "false"    # 本轮不用 GitHub 登录。
+  MARKET_REVIEW_ADMIN_USERNAMES: "REPLACE_WITH_REVIEWER_GITCODE_LOGIN" # 与 GitCode login 精确匹配。
+  MARKET_SKILL_REVIEW_ENABLED: "false"    # 关闭 AI 审查，人工审核仍可用。
+  PLAYGROUND_ENABLED: "false"             # 本轮不部署 Runner/Worker。
+  MARKET_INTERFACE_LOG_ENABLED: "true"   # 接口明细仍写文件，不自动进入 Pod Logs。
+  INTERFACE_LOG_DIR: "/app/logs"           # 镜像内可写日志目录，Pod 重建后丢失。
+  # 可选检索模型未配置，本轮仅验收关键词检索。
+  # MARKET_RETRIEVAL_EMBEDDING_API_BASE_URL: "https://EMBEDDING/v1"
+  # MARKET_RETRIEVAL_EMBEDDING_MODEL: "REPLACE_WITH_MODEL"
+
+  # 服务与数据库：未启用时使用应用默认值；STORE_DB_URL 可能含密码，应放 Secret。
+  # STORE_HOST: "0.0.0.0"                  # 仅在改用镜像默认 CMD 启动时核对监听地址。
+  # STORE_WORKERS: "1"                    # 多进程须核对数据库连接池和 OAuth 状态共享。
+  # STORE_RELOAD: "false"                 # 开发热重载，生产保持关闭。
+  # MARKET_DEBUG: "false"                 # 调试输出，生产保持关闭。
+  # STORE_DB_POOL_SIZE: "50"              # 每进程连接池大小。
+  # STORE_DB_MAX_OVERFLOW: "50"           # 每进程突发连接上限。
+  # STORE_DB_POOL_TIMEOUT: "10"           # 等待可用连接的秒数。
+
+  # 对象存储：OBS dynamic 时改凭据模式，IAM 密码放 Secret。
+  # MARKET_S3_PRESIGNED_EXPIRES: "1800"   # 预签名下载链接有效秒数。
+  # MARKET_S3_STS_DURATION_SECONDS: "3600" # OBS 临时凭据有效秒数。
+  # MARKET_S3_ADDRESSING_STYLE: "path"    # S3 寻址方式按存储端要求设置。
+  # MARKET_S3_PAYLOAD_SIGNING_ENABLED: "false" # 上传签名策略按存储端要求设置。
+  # MARKET_PLUGIN_TEMPLATE_OBJECT_KEY: "static/plugin-templates/demo-tools.zip" # 工具模板桶内对象 Key。
+  # MARKET_SKILL_TEMPLATE_OBJECT_KEY: "static/plugin-templates/demo-skill.zip"  # Skill 模板桶内对象 Key。
+
+  # GitCode OAuth：Client ID/Secret 放 Secret；回调须与 GitCode 应用注册值一致。
+  # AUTH_USER_API_URL: "https://gitcode.com/api/v5/user" # Bearer 用户信息接口。
+  # MARKET_GITCODE_OAUTH_REDIRECT_URI: "https://HOST/api/v1/auth/oauth/gitcode/callback"
+  # MARKET_OAUTH_FRONTEND_ORIGIN: "https://HOST" # /hub 构建改为 https://HOST/hub。
+  # MARKET_GITCODE_OAUTH_SCOPE: "user_info"
+  # MARKET_GITCODE_OAUTH_AUTHORIZE_URL: "https://gitcode.com/oauth/authorize"
+  # MARKET_GITCODE_OAUTH_TOKEN_URL: "https://gitcode.com/oauth/token"
+  # MARKET_REVIEW_ADMIN_USERNAMES_FILE: "/app/review-admins.txt" # 已在镜像/卷提供文件时使用。
+  # MARKET_ALLOW_SELF_MODERATION: "false" # 是否允许审核员审核自己发布的 Skill。
+  # MARKET_BLOCK_NONSKILL_PLUGIN_PUBLISH: "true" # 是否限制发布非 Skill 类型资产。
+  # MARKET_MAX_SKILLS_PER_USER: "200"      # 用户最多发布的 Skill 类资产数，0 不限。
+  # MARKET_MAX_GROUPS_PER_USER: "10"       # 用户创建群组数量上限，0 不限。
+  # MARKET_MAX_MEMBERS_PER_GROUP: "500"    # 单群组成员上限，0 不限。
+  # MARKET_FEATURED_TAGS: "tag1,tag2"     # 市场搜索框下优先展示的标签。
+
+  # 其他登录提供方：启用时配对应回调和 Secret 中的 Client ID/Secret。
+  # MARKET_GITHUB_OAUTH_REDIRECT_URI: "https://HOST/api/v1/auth/oauth/github/callback"
+  # MARKET_GITHUB_OAUTH_SCOPE: "read:user user:email public_repo"
+  # MARKET_GITHUB_OAUTH_AUTHORIZE_URL: "https://github.com/login/oauth/authorize"
+  # MARKET_GITHUB_OAUTH_TOKEN_URL: "https://github.com/login/oauth/access_token"
+  # MARKET_GITHUB_AUTH_USER_API_URL: "https://api.github.com/user"
+  # MARKET_GITHUB_STAR_ENABLED: "false"  # GitHub 一键标星开关。
+  # MARKET_GITHUB_STAR_ORG: "openJiuwen-ai" # 标星目标组织。
+  # MARKET_GITHUB_STAR_REPOS: "repo1,repo2" # 标星仓库，逗号分隔。
+  # MARKET_AGENTOS_OAUTH_ENABLED: "false"
+  # MARKET_AGENTOS_OAUTH_REDIRECT_URI: "https://HOST/api/v1/auth/oauth/agentos/callback"
+  # MARKET_AGENTOS_OAUTH_AUTHORIZE_URL: "https://AGENTOS/api/v1/oauth2/authorize"
+  # MARKET_AGENTOS_OAUTH_TOKEN_URL: "https://AGENTOS/api/v1/oauth2/token"
+  # MARKET_AGENTOS_AUTH_USER_API_URL: "https://AGENTOS/api/v1/oauth2/userinfo"
+
+  # Redis：本轮单 Backend 副本可不配置；多副本共享 OAuth/会话状态时配置。
+  # MARKET_REDIS_HOST: "REPLACE_WITH_REDIS_HOST"
+  # MARKET_REDIS_PORT: "6379"
+  # MARKET_REDIS_DB: "0"
+  # MARKET_REDIS_USERNAME: "REPLACE_WITH_REDIS_USER" # Redis ACL 用户，密码放 Secret。
+  # MARKET_CACHE_BACKEND: "redis"        # 缓存后端类型。
+  # MARKET_REDIS_SSL: "false"            # 按 Redis 端 TLS 配置设置。
+
+  # OBS dynamic / KMS：启用时另配 Secret 中的 IAM 用户、密码和 AES 根密钥。
+  # HUAWEICLOUD_PROJECT_ID: "REPLACE_WITH_PROJECT_ID" # 与 PROJECT_NAME 二选一。
+  # HUAWEICLOUD_PROJECT_NAME: "REPLACE_WITH_PROJECT_NAME"
+  # HUAWEICLOUD_DOMAIN_NAME: "Default"
+  # HUAWEICLOUD_IAM_ENDPOINT: "https://iam.myhuaweicloud.com"
+  # HUAWEICLOUD_REGION: "REPLACE_WITH_REGION"
+  # HUAWEICLOUD_KMS_ENABLED: "false"
+  # HUAWEICLOUD_KMS_KEY_ID: "REPLACE_WITH_KMS_KEY_ID"
+  # HUAWEICLOUD_KMS_ENDPOINT: "REPLACE_WITH_KMS_ENDPOINT"
+  # HUAWEICLOUD_KMS_ENCRYPTION_ALGORITHM: "RSAES_OAEP_SHA_256"
+  # SECURITY_APPLICATION_SECRET_CACHE_ENABLED: "true" # 解密结果缓存开关。
+  # SECURITY_APPLICATION_SECRET_CACHE_TTL_SECONDS: "60" # 解密缓存秒数。
+
+  # 日志与隐私声明：文件日志位于容器可写层，不自动进入集中采集。
+  # INTERFACE_LOG_DISABLE_FILE: "false"  # 关闭文件 handler 不会自动转为 stdout。
+  # LOG_MAX_BYTES: "52428800"            # 文件轮转大小，单位字节。
+  # LOG_BACKUP_COUNT: "5"                # 保留的轮转文件数。
+  # MARKET_PRIVACY_STATEMENT_FILE: "/app/privacy-statement.md" # 镜像内已存在的 Markdown 路径。
+
+  # 检索：纯 BM25 不需模型服务；启用向量/LLM 时同时填 Secret API Key。
+  # MARKET_RETRIEVAL_SEARCH_METHOD: "bm25" # bm25/embedding/auto/progressive。
+  # MARKET_RETRIEVAL_BUILD_METHOD: "bm25" # bm25/embedding/embedding_bm25/all。
+  # MARKET_RETRIEVAL_EMBEDDING_BATCH_SIZE: "16"
+  # MARKET_RETRIEVAL_MODEL_API_BASE_URL: "https://LLM/v1"
+  # MARKET_RETRIEVAL_DEFAULT_LLM_MODEL: "REPLACE_WITH_MODEL"
+  # MARKET_RETRIEVAL_FINDER_LLM_BASE_URL: "https://LLM/v1"
+  # MARKET_RETRIEVAL_FINDER_LLM_MODEL: "REPLACE_WITH_MODEL"
+  # MARKET_RETRIEVAL_SKILL_TAG_LLM_API_BASE_URL: "https://LLM/v1" # 标签分类模型端点。
+  # MARKET_RETRIEVAL_SKILL_TAG_LLM_MODEL: "REPLACE_WITH_MODEL"
+  # MARKET_RETRIEVAL_SKILL_TAG_CRON: "* * * * *" # 标签分类定时任务。
+  # MARKET_RETRIEVAL_SKILL_TAG_ON_STARTUP: "false"
+  # MARKET_RETRIEVAL_REBUILD_CRON: "0 * * * *" # 索引定时重建。
+  # MARKET_RETRIEVAL_REBUILD_ON_STARTUP: "false"
+  # MARKET_RETRIEVAL_INDEX_MAX_VERSIONS: "168" # 对象存储中保留的索引版本数。
+  # MARKET_RETRIEVAL_EMBEDDING_MIN_SCORE: "0.6" # 向量绝对分阈值。
+  # MARKET_RETRIEVAL_EMBEDDING_RELATIVE_MIN_SCORE: "0.75" # 向量相对分阈值。
+  # MARKET_RETRIEVAL_BM25_MIN_SCORE: "1.0" # BM25 绝对分阈值。
+  # MARKET_RETRIEVAL_BM25_MIN_QUERY_TERM_MATCHES: "1" # BM25 最少匹配词数。
+  # MARKET_RETRIEVAL_RRF_BM25_WEIGHT: "0.5" # 混合召回时的 BM25 权重。
+  # MARKET_RETRIEVAL_SKILL_INDEX_OBS_PREFIX: "REPLACE_WITH_PREFIX" # Skill 索引对象存储前缀。
+  # MARKET_RETRIEVAL_PLUGIN_INDEX_OBS_PREFIX: "REPLACE_WITH_PREFIX"
+  # MARKET_RETRIEVAL_AGENT_GROUP_INDEX_OBS_PREFIX: "REPLACE_WITH_PREFIX"
+  # MARKET_RETRIEVAL_AGENT_MCP_INDEX_OBS_PREFIX: "REPLACE_WITH_PREFIX"
+  # MARKET_RETRIEVAL_AGENT_PLUGIN_INDEX_OBS_PREFIX: "REPLACE_WITH_PREFIX"
+  # MARKET_RETRIEVAL_AGENT_TEMPLATE_INDEX_OBS_PREFIX: "REPLACE_WITH_PREFIX"
+  # MARKET_RETRIEVAL_SKILL_INDEX_PATH: "/app/data/skill-index" # 本地目录须可写。
+  # MARKET_RETRIEVAL_PLUGIN_INDEX_PATH: "/app/data/plugin-index"
+  # MARKET_RETRIEVAL_AGENT_GROUP_INDEX_PATH: "/app/data/agent-group-index"
+  # MARKET_RETRIEVAL_AGENT_MCP_INDEX_PATH: "/app/data/agent-mcp-index"
+  # MARKET_RETRIEVAL_AGENT_PLUGIN_INDEX_PATH: "/app/data/agent-plugin-index"
+  # MARKET_RETRIEVAL_AGENT_TEMPLATE_INDEX_PATH: "/app/data/agent-template-index"
+
+  # Skill 审查：本轮只启用人工审核；开启 AI 审查须配齐模型地址、名称和 Secret API Key。
+  # MARKET_SKILL_REVIEW_MODEL_BASE_URL: "https://LLM/v1"
+  # MARKET_SKILL_REVIEW_MODEL_NAME: "REPLACE_WITH_MODEL"
+  # MARKET_SKILL_REVIEW_MODEL_TIMEOUT_SECONDS: "300"
+  # MARKET_SKILL_MODEL_DEFAULT_BASE_URL: "https://LLM/v1" # 非审查 Skill 能力默认模型。
+  # MARKET_SKILL_MODEL_DEFAULT_MODEL: "REPLACE_WITH_MODEL"
+  # MARKET_SKILL_MODEL_DEFAULT_TIMEOUT_SECONDS: "300"
+
+  # Git 导入、API 限流和 ClawHub 协议兼容，按实际需求启用。
+  # MARKET_GIT_SOURCE_SYNC_RATE_LIMIT_PER_MINUTE: "30" # Git 源同步每用户每分钟限额。
+  # MARKET_SKILL_IMPORT_RATE_LIMIT_PER_MINUTE: "30" # Skill 导入每分钟限额，0 关闭。
+  # MARKET_RATE_LIMITING_ENABLED: "false" # API 统一限流总开关。
+  # MARKET_RATE_LIMIT_PUBLIC_READ_PER_MINUTE: "300"
+  # MARKET_RATE_LIMIT_PUBLISH_PER_MINUTE: "10"
+  # MARKET_RATE_LIMIT_BATCH_PER_MINUTE: "5"
+  # MARKET_RATE_LIMIT_AUTH_PER_MINUTE: "20"
+  # MARKET_RATE_LIMIT_DEFAULT_WRITE_PER_MINUTE: "30"
+  # MARKET_RATE_LIMIT_TRUST_FORWARDED: "true" # 仅信任受控反代覆写的客户端 IP 头。
+  # MARKET_CLAWHUB_COMPAT_ENABLED: "true" # ClawHub API 兼容层开关，代码默认 true。
+  # MARKET_CLAWHUB_PLUGIN_TYPE: "skill"  # 兼容层创建的资产类型。
+  # MARKET_CLAWHUB_COMPAT_RATE_LIMIT_PER_MINUTE: "60" # 兼容层每分钟限额。
+
+  # Playground：本轮不部署 Runner/Worker；启用前先交付其 OCP 权限和清单。
+  # SKILL_RUNNER_URL: "http://skill-runner.APP_PROJECT.svc:8900"
+  # PLAYGROUND_DAILY_LIMIT: "20"          # 每用户每日创建会话配额，0 不限。
+  # PLAYGROUND_MULTI_INSTANCE: "false"   # 多实例需 Redis 共享会话状态。
+  # MARKET_PLAYGROUND_MAX_CONCURRENT_SESSIONS: "3" # 用户并发会话上限，0 不限。
+  # MARKET_PLAYGROUND_MSG_RATE_PER_MIN: "10" # 每用户每分钟消息数，0 不限。
+  # MARKET_PLAYGROUND_SESSION_TTL: "7200" # 多实例会话状态兜底有效秒数。
+  # MARKET_PLAYGROUND_UPLOAD_MAX_FILE_BYTES: "5242880" # 单文件上传字节上限。
+
+  # 推荐与热度：完整推荐需要 Redis、Milvus 和独立 Embedding 服务。
+  # MARKET_RECOMMENDER_ENABLED: "false"
+  # MARKET_REC_LIST_TOP_K: "50"          # 推荐首页候选数。
+  # MARKET_REC_PLAZA_CACHE_TOP_K: "30"   # 推荐公开列表缓存条数。
+  # MARKET_REC_MMR_LAMBDA: "0.5"        # 相关性与多样性权重。
+  # MARKET_REC_EMBEDDING_API_BASE_URL: "https://EMBEDDING/v1"
+  # MARKET_REC_EMBEDDING_MODEL: "REPLACE_WITH_MODEL"
+  # MARKET_REC_EMBEDDING_BATCH_SIZE: "16"
+  # MARKET_MILVUS_HOST: "REPLACE_WITH_MILVUS_HOST"
+  # MARKET_MILVUS_PORT: "19530"
+  # MARKET_MILVUS_COLLECTION: "skill_index"
+  # MARKET_MILVUS_USER: "REPLACE_WITH_MILVUS_USER" # 密码放 Secret。
+  # MARKET_REC_REBUILD_ON_STARTUP: "false" # 启动时重建推荐索引。
+  # MARKET_REC_PACKAGE_SYNC_CRON: "30 * * * *"
+  # MARKET_REC_MILVUS_INCREMENTAL_CRON: "0 * * * *"
+  # MARKET_REC_MILVUS_FULL_CRON: "0 3 * * *"
+  # MARKET_REC_REDIS_SYNC_CRON: "15 * * * *"
+  # MARKET_REC_DOWNLOAD_DIR: "/app/data/rec-download" # 推荐包下载目录，须可写。
+  # MARKET_HOT_SCORE_RECOMPUTE_CRON: "0 */2 * * *" # 热度重算计划。
+  # MARKET_HOT_SCORE_RECOMPUTE_ON_STARTUP: "true"
+  # MARKET_HOT_LIST_TOP_K: "100"
+  # MARKET_REDIS_TOPK_INSTALL_KEY: "skill_rec:topk:install" # 推荐快照键。
+  # REDIS_TOPK_K: "0"                   # 快照保留数量，0 为全量。
+  # MARKET_REDIS_USER_SEQ_KEY_PREFIX: "skill_rec:user" # 用户行为序列键前缀。
+  # MARKET_REDIS_TOPK_TTL_SECONDS: "7200" # 推荐快照有效秒数。
+  # MARKET_REDIS_TOPK_INTERVAL_MINUTES: "60" # 推荐快照刷新间隔。
+  # MARKET_REDIS_USER_SEQ_MAX_LEN: "200" # 用户行为序列最大长度。
+  # MARKET_REDIS_USER_SEQ_TTL_SECONDS: "7200" # 用户行为序列有效秒数。
+  # MARKET_MILVUS_BATCH_SIZE: "32"      # Milvus 批量写入条数。
+  # MARKET_MILVUS_INCREMENTAL_INTERVAL_MINUTES: "60" # 增量重建间隔分钟数。
+  # MARKET_MILVUS_FULL_REBUILD_HOUR: "3" # 全量重建小时数。
+  # MARKET_REC_PACKAGE_SYNC_INTERVAL_MINUTES: "60" # 推荐包同步间隔。
+  # MARKET_REC_PLUGIN_TYPES: "REPLACE_WITH_COMMA_SEPARATED_TYPES" # 参与离线推荐的资产类型，逗号分隔。
