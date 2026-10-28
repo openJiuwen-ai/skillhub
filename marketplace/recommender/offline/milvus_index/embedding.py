@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Sequence
 
 import numpy as np
@@ -65,9 +66,14 @@ def _resolve_embedding_settings() -> tuple[str, str, str, int]:
 
 def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) -> Any:
     try:
-        from indexing.embedding import create_openai_embedding_client
+        from indexing.embedding import OFFLINE_EMBED_MIN_INTERVAL_S, create_openai_embedding_client
 
-        return create_openai_embedding_client(base_url=base_url, api_key=api_key, model=model)
+        return create_openai_embedding_client(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            min_interval_s=OFFLINE_EMBED_MIN_INTERVAL_S,
+        )
     except ImportError as exc:
         logger.debug(
             "indexing.embedding unavailable (%s); use local OpenAI embeddings client",
@@ -77,11 +83,13 @@ def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) 
     from openai import OpenAI
 
     class _OpenAIEmbeddingClient:
-        """Minimal mirror of retrieval indexing.embedding.OpenAIEmbeddingClient."""
+        """Fallback when indexing.embedding cannot be imported. Keep backoff in step with it."""
 
-        def __init__(self, *, client: Any, model: str) -> None:
+        def __init__(self, *, client: Any, model: str, min_interval_s: float = 0.8) -> None:
             self._client = client
             self.model = str(model)
+            self.min_interval_s = max(0.0, float(min_interval_s or 0.0))
+            self._next_embed_at = 0.0
 
         def embed_texts(self, texts: Sequence[str], *, batch_size: int = 64) -> list[list[float]]:
             vectors: list[list[float]] = []
@@ -91,22 +99,68 @@ def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) 
                 vectors.extend(self._embed_chunk_with_backoff(chunk))
             return vectors
 
+        def _pace(self) -> None:
+            if self.min_interval_s <= 0:
+                return
+            wait = self._next_embed_at - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._next_embed_at = time.monotonic() + self.min_interval_s
+
         def _embed_chunk_with_backoff(self, chunk: Sequence[str]) -> list[list[float]]:
             if not chunk:
                 return []
-            try:
-                response = self._client.embeddings.create(model=self.model, input=list(chunk))
-            except Exception as exc:
-                message = str(exc).lower()
-                if len(chunk) > 1 and ("batch size" in message or "should not be larger than" in message):
-                    midpoint = max(1, len(chunk) // 2)
-                    return self._embed_chunk_with_backoff(chunk[:midpoint]) + self._embed_chunk_with_backoff(
-                        chunk[midpoint:]
+            second_attempts = 0
+            minute_attempts = 0
+            while True:
+                self._pace()
+                try:
+                    response = self._client.embeddings.create(model=self.model, input=list(chunk))
+                except Exception as exc:
+                    message = str(exc).lower()
+                    split = len(chunk) > 1 and (
+                        "batch size" in message
+                        or "should not be larger than" in message
+                        or "maximum context length" in message
+                        or "modelarts.81001" in message
                     )
-                raise
-            return [[float(value) for value in item.embedding] for item in response.data]
+                    if split:
+                        midpoint = max(1, len(chunk) // 2)
+                        return self._embed_chunk_with_backoff(chunk[:midpoint]) + self._embed_chunk_with_backoff(
+                            chunk[midpoint:]
+                        )
+                    if len(chunk) == 1 and (
+                        "maximum context length" in message or "modelarts.81001" in message
+                    ) and len(chunk[0]) > 1:
+                        return self._embed_chunk_with_backoff([chunk[0][: max(1, len(chunk[0]) // 2)]])
+                    rate_limited = (
+                        getattr(exc, "status_code", None) == 429
+                        or "rate limit" in message
+                        or "too many requests" in message
+                    )
+                    if not rate_limited or self.min_interval_s <= 0:
+                        raise
+                    if "per minute" in message:
+                        minute_attempts += 1
+                        if minute_attempts > 3:
+                            raise
+                        delay = 61.0
+                        attempt = minute_attempts
+                    else:
+                        second_attempts += 1
+                        if second_attempts > 5:
+                            raise
+                        delay = min(8.0, float(2 ** (second_attempts - 1)))
+                        attempt = second_attempts
+                    logger.warning("embedding rate limited, retry %s in %.0fs: %s", attempt, delay, exc)
+                    time.sleep(delay)
+                    continue
+                return [[float(value) for value in item.embedding] for item in response.data]
 
-    return _OpenAIEmbeddingClient(client=OpenAI(base_url=base_url, api_key=api_key), model=model)
+    return _OpenAIEmbeddingClient(
+        client=OpenAI(base_url=base_url, api_key=api_key, max_retries=0),
+        model=model,
+    )
 
 
 def make_embedding_model() -> Any:

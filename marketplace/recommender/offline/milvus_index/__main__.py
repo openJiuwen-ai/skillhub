@@ -31,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
         stats = run_full_rebuild(app_cfg=cfg, batch_size=args.batch_size)
     else:
         stats = run_incremental_index(app_cfg=cfg, batch_size=args.batch_size)
+    if stats is None:
+        logger.info("milvus_index skipped (lock)")
+        return 0
     logger.info("milvus_index done: %s", stats)
     return 0
 

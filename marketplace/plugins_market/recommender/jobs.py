@@ -34,6 +34,9 @@ def run_rec_milvus_incremental() -> Any:
     cfg = _cfg()
     logger.info("recommender job: milvus_incremental begin")
     stats = run_incremental_index(app_cfg=cfg)
+    if stats is None:
+        logger.info("recommender job: milvus_incremental skipped")
+        return None
     logger.info("recommender job: milvus_incremental done stats=%s", stats)
     return stats
 
@@ -42,6 +45,9 @@ def run_rec_milvus_full() -> Any:
     cfg = _cfg()
     logger.info("recommender job: milvus_full begin")
     stats = run_full_rebuild(app_cfg=cfg)
+    if stats is None:
+        logger.info("recommender job: milvus_full skipped")
+        return None
     logger.info("recommender job: milvus_full done stats=%s", stats)
     return stats
 

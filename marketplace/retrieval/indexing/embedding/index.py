@@ -5,6 +5,9 @@ from __future__ import annotations
 import base64
 import importlib
 import json
+import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Protocol, Sequence
@@ -21,6 +24,38 @@ try:
 except ModuleNotFoundError:
     OpenAI = None  # type: ignore[assignment]
 
+logger = logging.getLogger(__name__)
+
+# Offline rebuilds share a small ModelArts embedding cap (4 rps / 100 rpm).
+# 0.8s leaves headroom for online search on the same key. Search clients stay at 0.
+OFFLINE_EMBED_MIN_INTERVAL_S = 0.8
+_RATE_LIMIT_SECOND_ATTEMPTS = 5
+_RATE_LIMIT_MINUTE_ATTEMPTS = 3
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    message = str(exc).lower()
+    return "rate limit" in message or "too many requests" in message or "modelarts.81101" in message
+
+
+def _is_context_too_long(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "maximum context length" in message or "modelarts.81001" in message
+
+
+def _is_batch_too_large(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "batch size" in message or "should not be larger than" in message
+
+
+def _rate_limit_delay(exc: BaseException, attempt: int) -> float:
+    message = str(exc).lower()
+    if "per minute" in message:
+        return 61.0
+    return min(8.0, float(2 ** max(0, attempt - 1)))
+
 
 class EmbeddingClient(Protocol):
     def embed_texts(self, texts: Sequence[str], *, batch_size: int = 64) -> List[List[float]]:
@@ -31,13 +66,16 @@ class EmbeddingClient(Protocol):
 
 
 class OpenAIEmbeddingClient:
-    def __init__(self, *, client: Any, model: str) -> None:
+    def __init__(self, *, client: Any, model: str, min_interval_s: float = 0.0) -> None:
         if client is None:
             raise ValueError("OpenAI client must be provided")
         if not str(model or "").strip():
             raise ValueError("Embedding model must be non-empty")
         self._client = client
         self.model = str(model)
+        self.min_interval_s = max(0.0, float(min_interval_s or 0.0))
+        self._pace_lock = threading.Lock()
+        self._next_embed_at = 0.0
 
     def embed_text(self, text: str) -> List[float]:
         return self.embed_texts([text])[0]
@@ -50,26 +88,74 @@ class OpenAIEmbeddingClient:
             vectors.extend(self._embed_chunk_with_backoff(chunk))
         return vectors
 
+    def _pace(self) -> None:
+        interval = self.min_interval_s
+        if interval <= 0:
+            return
+        with self._pace_lock:
+            wait = self._next_embed_at - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._next_embed_at = time.monotonic() + interval
+
     def _embed_chunk_with_backoff(self, chunk: Sequence[str]) -> List[List[float]]:
         if not chunk:
             return []
-        try:
-            response = self._client.embeddings.create(model=self.model, input=list(chunk))
-        except Exception as exc:
-            message = str(exc).lower()
-            if len(chunk) > 1 and ("batch size" in message or "should not be larger than" in message):
-                midpoint = max(1, len(chunk) // 2)
-                left = self._embed_chunk_with_backoff(chunk[:midpoint])
-                right = self._embed_chunk_with_backoff(chunk[midpoint:])
-                return left + right
-            raise
-        return [[float(value) for value in item.embedding] for item in response.data]
+        second_attempts = 0
+        minute_attempts = 0
+        while True:
+            self._pace()
+            try:
+                response = self._client.embeddings.create(model=self.model, input=list(chunk))
+            except Exception as exc:
+                if len(chunk) > 1 and (_is_batch_too_large(exc) or _is_context_too_long(exc)):
+                    midpoint = max(1, len(chunk) // 2)
+                    left = self._embed_chunk_with_backoff(chunk[:midpoint])
+                    right = self._embed_chunk_with_backoff(chunk[midpoint:])
+                    return left + right
+                if len(chunk) == 1 and _is_context_too_long(exc) and len(chunk[0]) > 1:
+                    shortened = chunk[0][: max(1, len(chunk[0]) // 2)]
+                    logger.warning(
+                        "embedding input too long (%s chars), truncating to %s",
+                        len(chunk[0]),
+                        len(shortened),
+                    )
+                    return self._embed_chunk_with_backoff([shortened])
+                if not _is_rate_limited(exc) or self.min_interval_s <= 0:
+                    raise
+                per_minute = "per minute" in str(exc).lower()
+                if per_minute:
+                    minute_attempts += 1
+                    if minute_attempts > _RATE_LIMIT_MINUTE_ATTEMPTS:
+                        raise
+                    attempt = minute_attempts
+                else:
+                    second_attempts += 1
+                    if second_attempts > _RATE_LIMIT_SECOND_ATTEMPTS:
+                        raise
+                    attempt = second_attempts
+                delay = _rate_limit_delay(exc, attempt)
+                logger.warning("embedding rate limited, retry %s in %.0fs: %s", attempt, delay, exc)
+                time.sleep(delay)
+                continue
+            return [[float(value) for value in item.embedding] for item in response.data]
 
 
-def create_openai_embedding_client(*, base_url: str, api_key: str, model: str) -> OpenAIEmbeddingClient:
+def create_openai_embedding_client(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    min_interval_s: float = 0.0,
+) -> OpenAIEmbeddingClient:
     if OpenAI is None:
         raise RuntimeError("openai package is required to create an OpenAI embedding client")
-    return OpenAIEmbeddingClient(client=OpenAI(base_url=base_url, api_key=api_key), model=model)
+    # SDK retries are immediate and burn the 4 rps cap. This client backs off itself.
+    return OpenAIEmbeddingClient(
+        client=OpenAI(base_url=base_url, api_key=api_key, max_retries=0),
+        model=model,
+        min_interval_s=min_interval_s,
+    )
 
 
 @dataclass(frozen=True)

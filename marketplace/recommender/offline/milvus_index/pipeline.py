@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -21,6 +23,7 @@ from recommender.shared.config import AppConfig, load_config
 from recommender.offline.package_sync.db import ActiveSkillVersion, fetch_active_latest_skills
 
 from .embedding import embed_texts, make_embedding_model, upsert_batch
+from .lock import milvus_index_lock
 from .milvus_client import (
     AliasCutoverStuckError,
     CollectionConfig,
@@ -40,7 +43,13 @@ from .skill_md import (
     embedding_text_from_market_fields,
     extract_skill_from_zip,
 )
-from .state import DEFAULT_STATE_PATH, IndexedAsset, load_state, replace_state
+from .state import (
+    DEFAULT_STATE_PATH,
+    IndexedAsset,
+    load_state_shared,
+    merge_indexed_assets,
+    save_state_shared,
+)
 from .zip_resolver import ensure_skill_zip, resolve_local_zip
 
 logger = logging.getLogger(__name__)
@@ -120,11 +129,14 @@ def _index_skills(
     batch_size: int,
     download_force: bool,
     app_cfg: AppConfig,
+    on_commit: Callable[[dict[str, IndexedAsset], list[str]], None] | None = None,
 ) -> tuple[int, int, dict[str, IndexedAsset], list[_IndexedItem], list[str]]:
     pending_ids: list[str] = []
     pending_categories: list[str] = []
     pending_plugin_types: list[str] = []
     pending_texts: list[str] = []
+    pending_assets: list[IndexedAsset] = []
+    pending_items: list[_IndexedItem] = []
     indexed: dict[str, IndexedAsset] = {}
     items: list[_IndexedItem] = []
     failed_ids: list[str] = []
@@ -134,6 +146,7 @@ def _index_skills(
 
     def flush() -> None:
         nonlocal upserted, pending_ids, pending_categories, pending_plugin_types, pending_texts
+        nonlocal pending_assets, pending_items
         if not pending_ids:
             return
         vectors = embed_texts(model, pending_texts)
@@ -144,41 +157,30 @@ def _index_skills(
             category_ids=pending_categories,
             plugin_types=pending_plugin_types,
         )
+        for asset_id, asset in zip(pending_ids, pending_assets):
+            indexed[asset_id] = asset
+        items.extend(pending_items)
         pending_ids = []
         pending_categories = []
         pending_plugin_types = []
         pending_texts = []
+        pending_assets = []
+        pending_items = []
+        if on_commit is not None:
+            try:
+                on_commit(dict(indexed), list(failed_ids))
+            except Exception:
+                logger.warning("milvus index checkpoint failed", exc_info=True)
 
     for skill in skills:
         try:
             zip_path = resolve_local_zip(download_dir, skill)
             if zip_path is None or download_force:
                 zip_path = ensure_skill_zip(app_cfg, skill, force=download_force)
-
             extract, source = _resolve_embedding_text(skill, zip_path)
-            pending_ids.append(skill.asset_id)
-            pending_categories.append(skill.normalized_category_id)
-            pending_plugin_types.append(skill.normalized_plugin_type)
-            pending_texts.append(extract.embedding_text)
-            indexed[skill.asset_id] = IndexedAsset(
-                version=skill.latest_version,
-                artifact_sha256=skill.artifact_sha256,
-                indexed_at=now,
-                category_id=skill.normalized_category_id,
-                plugin_type=skill.normalized_plugin_type,
-            )
-            items.append(
-                _IndexedItem(
-                    skill=skill,
-                    extract=extract,
-                    zip_path=str(zip_path) if zip_path else None,
-                    source=source,
-                )
-            )
-            if len(pending_ids) >= batch_size:
-                flush()
         except Exception as exc:
-            # No MinIO/OBS package (or unreadable): do not push metadata-only vectors.
+            # Missing package only. Embedding 429 is raised by flush() and must not
+            # be recorded as a bad package, or the next run drops the asset.
             failed += 1
             failed_ids.append(skill.asset_id)
             logger.warning(
@@ -187,6 +189,30 @@ def _index_skills(
                 skill.latest_version,
                 exc,
             )
+            continue
+        pending_ids.append(skill.asset_id)
+        pending_categories.append(skill.normalized_category_id)
+        pending_plugin_types.append(skill.normalized_plugin_type)
+        pending_texts.append(extract.embedding_text)
+        pending_assets.append(
+            IndexedAsset(
+                version=skill.latest_version,
+                artifact_sha256=skill.artifact_sha256,
+                indexed_at=now,
+                category_id=skill.normalized_category_id,
+                plugin_type=skill.normalized_plugin_type,
+            )
+        )
+        pending_items.append(
+            _IndexedItem(
+                skill=skill,
+                extract=extract,
+                zip_path=str(zip_path) if zip_path else None,
+                source=source,
+            )
+        )
+        if len(pending_ids) >= batch_size:
+            flush()
 
     flush()
     return upserted, failed, indexed, items, failed_ids
@@ -332,12 +358,37 @@ def run_incremental_index(
     host: str | None = None,
     port: int | None = None,
     batch_size: int | None = None,
-) -> PipelineStats:
+    skip_lock: bool = False,
+) -> PipelineStats | None:
     app_cfg = app_cfg or load_config()
+    with milvus_index_lock(app_cfg, skip=skip_lock) as handle:
+        if not handle.proceed:
+            return None
+        return _run_incremental_index(
+            app_cfg=app_cfg,
+            state_path=state_path,
+            collection_name=collection_name,
+            host=host,
+            port=port,
+            batch_size=batch_size,
+            redis_client=handle.redis,
+        )
+
+
+def _run_incremental_index(
+    *,
+    app_cfg: AppConfig,
+    state_path: Path = DEFAULT_STATE_PATH,
+    collection_name: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    batch_size: int | None = None,
+    redis_client: Any | None = None,
+) -> PipelineStats:
     batch_size = batch_size or app_cfg.milvus.batch_size
 
     active = fetch_active_latest_skills(app_cfg)
-    state = load_state(state_path)
+    state = load_state_shared(state_path, redis_client)
     plan = plan_incremental(active, state)
     logger.info(
         "Incremental plan: active=%s upsert=%s category_only=%s delete=%s",
@@ -364,6 +415,15 @@ def run_incremental_index(
     if deleted:
         logger.info("Deleted %s offline/removed asset(s) from Milvus", deleted)
 
+    def _checkpoint(newly_indexed_now: dict[str, IndexedAsset], failed_now: list[str]) -> None:
+        merged_now = merge_indexed_assets(
+            [skill.asset_id for skill in plan.active],
+            state,
+            newly_indexed_now,
+            failed_now,
+        )
+        save_state_shared(merged_now, state_path, redis_client)
+
     upserted, failed, newly_indexed, items, failed_ids = _index_skills(
         collection,
         model,
@@ -372,6 +432,7 @@ def run_incremental_index(
         batch_size=batch_size,
         download_force=False,
         app_cfg=app_cfg,
+        on_commit=_checkpoint,
     )
     cat_upserted, cat_indexed, cat_failed = _update_category_only(
         collection,
@@ -388,17 +449,13 @@ def run_incremental_index(
         delete_by_asset_ids(collection, failed_ids)
         logger.info("Removed %s unpackaged/missing-embedding asset(s) from Milvus", len(failed_ids))
 
-    active_by_id = {s.asset_id: s for s in plan.active}
-    failed_set = set(failed_ids)
-    merged: dict[str, IndexedAsset] = {}
-    for asset_id in active_by_id:
-        if asset_id in newly_indexed:
-            merged[asset_id] = newly_indexed[asset_id]
-        elif asset_id in failed_set:
-            continue
-        elif state.get(asset_id) is not None:
-            merged[asset_id] = state.assets[asset_id]
-    replace_state(merged, state_path)
+    merged = merge_indexed_assets(
+        [skill.asset_id for skill in plan.active],
+        state,
+        newly_indexed,
+        failed_ids,
+    )
+    save_state_shared(merged, state_path, redis_client)
 
     stats = PipelineStats(
         mode="incremental",
@@ -428,8 +485,35 @@ def run_full_rebuild(
     port: int | None = None,
     batch_size: int | None = None,
     download_force: bool = False,
-) -> PipelineStats:
+    skip_lock: bool = False,
+) -> PipelineStats | None:
     app_cfg = app_cfg or load_config()
+    with milvus_index_lock(app_cfg, skip=skip_lock) as handle:
+        if not handle.proceed:
+            return None
+        return _run_full_rebuild(
+            app_cfg=app_cfg,
+            state_path=state_path,
+            collection_name=collection_name,
+            host=host,
+            port=port,
+            batch_size=batch_size,
+            download_force=download_force,
+            redis_client=handle.redis,
+        )
+
+
+def _run_full_rebuild(
+    *,
+    app_cfg: AppConfig,
+    state_path: Path = DEFAULT_STATE_PATH,
+    collection_name: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    batch_size: int | None = None,
+    download_force: bool = False,
+    redis_client: Any | None = None,
+) -> PipelineStats:
     batch_size = batch_size or app_cfg.milvus.batch_size
 
     active = fetch_active_latest_skills(app_cfg)
@@ -486,7 +570,7 @@ def run_full_rebuild(
             logger.exception("failed to drop incomplete collection %s", physical)
         raise
 
-    replace_state(indexed, state_path)
+    save_state_shared(indexed, state_path, redis_client)
     if previous and previous != physical:
         try:
             drop_collection_if_exists(previous)
