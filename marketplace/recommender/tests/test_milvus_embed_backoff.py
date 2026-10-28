@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from indexing.embedding.index import OpenAIEmbeddingClient
+_MARKETPLACE = Path(__file__).resolve().parents[2]
+for _path in (_MARKETPLACE, _MARKETPLACE / "retrieval"):
+    _text = str(_path)
+    if _text not in sys.path:
+        sys.path.append(_text)
+
+from indexing.embedding.index import (
+    EmbeddingInputTooLong,
+    EmbeddingRecord,
+    OFFLINE_EMBED_MIN_INTERVAL_S,
+    OpenAIEmbeddingClient,
+    _embed_records_skipping_overlong,
+    configure_offline_embedding_redis,
+)
+from indexing.embedding import index as embedding_index
+from recommender.offline.milvus_index import embedding as rec_embedding
 from recommender.offline.milvus_index import lock as milvus_lock
 from recommender.offline.milvus_index.pipeline import _index_skills
 from recommender.offline.milvus_index.state import (
@@ -60,7 +76,8 @@ def _asset(asset_id: str) -> IndexedAsset:
 
 
 class _Collection:
-    def upsert(self, payload) -> None:
+    @staticmethod
+    def upsert(payload) -> None:
         return None
 
 
@@ -91,11 +108,11 @@ def test_embedding_retries_per_minute_limit(monkeypatch) -> None:
     monkeypatch.setattr("indexing.embedding.index.time.sleep", sleep)
     calls = {"n": 0}
 
-    def create(model, input):
+    def create(model, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("Too many requests, the rate limit is 100 per minute.")
-        return _vectors(list(input))
+        return _vectors(list(kwargs["input"]))
 
     vectors = _client(create, min_interval_s=0.8).embed_texts(["塔罗牌"], batch_size=1)
     assert len(vectors) == 1
@@ -103,7 +120,7 @@ def test_embedding_retries_per_minute_limit(monkeypatch) -> None:
 
 
 def test_online_embedding_does_not_sleep_on_rate_limit() -> None:
-    def create(model, input):
+    def create(model, **kwargs):
         raise RuntimeError("Too many requests, the rate limit is 100 per minute.")
 
     with pytest.raises(RuntimeError, match="per minute"):
@@ -113,31 +130,27 @@ def test_online_embedding_does_not_sleep_on_rate_limit() -> None:
 def test_embedding_splits_context_length_batch() -> None:
     seen: list[int] = []
 
-    def create(model, input):
-        texts = list(input)
-        seen.append(len(texts))
-        if len(texts) > 1:
+    def create(model, **kwargs):
+        batch = list(kwargs["input"])
+        seen.append(len(batch))
+        if len(batch) > 1:
             raise RuntimeError("This model's maximum context length is 8192 tokens. you requested 10289")
-        return _vectors(texts)
+        return _vectors(batch)
 
     vectors = _client(create).embed_texts(["aa", "bb"], batch_size=8)
     assert len(vectors) == 2
     assert seen.count(1) == 2
 
 
-def test_embedding_truncates_single_overlong_text() -> None:
-    seen: list[str] = []
-
-    def create(model, input):
-        text = list(input)[0]
-        seen.append(text)
+def test_embedding_rejects_single_overlong_text() -> None:
+    def create(model, **kwargs):
+        text = list(kwargs["input"])[0]
         if len(text) > 2:
             raise RuntimeError("maximum context length is 8192 tokens")
         return _vectors([text])
 
-    vectors = _client(create).embed_texts(["abcdefgh"], batch_size=1)
-    assert len(vectors) == 1
-    assert seen[-1] == "ab"
+    with pytest.raises(EmbeddingInputTooLong):
+        _client(create).embed_texts(["abcdefgh"], batch_size=1)
 
 
 def test_embedding_paces_offline_batches(monkeypatch) -> None:
@@ -154,8 +167,8 @@ def test_embedding_paces_offline_batches(monkeypatch) -> None:
     monkeypatch.setattr("indexing.embedding.index.time.monotonic", monotonic)
     monkeypatch.setattr("indexing.embedding.index.time.sleep", sleep)
 
-    def create(model, input):
-        return _vectors(list(input))
+    def create(model, **kwargs):
+        return _vectors(list(kwargs["input"]))
 
     _client(create, min_interval_s=0.8).embed_texts(["a", "b"], batch_size=1)
     assert slept == [pytest.approx(0.8)]
@@ -192,7 +205,8 @@ def test_shared_state_uses_redis_when_local_file_is_empty(tmp_path: Path) -> Non
     }
 
     class Redis:
-        def get(self, key):
+        @staticmethod
+        def get(key):
             return json.dumps(remote)
 
     loaded = load_state_shared(tmp_path / "missing.json", Redis())
@@ -222,7 +236,8 @@ def test_shared_state_keeps_newer_local_file(tmp_path: Path) -> None:
     }
 
     class Redis:
-        def get(self, key):
+        @staticmethod
+        def get(key):
             return json.dumps(remote)
 
     loaded = load_state_shared(path, Redis())
@@ -310,3 +325,160 @@ def test_milvus_lock_allows_one_holder(monkeypatch) -> None:
             assert not second.proceed
     with milvus_lock.milvus_index_lock(app) as third:
         assert third.proceed
+
+
+def test_overlong_record_is_omitted_from_embedding_index() -> None:
+    class Client:
+        @staticmethod
+        def embed_texts(texts, batch_size=64):
+            if any(text == "LONG" for text in texts):
+                raise EmbeddingInputTooLong("embedding input too long")
+            return [[1.0, 0.0] for _ in texts]
+
+    kept, vectors = _embed_records_skipping_overlong(
+        [
+            EmbeddingRecord(choice_id="ok", payload="ok", text="short"),
+            EmbeddingRecord(choice_id="bad", payload="bad", text="LONG"),
+        ],
+        Client(),
+        batch_size=8,
+    )
+    assert [record.choice_id for record in kept] == ["ok"]
+    assert len(vectors) == 1
+
+
+def test_index_skips_overlong_text_and_keeps_the_rest(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "recommender.offline.milvus_index.pipeline.resolve_local_zip",
+        lambda download_dir, skill: tmp_path / "ok.zip",
+    )
+
+    def resolve_text(skill, zip_path):
+        text = "TOO_LONG" if skill.asset_id == "long" else "ok"
+        return SimpleNamespace(embedding_text=text), "market_fields"
+
+    monkeypatch.setattr(
+        "recommender.offline.milvus_index.pipeline._resolve_embedding_text",
+        resolve_text,
+    )
+
+    class Model:
+        @staticmethod
+        def embed_texts(texts, batch_size=16):
+            if any(text == "TOO_LONG" for text in texts):
+                raise EmbeddingInputTooLong("embedding input too long")
+            return [[1.0, 0.0] for _ in texts]
+
+    upserted, failed, indexed, _items, failed_ids = _index_skills(
+        _Collection(),
+        Model(),
+        [_skill("long"), _skill("good")],
+        tmp_path,
+        batch_size=8,
+        download_force=False,
+        app_cfg=SimpleNamespace(download_dir=tmp_path),
+    )
+    assert upserted == 1
+    assert failed == 0
+    assert failed_ids == []
+    assert set(indexed) == {"good"}
+
+
+def test_online_and_offline_embedding_clients_are_separate(monkeypatch) -> None:
+    created: list[float] = []
+    monkeypatch.setattr(rec_embedding, "_clients", {})
+    monkeypatch.setattr(
+        rec_embedding,
+        "_resolve_embedding_settings",
+        lambda: ("http://embed", "key", "bge", 16),
+    )
+
+    def create(**kwargs):
+        created.append(float(kwargs["min_interval_s"]))
+        return SimpleNamespace(interval=kwargs["min_interval_s"])
+
+    monkeypatch.setattr(rec_embedding, "_create_openai_embedding_client", create)
+    online = rec_embedding.make_embedding_model()
+    offline = rec_embedding.make_embedding_model(offline=True)
+    assert online is not offline
+    assert created == [0.0, OFFLINE_EMBED_MIN_INTERVAL_S]
+
+
+def test_offline_clients_share_a_minute_budget(monkeypatch) -> None:
+    state = {"n": 0}
+
+    class SlotRedis:
+        @staticmethod
+        def incr(key):
+            state["n"] += 1
+            if state["n"] == 2:
+                return 2
+            return 1
+
+        @staticmethod
+        def expire(key, ttl):
+            return True
+
+        @staticmethod
+        def decr(key):
+            return 0
+
+    slept: list[float] = []
+    configure_offline_embedding_redis(SlotRedis())
+    monkeypatch.setattr(embedding_index, "OFFLINE_EMBED_MAX_PER_MINUTE", 1)
+    monkeypatch.setattr(embedding_index.time, "sleep", slept.append)
+    monkeypatch.setattr(embedding_index.time, "time", lambda: 1_700_000_060.0)
+
+    def create(model, **kwargs):
+        return _vectors(list(kwargs["input"]))
+
+    client = _client(create, min_interval_s=0.8)
+    try:
+        client.embed_texts(["a"], batch_size=1)
+        client.embed_texts(["b"], batch_size=1)
+    finally:
+        configure_offline_embedding_redis(None)
+    assert slept
+    assert slept[0] > 0
+
+
+def test_shared_state_falls_back_when_local_file_is_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text("{", encoding="utf-8")
+    remote = {
+        "updated_at": "2026-10-27T00:00:00+00:00",
+        "assets": {
+            "deckaura": {
+                "version": "1.0.4",
+                "artifact_sha256": "abc",
+                "indexed_at": "2026-10-27T00:00:00+00:00",
+                "category_id": "",
+                "plugin_type": "skill",
+            }
+        },
+    }
+
+    class Redis:
+        @staticmethod
+        def get(key):
+            return json.dumps(remote)
+
+    loaded = load_state_shared(path, Redis())
+    assert set(loaded.assets) == {"deckaura"}
+
+
+def test_corrupt_state_without_redis_raises(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text("{", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        load_state_shared(path, None)
+
+
+def test_milvus_lock_error_is_not_a_skip(monkeypatch) -> None:
+    def fail(cfg):
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(milvus_lock, "create_redis_client", fail)
+    with pytest.raises(milvus_lock.MilvusLockError):
+        with milvus_lock.milvus_index_lock(SimpleNamespace(redis=object())):
+            pass

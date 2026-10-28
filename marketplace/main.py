@@ -301,6 +301,13 @@ async def lifespan(app: FastAPI):
             logger.warning("retrieval: Redis unavailable (%s), reload consumer disabled", exc)
             redis_client = None
 
+    try:
+        from indexing.embedding.index import configure_offline_embedding_redis  # type: ignore[import]
+
+        configure_offline_embedding_redis(redis_client)
+    except Exception as exc:
+        logger.warning("retrieval: offline embedding rate limit not configured: %s", exc)
+
     uri_scheme = _storage_uri_scheme(storage)
 
     async def _warm_start_one_group(group: str, prefix: str, direct_path: str = "") -> None:

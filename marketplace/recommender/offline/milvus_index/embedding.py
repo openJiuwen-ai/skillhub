@@ -12,7 +12,7 @@ from recommender.shared.config import _env
 
 logger = logging.getLogger(__name__)
 
-_client: Any | None = None
+_clients: dict[float, Any] = {}
 _batch_size: int = 16
 
 
@@ -64,15 +64,37 @@ def _resolve_embedding_settings() -> tuple[str, str, str, int]:
     return base_url, api_key or "dummy", model, max(1, batch_size)
 
 
-def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) -> Any:
+def _fallback_should_split(message: str) -> bool:
+    if "batch size" in message or "should not be larger than" in message:
+        return True
+    return "maximum context length" in message or "modelarts.81001" in message
+
+
+def _fallback_context_too_long(message: str) -> bool:
+    return "maximum context length" in message or "modelarts.81001" in message
+
+
+def _fallback_rate_limited(exc: BaseException, message: str) -> bool:
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    return "rate limit" in message or "too many requests" in message or "modelarts.81101" in message
+
+
+def _create_openai_embedding_client(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    min_interval_s: float = 0.0,
+) -> Any:
     try:
-        from indexing.embedding import OFFLINE_EMBED_MIN_INTERVAL_S, create_openai_embedding_client
+        from indexing.embedding import create_openai_embedding_client
 
         return create_openai_embedding_client(
             base_url=base_url,
             api_key=api_key,
             model=model,
-            min_interval_s=OFFLINE_EMBED_MIN_INTERVAL_S,
+            min_interval_s=min_interval_s,
         )
     except ImportError as exc:
         logger.debug(
@@ -85,7 +107,7 @@ def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) 
     class _OpenAIEmbeddingClient:
         """Fallback when indexing.embedding cannot be imported. Keep backoff in step with it."""
 
-        def __init__(self, *, client: Any, model: str, min_interval_s: float = 0.8) -> None:
+        def __init__(self, *, client: Any, model: str, min_interval_s: float = 0.0) -> None:
             self._client = client
             self.model = str(model)
             self.min_interval_s = max(0.0, float(min_interval_s or 0.0))
@@ -118,38 +140,25 @@ def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) 
                     response = self._client.embeddings.create(model=self.model, input=list(chunk))
                 except Exception as exc:
                     message = str(exc).lower()
-                    split = len(chunk) > 1 and (
-                        "batch size" in message
-                        or "should not be larger than" in message
-                        or "maximum context length" in message
-                        or "modelarts.81001" in message
-                    )
-                    if split:
+                    if len(chunk) > 1 and _fallback_should_split(message):
                         midpoint = max(1, len(chunk) // 2)
                         return self._embed_chunk_with_backoff(chunk[:midpoint]) + self._embed_chunk_with_backoff(
                             chunk[midpoint:]
                         )
-                    if len(chunk) == 1 and (
-                        "maximum context length" in message or "modelarts.81001" in message
-                    ) and len(chunk[0]) > 1:
-                        return self._embed_chunk_with_backoff([chunk[0][: max(1, len(chunk[0]) // 2)]])
-                    rate_limited = (
-                        getattr(exc, "status_code", None) == 429
-                        or "rate limit" in message
-                        or "too many requests" in message
-                    )
-                    if not rate_limited or self.min_interval_s <= 0:
-                        raise
+                    if len(chunk) == 1 and _fallback_context_too_long(message):
+                        raise RuntimeError(f"embedding input too long ({len(chunk[0])} chars)") from exc
+                    if not _fallback_rate_limited(exc, message) or self.min_interval_s <= 0:
+                        raise exc
                     if "per minute" in message:
                         minute_attempts += 1
                         if minute_attempts > 3:
-                            raise
+                            raise exc
                         delay = 61.0
                         attempt = minute_attempts
                     else:
                         second_attempts += 1
                         if second_attempts > 5:
-                            raise
+                            raise exc
                         delay = min(8.0, float(2 ** (second_attempts - 1)))
                         attempt = second_attempts
                     logger.warning("embedding rate limited, retry %s in %.0fs: %s", attempt, delay, exc)
@@ -160,20 +169,45 @@ def _create_openai_embedding_client(*, base_url: str, api_key: str, model: str) 
     return _OpenAIEmbeddingClient(
         client=OpenAI(base_url=base_url, api_key=api_key, max_retries=0),
         model=model,
+        min_interval_s=min_interval_s,
     )
 
 
-def make_embedding_model() -> Any:
-    """Build (and cache) an OpenAI-compatible embedding client."""
-    global _client, _batch_size
-    if _client is not None:
-        return _client
+def make_embedding_model(*, offline: bool = False) -> Any:
+    """Build (and cache) an OpenAI-compatible embedding client.
+
+    Online callers, including POST /by_queries, use offline=False and do not
+    sleep on rate limits. Offline index jobs use a separate paced client.
+    """
+    global _batch_size
+    interval = 0.0
+    if offline:
+        try:
+            from indexing.embedding.index import OFFLINE_EMBED_MIN_INTERVAL_S
+
+            interval = float(OFFLINE_EMBED_MIN_INTERVAL_S)
+        except ImportError:
+            interval = 0.8
+    cached = _clients.get(interval)
+    if cached is not None:
+        return cached
 
     base_url, api_key, model, batch_size = _resolve_embedding_settings()
     _batch_size = batch_size
-    logger.info("Using recommender embedding API model=%s base_url=%s", model, base_url)
-    _client = _create_openai_embedding_client(base_url=base_url, api_key=api_key, model=model)
-    return _client
+    logger.info(
+        "Using recommender embedding API model=%s base_url=%s offline=%s",
+        model,
+        base_url,
+        offline,
+    )
+    client = _create_openai_embedding_client(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        min_interval_s=interval,
+    )
+    _clients[interval] = client
+    return client
 
 
 def embed_texts(model: Any, texts: list[str]) -> np.ndarray:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,15 +69,32 @@ def _load_redis_state(redis_client: Any) -> IndexState | None:
 
 
 def load_state_shared(path: Path = DEFAULT_STATE_PATH, redis_client: Any | None = None) -> IndexState:
-    """Prefer the newer of the local file and the shared Redis copy."""
-    local = load_state(path)
-    if redis_client is None:
-        return local
+    """Prefer the newer of the local file and the shared Redis copy.
+
+    A truncated local file falls back to Redis. If neither copy can be read, the
+    error is raised so a later save cannot replace a good Redis copy with empty.
+    """
+    local_error: Exception | None = None
     try:
-        remote = _load_redis_state(redis_client)
-    except Exception as exc:
-        logger.warning("load milvus index state from redis failed: %s", exc)
-        return local
+        local = load_state(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("milvus index state file unreadable %s: %s", path, exc)
+        local = IndexState.empty()
+        local_error = exc
+
+    remote: IndexState | None = None
+    if redis_client is not None:
+        try:
+            remote = _load_redis_state(redis_client)
+        except Exception as exc:
+            logger.warning("load milvus index state from redis failed: %s", exc)
+            if local_error is not None:
+                raise local_error from exc
+            return local
+    if local_error is not None:
+        if remote is not None:
+            return remote
+        raise local_error
     if remote is None:
         return local
     if not local.assets:
@@ -115,7 +133,10 @@ def save_state(state: IndexState, path: Path = DEFAULT_STATE_PATH) -> None:
             asset_id: asdict(row) for asset_id, row in sorted(state.assets.items())
         },
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def replace_state(active: dict[str, IndexedAsset], path: Path = DEFAULT_STATE_PATH) -> IndexState:

@@ -27,10 +27,48 @@ except ModuleNotFoundError:
 logger = logging.getLogger(__name__)
 
 # Offline rebuilds share a small ModelArts embedding cap (4 rps / 100 rpm).
-# 0.8s leaves headroom for online search on the same key. Search clients stay at 0.
+# 0.8s is the per-process gap. The Redis counter caps all offline callers together
+# and leaves the rest of the minute for online search. Search clients stay at 0.
 OFFLINE_EMBED_MIN_INTERVAL_S = 0.8
+OFFLINE_EMBED_MAX_PER_MINUTE = 80
 _RATE_LIMIT_SECOND_ATTEMPTS = 5
 _RATE_LIMIT_MINUTE_ATTEMPTS = 3
+_slot_redis: Any | None = None
+
+
+class EmbeddingInputTooLong(Exception):
+    """One input is longer than the embedding model's context window."""
+
+
+def configure_offline_embedding_redis(redis_client: Any | None) -> None:
+    """Share one minute budget across retrieval rebuild and recommender indexing."""
+    global _slot_redis
+    _slot_redis = redis_client
+
+
+def _wait_shared_embedding_slot() -> None:
+    client = _slot_redis
+    if client is None:
+        return
+    while True:
+        bucket = int(time.time()) // 60
+        key = f"embedding:offline:rpm:{bucket}"
+        try:
+            count = int(client.incr(key))
+            if count == 1:
+                client.expire(key, 120)
+        except Exception as exc:
+            logger.warning("embedding shared rate limit unavailable: %s", exc)
+            return
+        if count <= OFFLINE_EMBED_MAX_PER_MINUTE:
+            return
+        try:
+            client.decr(key)
+        except Exception as exc:
+            logger.warning("embedding shared rate limit release failed: %s", exc)
+        delay = 60 - (time.time() % 60) + 0.05
+        logger.info("embedding shared minute cap hit, wait %.0fs", delay)
+        time.sleep(delay)
 
 
 def _is_rate_limited(exc: BaseException) -> bool:
@@ -48,6 +86,14 @@ def _is_context_too_long(exc: BaseException) -> bool:
 def _is_batch_too_large(exc: BaseException) -> bool:
     message = str(exc).lower()
     return "batch size" in message or "should not be larger than" in message
+
+
+def _is_single_chunk(chunk: Sequence[str]) -> bool:
+    return len(chunk) == 1
+
+
+def _should_split_chunk(exc: BaseException) -> bool:
+    return _is_batch_too_large(exc) or _is_context_too_long(exc)
 
 
 def _rate_limit_delay(exc: BaseException, attempt: int) -> float:
@@ -92,6 +138,7 @@ class OpenAIEmbeddingClient:
         interval = self.min_interval_s
         if interval <= 0:
             return
+        _wait_shared_embedding_slot()
         with self._pace_lock:
             wait = self._next_embed_at - time.monotonic()
             if wait > 0:
@@ -108,36 +155,31 @@ class OpenAIEmbeddingClient:
             try:
                 response = self._client.embeddings.create(model=self.model, input=list(chunk))
             except Exception as exc:
-                if len(chunk) > 1 and (_is_batch_too_large(exc) or _is_context_too_long(exc)):
+                if len(chunk) > 1 and _should_split_chunk(exc):
                     midpoint = max(1, len(chunk) // 2)
                     left = self._embed_chunk_with_backoff(chunk[:midpoint])
                     right = self._embed_chunk_with_backoff(chunk[midpoint:])
                     return left + right
-                if len(chunk) == 1 and _is_context_too_long(exc) and len(chunk[0]) > 1:
-                    shortened = chunk[0][: max(1, len(chunk[0]) // 2)]
-                    logger.warning(
-                        "embedding input too long (%s chars), truncating to %s",
-                        len(chunk[0]),
-                        len(shortened),
-                    )
-                    return self._embed_chunk_with_backoff([shortened])
-                if not _is_rate_limited(exc) or self.min_interval_s <= 0:
-                    raise
-                per_minute = "per minute" in str(exc).lower()
-                if per_minute:
-                    minute_attempts += 1
-                    if minute_attempts > _RATE_LIMIT_MINUTE_ATTEMPTS:
-                        raise
-                    attempt = minute_attempts
-                else:
-                    second_attempts += 1
-                    if second_attempts > _RATE_LIMIT_SECOND_ATTEMPTS:
-                        raise
-                    attempt = second_attempts
-                delay = _rate_limit_delay(exc, attempt)
-                logger.warning("embedding rate limited, retry %s in %.0fs: %s", attempt, delay, exc)
-                time.sleep(delay)
-                continue
+                if _is_single_chunk(chunk) and _is_context_too_long(exc):
+                    logger.warning("embedding input too long (%s chars), skipping", len(chunk[0]))
+                    raise EmbeddingInputTooLong(f"embedding input too long ({len(chunk[0])} chars)") from exc
+                if _is_rate_limited(exc) and self.min_interval_s > 0:
+                    per_minute = "per minute" in str(exc).lower()
+                    if per_minute:
+                        minute_attempts += 1
+                        if minute_attempts > _RATE_LIMIT_MINUTE_ATTEMPTS:
+                            raise exc
+                        attempt = minute_attempts
+                    else:
+                        second_attempts += 1
+                        if second_attempts > _RATE_LIMIT_SECOND_ATTEMPTS:
+                            raise exc
+                        attempt = second_attempts
+                    delay = _rate_limit_delay(exc, attempt)
+                    logger.warning("embedding rate limited, retry %s in %.0fs: %s", attempt, delay, exc)
+                    time.sleep(delay)
+                    continue
+                raise exc
             return [[float(value) for value in item.embedding] for item in response.data]
 
 
@@ -253,6 +295,38 @@ def deserialize_faiss_index(index: EmbeddingIndex):
     return None
 
 
+def _embed_records_skipping_overlong(
+    records: Sequence[EmbeddingRecord],
+    embedding_client: EmbeddingClient,
+    *,
+    batch_size: int,
+) -> tuple[list[EmbeddingRecord], list]:
+    """Embed records. A single overlong input is omitted instead of truncated."""
+    texts = [str(record.text) for record in records]
+    try:
+        vectors = list(embedding_client.embed_texts(texts, batch_size=batch_size))
+    except EmbeddingInputTooLong:
+        logger.info("embedding batch contains an overlong input, retrying one by one")
+        kept: list[EmbeddingRecord] = []
+        vectors = []
+        for record in records:
+            try:
+                vectors.append(embedding_client.embed_texts([str(record.text)], batch_size=1)[0])
+            except EmbeddingInputTooLong:
+                logger.warning(
+                    "skip embedding, input too long choice_id=%s payload=%s chars=%s",
+                    record.choice_id,
+                    record.payload,
+                    len(record.text),
+                )
+                continue
+            kept.append(record)
+        return kept, vectors
+    if len(vectors) != len(records):
+        raise ValueError(f"Embedding client returned {len(vectors)} vectors for {len(records)} records")
+    return list(records), vectors
+
+
 def build_embedding_index(
     *,
     records: Sequence[EmbeddingRecord],
@@ -268,13 +342,21 @@ def build_embedding_index(
             records=(),
             metadata=dict(metadata or {}),
         )
-    texts = [str(record.text) for record in records]
-    vectors = embedding_client.embed_texts(texts, batch_size=max(1, int(batch_size)))
-    if len(vectors) != len(records):
-        raise ValueError(f"Embedding client returned {len(vectors)} vectors for {len(records)} records")
+    kept_records, vectors = _embed_records_skipping_overlong(
+        list(records),
+        embedding_client,
+        batch_size=max(1, int(batch_size)),
+    )
+    if not vectors:
+        return EmbeddingIndex(
+            model_name=str(model_name or ""),
+            dimensions=0,
+            records=(),
+            metadata=dict(metadata or {}),
+        )
     indexed: List[IndexedEmbeddingRecord] = []
     dimensions = len(vectors[0]) if vectors else 0
-    for record, vector in zip(records, vectors):
+    for record, vector in zip(kept_records, vectors):
         if len(vector) != dimensions:
             raise ValueError("Embedding vectors must have consistent dimensions")
         indexed.append(

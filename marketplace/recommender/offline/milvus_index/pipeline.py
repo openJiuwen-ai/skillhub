@@ -120,6 +120,55 @@ def _resolve_embedding_text(
         return extract, "market_fields"
 
 
+def _share_offline_embedding_budget(redis_client: Any | None) -> None:
+    if redis_client is None:
+        return
+    try:
+        from indexing.embedding.index import configure_offline_embedding_redis
+
+        configure_offline_embedding_redis(redis_client)
+    except Exception as exc:
+        logger.warning("offline embedding rate limit not configured: %s", exc)
+
+
+def _is_embedding_input_too_long(exc: BaseException) -> bool:
+    try:
+        from indexing.embedding.index import EmbeddingInputTooLong
+    except ImportError:
+        EmbeddingInputTooLong = ()  # type: ignore[misc,assignment]
+    if EmbeddingInputTooLong and isinstance(exc, EmbeddingInputTooLong):
+        return True
+    return "embedding input too long" in str(exc).lower()
+
+
+def _embed_pending_texts(model: Any, texts: list[str], asset_ids: list[str]) -> tuple[np.ndarray, list[int]]:
+    """Return vectors and the indexes that were embedded. Overlong inputs are omitted."""
+    try:
+        return embed_texts(model, texts), list(range(len(texts)))
+    except Exception as exc:
+        if not _is_embedding_input_too_long(exc):
+            raise
+        logger.info("embedding batch contains an overlong input, retrying one by one")
+    rows = []
+    keep: list[int] = []
+    for index, text in enumerate(texts):
+        try:
+            rows.append(embed_texts(model, [text])[0])
+        except Exception as exc:
+            if not _is_embedding_input_too_long(exc):
+                raise
+            logger.warning(
+                "skip embedding, input too long asset_id=%s chars=%s",
+                asset_ids[index],
+                len(text),
+            )
+            continue
+        keep.append(index)
+    if not rows:
+        return np.zeros((0, 0), dtype=np.float32), []
+    return np.vstack([np.asarray(row, dtype=np.float32) for row in rows]), keep
+
+
 def _index_skills(
     collection,
     model,
@@ -149,17 +198,18 @@ def _index_skills(
         nonlocal pending_assets, pending_items
         if not pending_ids:
             return
-        vectors = embed_texts(model, pending_texts)
-        upserted += upsert_batch(
-            collection,
-            pending_ids,
-            vectors,
-            category_ids=pending_categories,
-            plugin_types=pending_plugin_types,
-        )
-        for asset_id, asset in zip(pending_ids, pending_assets):
-            indexed[asset_id] = asset
-        items.extend(pending_items)
+        vectors, keep = _embed_pending_texts(model, pending_texts, pending_ids)
+        if keep:
+            upserted += upsert_batch(
+                collection,
+                [pending_ids[index] for index in keep],
+                vectors,
+                category_ids=[pending_categories[index] for index in keep],
+                plugin_types=[pending_plugin_types[index] for index in keep],
+            )
+            for index in keep:
+                indexed[pending_ids[index]] = pending_assets[index]
+            items.extend(pending_items[index] for index in keep)
         pending_ids = []
         pending_categories = []
         pending_plugin_types = []
@@ -364,6 +414,7 @@ def run_incremental_index(
     with milvus_index_lock(app_cfg, skip=skip_lock) as handle:
         if not handle.proceed:
             return None
+        _share_offline_embedding_budget(handle.redis)
         return _run_incremental_index(
             app_cfg=app_cfg,
             state_path=state_path,
@@ -398,7 +449,7 @@ def _run_incremental_index(
         len(plan.to_delete),
     )
 
-    model = make_embedding_model()
+    model = make_embedding_model(offline=True)
     dim = int(embed_texts(model, ["warmup"]).shape[1])
     cfg = _resolve_collection_cfg(
         dim,
@@ -491,6 +542,7 @@ def run_full_rebuild(
     with milvus_index_lock(app_cfg, skip=skip_lock) as handle:
         if not handle.proceed:
             return None
+        _share_offline_embedding_budget(handle.redis)
         return _run_full_rebuild(
             app_cfg=app_cfg,
             state_path=state_path,
@@ -520,7 +572,7 @@ def _run_full_rebuild(
     plan = plan_full(active)
     logger.info("Full rebuild: active=%s", len(plan.active))
 
-    model = make_embedding_model()
+    model = make_embedding_model(offline=True)
     dim = int(embed_texts(model, ["warmup"]).shape[1])
     cfg = _resolve_collection_cfg(
         dim,
