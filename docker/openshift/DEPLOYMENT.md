@@ -90,9 +90,19 @@ docker buildx imagetools inspect REGISTRY/PROJECT/skillhub-frontend:VERSION-ocp
 
 从推送结果或最后两条命令的 `Digest` 记录最终镜像引用，例如 `REGISTRY/PROJECT/skillhub-backend@sha256:<实际摘要>`。OCP Deployment 中填入对应的**最终镜像摘要**，不要填基础镜像摘要。建议同时记录构建源码提交、架构、两张镜像的标签和摘要，以及上述版本检查结果。
 
-四个 OpenShift Dockerfile 的基础镜像均使用 `版本标签@多架构摘要`；本阶段只构建 Backend/Frontend。三个 Python 镜像保留完整 `dnf`，供后续在派生镜像**构建阶段**安装 RPM，不在运行中的 Pod 内安装。企业镜像源可传 `--build-arg UBI_IMAGE=<带摘要的 UBI 9 standard 镜像>`，Python 包源可传 `--build-arg INDEX_URL=<包源地址>`；构建机还需能访问 npm 包源。基础镜像摘要固定不等于整个构建可复现：RPM 仓库和部分 Python 依赖仍会变化，部署时应使用本次已推送的最终摘要。
+四个 OpenShift Dockerfile 的基础镜像均使用 `版本标签@多架构摘要`；本阶段只构建 Backend/Frontend。三个 Python 镜像保留完整 `dnf`，供后续在派生镜像**构建阶段**安装 RPM，不在运行中的 Pod 内安装。企业镜像源可传 `--build-arg UBI_IMAGE=<带摘要的 UBI 9 standard 镜像>`。Python 包源默认使用公开 PyPI；其他包源（包括企业认证源）只通过 BuildKit Secret 在构建步骤中提供，不写入最终运行镜像的环境变量或镜像 history。构建机还需能访问 npm 包源。基础镜像摘要固定不等于整个构建可复现：RPM 仓库和部分 Python 依赖仍会变化，部署时应使用本次已推送的最终摘要。
 
-默认前端按根路径 `/` 构建。只有决定使用 `/hub` 前缀时，才在前端 `docker build` 命令中同时加入 `--build-arg FRONTEND_BASE_PATH=hub --build-arg VITE_API_BASE_URL=/hub/api/v1`，并验证对应 Route/回调；首次试部署建议使用默认根路径。`BACKEND_URL`、`BACKEND_PORT` 是容器启动时填入 Nginx 模板的变量，修改它们只需更新 Frontend Deployment 并创建新 Pod，无须重建前端静态资源。
+需要使用其他 Python 包源时，将完整的索引地址（包括认证信息）保存到构建机上的临时文件，并用 BuildKit Secret 传入，例如：
+
+```sh
+docker buildx build --secret id=index_url,src=/path/to/private-index-url \
+  -f docker/openshift/dockerfiles/Dockerfile.backend \
+  --target runtime -t REGISTRY/PROJECT/skillhub-backend:VERSION-ocp .
+```
+
+三个 Python Dockerfile 默认使用公开 PyPI，只在带 `RUN --mount=type=secret,id=index_url` 的构建步骤读取该文件覆盖默认值；Secret 不会进入 `runtime` 镜像层、镜像 history 或运行时环境变量。不要将该文件放进 Git，也不要在构建日志中打印其内容。
+
+默认前端按根路径 `/` 构建。只有决定使用 `/hub` 前缀时，才在前端 `docker build` 命令中同时加入 `--build-arg FRONTEND_BASE_PATH=hub --build-arg VITE_API_BASE_URL=/hub/api/v1`，并验证对应 Route/回调；首次试部署建议使用默认根路径。`BACKEND_URL`、`BACKEND_PORT` 是容器启动时填入 Nginx 模板的变量，`DNS_RESOLVER` 可选，未设置时入口脚本从 `/etc/resolv.conf` 读取第一个 nameserver。修改这些变量只需更新 Frontend Deployment 并创建新 Pod，无须重建前端静态资源。
 
 ## 3. 在 OCP 页面创建项目与凭据
 

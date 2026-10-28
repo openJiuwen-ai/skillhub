@@ -2,10 +2,7 @@
 ARG UBI_IMAGE=registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f652c915b3e052256ddf66ee95cd04dc0362191f302c4e94a
 
 FROM ${UBI_IMAGE} AS derivative-base
-ARG INDEX_URL=https://pypi.org/simple
-ENV PIP_INDEX_URL=${INDEX_URL} \
-    UV_INDEX_URL=${INDEX_URL} \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
@@ -16,12 +13,20 @@ ENV PIP_INDEX_URL=${INDEX_URL} \
 
 RUN dnf install -y python3.11 python3.11-pip git ca-certificates \
     && dnf clean all
-RUN python3.11 -m pip install --no-cache-dir uv==0.8.15
+RUN --mount=type=secret,id=index_url,target=/run/secrets/index_url,required=false \
+    index_url="https://pypi.org/simple"; \
+    if [ -s /run/secrets/index_url ]; then index_url="$(cat /run/secrets/index_url)"; fi; \
+    PIP_INDEX_URL="${index_url}" \
+      python3.11 -m pip install --no-cache-dir uv==0.8.15
 
 COPY skill-runner/ /app/skill_runner/
 WORKDIR /app/skill_runner
 # The upstream runner does not commit uv.lock; retain its dependency resolution.
-RUN uv sync --python /usr/bin/python3.11 --no-dev --no-cache
+RUN --mount=type=secret,id=index_url,target=/run/secrets/index_url,required=false \
+    index_url="https://pypi.org/simple"; \
+    if [ -s /run/secrets/index_url ]; then index_url="$(cat /run/secrets/index_url)"; fi; \
+    PIP_INDEX_URL="${index_url}" UV_INDEX_URL="${index_url}" \
+      uv sync --python /usr/bin/python3.11 --no-dev --no-cache
 
 ENV PATH=/app/.venv/bin:${PATH}
 WORKDIR /app

@@ -206,7 +206,7 @@ Node 仅用于构建，不进入最终前端镜像。镜像可部署 OpenShift �
 
 后续完整交付可分别发布 `:<版本>-ocp` 和 `:<版本>-ocp-base`，不覆盖原 `latest` 标签。本轮试部署只要求发布 Backend `runtime` 镜像；该镜像保留完整 DNF，客户也可在派生构建时显式切换 `USER 0` 后安装 RPM。派生后运行必须强制非 root；OCP Deployment 只能填写 runtime 镜像 digest，不把 root 构建目标作为工作负载镜像导入。
 
-构建阶段禁止 UID 0 的平台无法通过这一方式安装系统 RPM，需要另行设计。额外仓库凭据通过构建 secret 或受控配置提供，不进入镜像层。前端不提供 DNF 派生目标。
+构建阶段禁止 UID 0 的平台无法通过这一方式安装系统 RPM，需要另行设计。Python 包源的默认地址只在构建步骤中使用；需要认证的额外仓库通过 BuildKit Secret 提供，三个 Python Dockerfile 在 `RUN --mount=type=secret,id=index_url` 步骤读取，不把包源地址或凭据写入最终镜像的 `ENV`。`INDEX_URL` 不得包含账号或 Token。前端不提供 DNF 派生目标。
 
 ## 6. Runner 与 Worker：构建和运行职责
 

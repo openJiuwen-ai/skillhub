@@ -1,10 +1,7 @@
-upstream backend {
-    server ${BACKEND_URL}:${BACKEND_PORT};
-}
-
 server {
     listen 9002;
     server_name _;
+    resolver ${DNS_RESOLVER} valid=30s ipv6=off;
     charset utf-8;
     root /usr/share/nginx/html;
     index index.html;
@@ -15,7 +12,8 @@ server {
 
     location /hub/api {
         rewrite ^/hub(/api.*)$ $1 break;
-        proxy_pass http://backend;
+        set $backend_endpoint http://${BACKEND_URL}:${BACKEND_PORT};
+        proxy_pass $backend_endpoint;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -37,7 +35,8 @@ server {
         add_header Cache-Control "public, immutable";
     }
     location /api/ {
-        proxy_pass http://backend;
+        set $backend_endpoint http://${BACKEND_URL}:${BACKEND_PORT};
+        proxy_pass $backend_endpoint;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
