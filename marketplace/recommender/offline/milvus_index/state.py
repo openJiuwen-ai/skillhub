@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from recommender.shared.config import DATA_ROOT
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_STATE_PATH = DATA_ROOT / "milvus_index_state.json"
+MILVUS_INDEX_STATE_KEY = "recommender:milvus:index_state"
 
 
 @dataclass
@@ -34,10 +40,7 @@ class IndexState:
         return self.assets.get(asset_id)
 
 
-def load_state(path: Path = DEFAULT_STATE_PATH) -> IndexState:
-    if not path.exists():
-        return IndexState.empty()
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _state_from_payload(payload: dict) -> IndexState:
     assets: dict[str, IndexedAsset] = {}
     for asset_id, row in (payload.get("assets") or {}).items():
         assets[str(asset_id)] = IndexedAsset(
@@ -50,6 +53,78 @@ def load_state(path: Path = DEFAULT_STATE_PATH) -> IndexState:
     return IndexState(updated_at=str(payload.get("updated_at") or ""), assets=assets)
 
 
+def load_state(path: Path = DEFAULT_STATE_PATH) -> IndexState:
+    if not path.exists():
+        return IndexState.empty()
+    return _state_from_payload(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _load_redis_state(redis_client: Any) -> IndexState | None:
+    raw = redis_client.get(MILVUS_INDEX_STATE_KEY)
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return _state_from_payload(json.loads(raw))
+
+
+def load_state_shared(path: Path = DEFAULT_STATE_PATH, redis_client: Any | None = None) -> IndexState:
+    """Prefer the newer of the local file and the shared Redis copy.
+
+    A truncated local file falls back to Redis. If neither copy can be read, the
+    error is raised so a later save cannot replace a good Redis copy with empty.
+    """
+    local_error: Exception | None = None
+    try:
+        local = load_state(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("milvus index state file unreadable %s: %s", path, exc)
+        local = IndexState.empty()
+        local_error = exc
+
+    remote: IndexState | None = None
+    if redis_client is not None:
+        try:
+            remote = _load_redis_state(redis_client)
+        except Exception as exc:
+            logger.warning("load milvus index state from redis failed: %s", exc)
+            if local_error is not None:
+                raise local_error from exc
+            return local
+    if local_error is not None:
+        if remote is not None:
+            return remote
+        raise local_error
+    if remote is None:
+        return local
+    if not local.assets:
+        return remote
+    if (remote.updated_at or "") >= (local.updated_at or ""):
+        return remote
+    return local
+
+
+def merge_indexed_assets(
+    active_ids: list[str],
+    previous: IndexState,
+    newly_indexed: dict[str, IndexedAsset],
+    failed_ids: list[str],
+) -> dict[str, IndexedAsset]:
+    """Keep prior successes, add this run's commits, drop confirmed package failures."""
+    failed = set(failed_ids)
+    merged: dict[str, IndexedAsset] = {}
+    for asset_id in active_ids:
+        if asset_id in newly_indexed:
+            merged[asset_id] = newly_indexed[asset_id]
+        elif asset_id in failed:
+            continue
+        else:
+            kept = previous.get(asset_id)
+            if kept is not None:
+                merged[asset_id] = kept
+    return merged
+
+
 def save_state(state: IndexState, path: Path = DEFAULT_STATE_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -58,7 +133,10 @@ def save_state(state: IndexState, path: Path = DEFAULT_STATE_PATH) -> None:
             asset_id: asdict(row) for asset_id, row in sorted(state.assets.items())
         },
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def replace_state(active: dict[str, IndexedAsset], path: Path = DEFAULT_STATE_PATH) -> IndexState:
@@ -67,4 +145,19 @@ def replace_state(active: dict[str, IndexedAsset], path: Path = DEFAULT_STATE_PA
         assets=dict(active),
     )
     save_state(state, path)
+    return state
+
+
+def save_state_shared(
+    active: dict[str, IndexedAsset],
+    path: Path = DEFAULT_STATE_PATH,
+    redis_client: Any | None = None,
+) -> IndexState:
+    state = replace_state(active, path)
+    if redis_client is None:
+        return state
+    try:
+        redis_client.set(MILVUS_INDEX_STATE_KEY, path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("save milvus index state to redis failed: %s", exc)
     return state

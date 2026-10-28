@@ -8,6 +8,7 @@ import logging
 from recommender.shared.config import load_config
 from recommender.shared.logging_utils import setup_logging
 
+from .lock import MilvusLockError
 from .pipeline import run_full_rebuild, run_incremental_index
 
 logger = logging.getLogger(__name__)
@@ -21,16 +22,28 @@ def main(argv: list[str] | None = None) -> int:
         default="incremental",
     )
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild even when another instance holds the lock",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     setup_logging(args.verbose)
     cfg = load_config()
 
-    if args.mode == "full":
-        stats = run_full_rebuild(app_cfg=cfg, batch_size=args.batch_size)
-    else:
-        stats = run_incremental_index(app_cfg=cfg, batch_size=args.batch_size)
+    try:
+        if args.mode == "full":
+            stats = run_full_rebuild(app_cfg=cfg, batch_size=args.batch_size, skip_lock=args.force)
+        else:
+            stats = run_incremental_index(app_cfg=cfg, batch_size=args.batch_size, skip_lock=args.force)
+    except MilvusLockError as exc:
+        logger.error("milvus_index lock unavailable: %s", exc)
+        return 1
+    if stats is None:
+        logger.info("milvus_index skipped (another instance holds the lock)")
+        return 0
     logger.info("milvus_index done: %s", stats)
     return 0
 

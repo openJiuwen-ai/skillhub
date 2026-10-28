@@ -739,14 +739,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_REC_PACKAGE_SYNC_CRON", "REC_PACKAGE_SYNC_CRON"),
     )
     rec_milvus_incremental_cron: str = Field(
-        default="0 * * * *",
+        # 避开检索重建（每小时整点）和拉包（:30）。多副本靠 Redis 锁只跑一个。
+        default="45 * * * *",
         validation_alias=AliasChoices(
             "MARKET_REC_MILVUS_INCREMENTAL_CRON",
             "REC_MILVUS_INCREMENTAL_CRON",
         ),
     )
     rec_milvus_full_cron: str = Field(
-        default="0 3 * * *",
+        # 避开每天 03:00 的检索重建。与增量任务共用同一把锁。
+        default="15 3 * * *",
         validation_alias=AliasChoices("MARKET_REC_MILVUS_FULL_CRON", "REC_MILVUS_FULL_CRON"),
     )
     rec_redis_sync_cron: str = Field(

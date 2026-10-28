@@ -34,6 +34,7 @@ from indexing.embedding import (
     EmbeddingIndex,
     EmbeddingRecord,
     IndexedEmbeddingRecord,
+    OFFLINE_EMBED_MIN_INTERVAL_S,
     build_embedding_index,
     build_embedding_index_from_indexed_records,
     create_openai_embedding_client,
@@ -383,6 +384,7 @@ def build_embedding_artifact(
             base_url=str(resolved.embedding_api_base_url or "").strip(),
             api_key=str(resolved.embedding_api_key or "").strip(),
             model=str(resolved.embedding_model or "").strip(),
+            min_interval_s=OFFLINE_EMBED_MIN_INTERVAL_S,
         )
     index = build_embedding_index(
         records=records,
@@ -414,6 +416,7 @@ def build_embedding_artifact_incremental(
             base_url=str(resolved.embedding_api_base_url or "").strip(),
             api_key=str(resolved.embedding_api_key or "").strip(),
             model=str(resolved.embedding_model or "").strip(),
+            min_interval_s=OFFLINE_EMBED_MIN_INTERVAL_S,
         )
     indexed_records: List[IndexedEmbeddingRecord] = []
     pending: List[EmbeddingRecord] = []

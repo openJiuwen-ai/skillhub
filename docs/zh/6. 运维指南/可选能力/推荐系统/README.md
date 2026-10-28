@@ -42,8 +42,8 @@
 | `REDIS_USER_SEQ_KEY_PREFIX` | 用户序列前缀 | `skill_rec:user` |
 | `REDIS_USER_SEQ_TTL_SECONDS` | 用户序列 TTL | `7200` |
 | `MARKET_REC_PACKAGE_SYNC_CRON` | 拉包同步 cron | `30 * * * *` |
-| `MARKET_REC_MILVUS_INCREMENTAL_CRON` | Milvus 增量索引 cron | `0 * * * *` |
-| `MARKET_REC_MILVUS_FULL_CRON` | Milvus 全量重建 cron | `0 3 * * *` |
+| `MARKET_REC_MILVUS_INCREMENTAL_CRON` | Milvus 增量索引 cron。避开检索重建整点和拉包 :30 | `45 * * * *` |
+| `MARKET_REC_MILVUS_FULL_CRON` | Milvus 全量重建 cron。避开每天 03:00 的检索重建 | `15 3 * * *` |
 | `MARKET_REC_REDIS_SYNC_CRON` | Redis 快照同步 cron | `15 * * * *` |
 
 > **与检索区分**：推荐必须使用 `MARKET_REC_EMBEDDING_*`，不要复用 `MARKET_RETRIEVAL_EMBEDDING_*`。换模型维度后需 **Milvus full recreate**（`MARKET_REC_REBUILD_ON_STARTUP=true` 或手动 `python -m recommender.offline.milvus_index --mode full`）。
@@ -59,8 +59,8 @@
    | 任务 | 默认 crontab | 含义 |
    |------|----------------|------|
    | `package_sync` | `30 * * * *` | 每小时的第 30 分：从对象存储拉 Skill zip |
-   | `milvus_incremental` | `0 * * * *` | 每小时整点：增量更新向量 |
-   | `milvus_full` | `0 3 * * *` | 每天 03:00：新物理表灌全量后 alias 切换，再删旧表 |
+   | `milvus_incremental` | `45 * * * *` | 每小时第 45 分：增量更新向量。多副本只跑一个 |
+   | `milvus_full` | `15 3 * * *` | 每天 03:15：新物理表灌全量后 alias 切换，再删旧表。与增量共用一把锁 |
    | `redis_sync` | `15 * * * *` | 每小时的第 15 分：写 Redis 快照 |
 
 2. **启动补偿**（可选，由 `MARKET_REC_REBUILD_ON_STARTUP` 控制）

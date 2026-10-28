@@ -185,12 +185,16 @@ async def lifespan(app: FastAPI):
                 base_url=settings.retrieval_embedding_api_base_url,
                 api_key=_emb_api_key or "dummy",
             )
-            from indexing.embedding import create_openai_embedding_client  # type: ignore[import]
+            from indexing.embedding import (  # type: ignore[import]
+                OFFLINE_EMBED_MIN_INTERVAL_S,
+                create_openai_embedding_client,
+            )
 
             _embedding_build_client = create_openai_embedding_client(
                 base_url=settings.retrieval_embedding_api_base_url,
                 api_key=_emb_api_key,
                 model=settings.retrieval_embedding_model,
+                min_interval_s=OFFLINE_EMBED_MIN_INTERVAL_S,
             )
         except Exception as _exc:
             logger.warning("retrieval: failed to create embedding client: %s", _exc)
@@ -296,6 +300,13 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("retrieval: Redis unavailable (%s), reload consumer disabled", exc)
             redis_client = None
+
+    try:
+        from indexing.embedding.index import configure_offline_embedding_redis  # type: ignore[import]
+
+        configure_offline_embedding_redis(redis_client)
+    except Exception as exc:
+        logger.warning("retrieval: offline embedding rate limit not configured: %s", exc)
 
     uri_scheme = _storage_uri_scheme(storage)
 
