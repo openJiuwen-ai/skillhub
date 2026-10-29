@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skillhub-frontend
+  labels:
+    app: skillhub-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skillhub-frontend
+  template:
+    metadata:
+      labels:
+        app: skillhub-frontend
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: REPLACE_WITH_FRONTEND_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BACKEND_URL
+              value: skillhub-backend
+            - name: BACKEND_PORT
+              value: "8100"
+          ports:
+            - name: http
+              containerPort: 9002
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

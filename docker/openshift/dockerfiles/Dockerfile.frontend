@@ -1,0 +1,36 @@
+# Build from the repository root. Default image serves the site at /.
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS builder
+ARG FRONTEND_BASE_PATH=
+ARG VITE_API_BASE_URL=/api/v1
+WORKDIR /app
+RUN printf '%s\n' "VITE_API_BASE_URL=${VITE_API_BASE_URL}" "FRONTEND_BASE_PATH=${FRONTEND_BASE_PATH}" > .env
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+WORKDIR /app/frontend
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS runtime
+ARG FRONTEND_BASE_PATH=
+ENV FRONTEND_BASE_PATH=${FRONTEND_BASE_PATH} \
+    BACKEND_URL=skillhub-backend \
+    BACKEND_PORT=8100
+
+COPY --from=builder /app/frontend/dist /tmp/frontend-dist
+RUN if [ -z "$FRONTEND_BASE_PATH" ]; then \
+      cp -a /tmp/frontend-dist/. /usr/share/nginx/html/; \
+    elif [ "$FRONTEND_BASE_PATH" = hub ]; then \
+      mkdir -p /usr/share/nginx/html/hub && cp -a /tmp/frontend-dist/. /usr/share/nginx/html/hub/; \
+    else \
+      echo 'FRONTEND_BASE_PATH must be empty or hub' >&2; exit 1; \
+    fi \
+    && rm -rf /tmp/frontend-dist \
+    && chmod -R a+rX /usr/share/nginx/html
+COPY docker/openshift/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY docker/openshift/nginx/default.root.conf.template /opt/skillhub/nginx-root.template
+COPY docker/openshift/nginx/default.hub.conf.template /opt/skillhub/nginx-hub.template
+COPY docker/openshift/nginx/entrypoint.sh /opt/skillhub/entrypoint.sh
+RUN chmod 755 /opt/skillhub/entrypoint.sh
+USER 101
+EXPOSE 9002
+ENTRYPOINT ["/opt/skillhub/entrypoint.sh"]
