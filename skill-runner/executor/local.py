@@ -7,6 +7,8 @@ import logging
 import os
 import re
 import shutil
+import signal
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,6 +20,42 @@ logger = logging.getLogger("skill_runner.local")
 
 _LLM_MODEL: Any = None
 _LLM_LOCK = asyncio.Lock()
+
+
+def _process_group_kwargs() -> dict[str, Any]:
+    """让 `!cmd` 命令自成一个进程组。
+
+    不加这一项时 `sh -c 'tool &'` 起的孙进程落在本进程所在的会话里，超时后
+    只 kill 直接子进程会把它们留在容器内继续占用 PID（GitCode #249 / GitHub #203）。
+    Windows 没有进程组语义的等价物（CREATE_NEW_PROCESS_GROUP 只影响 Ctrl-C 投递），
+    这里保持原行为；生产部署镜像为 Linux。
+    """
+    if sys.platform == "win32":
+        return {}
+    return {"start_new_session": True}
+
+
+async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """超时终止：整组 SIGKILL，然后回收直接子进程。
+
+    只 kill 不 wait 会留下未回收的子进程，`returncode` 也一直是 None。
+    """
+    try:
+        if sys.platform == "win32":
+            proc.kill()
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except OSError:
+        # ProcessLookupError / PermissionError 都是 OSError：进程（组）已经自己
+        # 退出了，或无权给它发信号。退回到只终止直接子进程。
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        await proc.wait()
+    except (ProcessLookupError, ChildProcessError):
+        pass
 
 
 def _wipe_empty_proxy_env() -> None:
@@ -255,13 +293,14 @@ class LocalExecutor(SandboxExecutor):
                 cwd=work_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                **_process_group_kwargs(),
             )
             try:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=settings.exec_timeout_seconds
                 )
             except asyncio.TimeoutError:
-                proc.kill()
+                await _terminate_process_tree(proc)
                 yield sse_event(
                     "error", code="timeout",
                     message=f"command timed out after {settings.exec_timeout_seconds}s",
