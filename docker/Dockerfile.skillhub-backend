@@ -65,8 +65,10 @@ RUN pip3 install --no-cache-dir /app/dist/*.whl \
 # the wheel-installed retrieval package under site-packages.
 COPY --from=builder /app/retrieval /app/retrieval
 
-# 默认隐私声明 Markdown（与 Settings 默认路径 marketplace/privacy-statement.md → 构建根目录下同名文件）
+# 默认站点 Markdown（与 Settings 默认路径 marketplace/*.md → 构建根目录下同名文件）
 COPY --from=builder /app/privacy-statement.md /app/privacy-statement.md
+COPY --from=builder /app/publish-guide.md /app/publish-guide.md
+COPY --from=builder /app/publish-guide.en.md /app/publish-guide.en.md
 
 # Remove the wheel-installed retrieval package to avoid import conflicts
 RUN rm -rf /app/site-packages/retrieval

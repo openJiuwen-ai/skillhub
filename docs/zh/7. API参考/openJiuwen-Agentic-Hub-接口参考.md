@@ -77,6 +77,7 @@
 | **站点** | | | | |
 | GET | `/site/config` | — | — | — |
 | GET | `/site/privacy-statement` | — | — | — |
+| GET | `/site/publish-guide` | — | — | — |
 | **GitHub 标星** | | | | |
 | POST | `/github/watch` | Body：`repos`（空数组=一键标星核心仓库） | Bearer | GitHub 用户 |
 | GET | `/github/watch/status` | - | Bearer | GitHub 用户 |
@@ -116,7 +117,7 @@
 
 ### 统一响应（JSON API）
 
-除 `GET /site/privacy-statement` 与 OAuth 302 重定向外，成功响应格式为：
+除 `GET /site/privacy-statement`、`GET /site/publish-guide` 与 OAuth 302 重定向外，成功响应格式为：
 
 ```json
 {
@@ -1323,10 +1324,21 @@ curl "https://agentichub.openjiuwen.com/api/v1/site/config"
 
 ### `GET /site/privacy-statement`
 
-返回隐私声明 **Markdown 纯文本**（非 JSON）。无需鉴权。
+返回隐私声明 **Markdown 纯文本**（非 JSON）。无需鉴权。文件缺失或正文为空白时返回 `404`。
 
 ```bash
 curl "https://agentichub.openjiuwen.com/api/v1/site/privacy-statement"
+```
+
+---
+
+### `GET /site/publish-guide`
+
+返回上传资产指南 **Markdown 纯文本**（非 JSON）。无需鉴权。页面路径为 `/publish-guide`。`lang=en` 返回同目录的 `publish-guide.en.md`，其他值返回中文。文件缺失或正文为空白时返回 `404`。
+
+```bash
+curl "https://agentichub.openjiuwen.com/api/v1/site/publish-guide"
+curl "https://agentichub.openjiuwen.com/api/v1/site/publish-guide?lang=en"
 ```
 
 ---

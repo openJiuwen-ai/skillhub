@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 import { useQueryClient } from 'react-query'
 import { X } from 'lucide-react'
 import { PublishForm } from './PublishForm'
@@ -81,6 +82,13 @@ export function PublishDrawer({ open, type, onClose }: PublishDrawerProps) {
             <p className="mt-1 max-w-[26rem] text-[12px] leading-5 text-[#64748B]">
               {intro}
             </p>
+            <Link
+              to="/publish-guide"
+              onClick={onClose}
+              className="mt-2 inline-block text-[12px] font-medium text-[#1E54FA] underline-offset-2 hover:underline"
+            >
+              {t('publish.openGuide')}
+            </Link>
           </div>
           <button
             type="button"

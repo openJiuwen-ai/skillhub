@@ -24,7 +24,7 @@
 
 | 方式 | 说明 |
 |------|------|
-| **官方托管** | 访问 [agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)，OAuth 登录后即可使用，无需自行部署 |
+| **官方托管** | 访问 [agentichub.openjiuwen.com](https://agentichub.openjiuwen.com/)，OAuth 登录后即可使用，无需自行部署。页脚「上传指南」对应 `/publish-guide`，说明网页发布和接口上传 |
 | **自建实例** | 由团队在本仓库基础上部署；功能与官方托管一致，但登录提供商、审核员名单等由实例管理员在 `.env` 中配置 |
 
 ## 获取帮助

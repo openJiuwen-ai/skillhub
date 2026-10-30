@@ -473,6 +473,7 @@
     "intro": "按模板填写并打包为 zip 后上传。校验和由浏览器根据所选文件自动计算，无需手填。",
     "introSkill": "填写元数据、上传 PNG 图标与 Skill 目录（须含根级 SKILL.md）。我们将为你生成 plugin.yaml、并打包为 zip上传。",
     "introAgent": "上传 zip 包。校验和由浏览器根据所选文件自动计算，无需手填。",
+    "openGuide": "查看上传说明",
     "downloadTemplate": "下载插件模板",
     "downloadTemplateSkill": "下载 Skill 模板",
     "templateFetching": "正在获取下载链接…",
@@ -859,6 +860,13 @@
       "all": "全部"
     }
   },
+  "publishGuide": {
+    "button": "上传指南",
+    "pageTitle": "上传资产",
+    "backHome": "返回首页",
+    "loading": "加载中…",
+    "loadError": "无法加载上传指南，请稍后重试。"
+  },
   "privacyPolicy": {
     "button": "隐私协议",
     "cornerRegion": "隐私协议",
@@ -870,6 +878,7 @@
   "siteFooter": {
     "columnDocs": "文档",
     "columnCommunity": "社区",
+    "openJiuwen": "openJiuwen 官网",
     "columnMore": "更多",
     "copyright": "openJiuwen Agentic Hub · Apache License 2.0 · {{year}}"
   }

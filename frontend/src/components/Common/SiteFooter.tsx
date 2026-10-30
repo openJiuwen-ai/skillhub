@@ -3,7 +3,7 @@
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 
-/** 全站页脚：三栏布局；外链暂未开放时仅文档栏保留隐私声明链接，其余栏占位。 */
+/** 全站页脚：文档栏放上传指南与隐私声明，社区栏放 openJiuwen 官网。 */
 export function SiteFooter() {
   const { t } = useTranslation()
 
@@ -18,6 +18,14 @@ export function SiteFooter() {
           <ul className="flex flex-col gap-2.5">
             <li>
               <Link
+                to="/publish-guide"
+                className="text-sm text-slate-400 transition-colors hover:text-slate-200 hover:underline"
+              >
+                {t('publishGuide.button')}
+              </Link>
+            </li>
+            <li>
+              <Link
                 to="/privacy-statement"
                 className="text-sm text-slate-400 transition-colors hover:text-slate-200 hover:underline"
               >
@@ -28,6 +36,18 @@ export function SiteFooter() {
         </nav>
         <nav aria-label={t('siteFooter.columnCommunity')} className="min-w-0 flex-1">
           <h3 className="mb-3 text-sm font-semibold tracking-wide text-white">{t('siteFooter.columnCommunity')}</h3>
+          <ul className="flex flex-col gap-2.5">
+            <li>
+              <a
+                href="https://www.openjiuwen.com"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-sm text-slate-400 transition-colors hover:text-slate-200 hover:underline"
+              >
+                {t('siteFooter.openJiuwen')}
+              </a>
+            </li>
+          </ul>
         </nav>
         <nav aria-label={t('siteFooter.columnMore')} className="min-w-0 flex-1">
           <h3 className="mb-3 text-sm font-semibold tracking-wide text-white">{t('siteFooter.columnMore')}</h3>

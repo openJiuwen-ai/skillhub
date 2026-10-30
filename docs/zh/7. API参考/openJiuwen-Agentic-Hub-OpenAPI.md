@@ -2099,6 +2099,31 @@ paths:
               schema:
                 type: string
 
+  /api/v1/site/publish-guide:
+    get:
+      summary: 获取上传资产指南
+      description: 直接返回 Markdown 正文（非 JSON）。页面路径为 /publish-guide。lang=en 返回英文文件，文件缺失或空白时 404。
+      operationId: getPublishGuide
+      tags:
+        - 站点公开信息
+      parameters:
+        - name: lang
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [zh, en]
+            default: zh
+      responses:
+        '200':
+          description: 上传指南 Markdown 内容
+          content:
+            text/markdown:
+              schema:
+                type: string
+        '404':
+          description: 指南文件缺失或正文为空白
+
   /api/v1/site/config:
     get:
       summary: 获取站点运行时配置
