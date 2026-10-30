@@ -11,21 +11,29 @@ DEFAULT_AUTH_USER_API_URL = "https://gitcode.com/api/v5/user"
 DEFAULT_GITHUB_USER_API_URL = "https://api.github.com/user"
 
 
-def _default_privacy_statement_file() -> str:
+def _default_marketplace_markdown(filename: str) -> str:
     """
-    默认隐私声明文件路径。
-    - 源码运行：`marketplace/privacy-statement.md`（config 上两级目录）
-    - Docker + wheel：`/app/privacy-statement.md`（site-packages 再向上一级）
+    默认站点 Markdown 路径。
+    - 源码运行：`marketplace/<filename>`（config 上两级目录）
+    - Docker + wheel：`/app/<filename>`（site-packages 再向上一级）
     """
     here = Path(__file__).resolve()
     candidates = [
-        here.parents[2] / "privacy-statement.md",
-        here.parents[3] / "privacy-statement.md",
+        here.parents[2] / filename,
+        here.parents[3] / filename,
     ]
     for c in candidates:
         if c.is_file():
             return str(c)
     return str(candidates[0])
+
+
+def _default_privacy_statement_file() -> str:
+    return _default_marketplace_markdown("privacy-statement.md")
+
+
+def _default_publish_guide_file() -> str:
+    return _default_marketplace_markdown("publish-guide.md")
 
 
 class Settings(BaseSettings):
@@ -775,6 +783,14 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "MARKET_PRIVACY_STATEMENT_FILE",
             "PRIVACY_STATEMENT_FILE",
+        ),
+    )
+    # 上传指南：本地 Markdown（UTF-8）。默认 marketplace/publish-guide.md；显式置空则页面为空
+    publish_guide_file: str = Field(
+        default_factory=_default_publish_guide_file,
+        validation_alias=AliasChoices(
+            "MARKET_PUBLISH_GUIDE_FILE",
+            "PUBLISH_GUIDE_FILE",
         ),
     )
 

@@ -14,6 +14,7 @@ import { PublishDrawer } from '@/components/Publish/PublishDrawer'
 import { WatchOpenJiuwenRepos } from '@/components/Common/WatchOpenJiuwenRepos'
 import { SiteFooter } from '@/components/Common/SiteFooter'
 import PrivacyStatementPage from '@/pages/PrivacyStatementPage'
+import PublishGuidePage from '@/pages/PublishGuidePage'
 import GroupsPage from '@/pages/GroupsPage'
 import GroupDetailPage from '@/pages/GroupDetailPage'
 
@@ -40,6 +41,7 @@ function App() {
         <>
           <Routes>
             <Route path="/privacy-statement" element={<PrivacyStatementPage />} />
+            <Route path="/publish-guide" element={<PublishGuidePage />} />
             <Route element={<MainAppShell />}>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/profile/plugins/:assetId/versions/:version/review" element={<SkillReviewDetailPage />} />

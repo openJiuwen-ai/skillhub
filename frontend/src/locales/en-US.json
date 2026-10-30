@@ -473,6 +473,7 @@
     "intro": "Fill in the template, zip it, then upload. The SHA-256 checksum is computed in the browser for the selected file—no manual entry.",
     "introSkill": "Fill in metadata, upload a PNG icon and your skill folder (must include SKILL.md at the root). We generate plugin.yaml for you and package it as a zip for upload.",
     "introAgent": "Upload a zip. The SHA-256 checksum is computed in the browser for the selected file—no manual entry.",
+    "openGuide": "How to publish",
     "downloadTemplate": "Download template",
     "downloadTemplateSkill": "Download skill template",
     "templateFetching": "Getting download link…",
@@ -860,6 +861,13 @@
       "all": "All"
     }
   },
+  "publishGuide": {
+    "button": "Publish guide",
+    "pageTitle": "Publish an asset",
+    "backHome": "Back to home",
+    "loading": "Loading…",
+    "loadError": "Could not load the publish guide. Please try again later."
+  },
   "privacyPolicy": {
     "button": "Privacy policy",
     "cornerRegion": "Privacy policy",
@@ -871,6 +879,7 @@
   "siteFooter": {
     "columnDocs": "Docs",
     "columnCommunity": "Community",
+    "openJiuwen": "openJiuwen website",
     "columnMore": "More",
     "copyright": "openJiuwen Agentic Hub · Apache License 2.0 · {{year}}"
   }
