@@ -4,7 +4,7 @@ const TOKEN_KEY = 'marketplace_oauth_access_token'
 const USER_KEY = 'marketplace_oauth_user'
 const PROVIDER_KEY = 'marketplace_oauth_provider'
 
-export type OAuthProvider = 'gitcode' | 'github' | 'agentos'
+export type OAuthProvider = 'gitcode' | 'github' | 'agentos' | 'keycloak'
 
 export type OAuthUser = {
   id: string
@@ -43,6 +43,7 @@ export function getStoredOAuthProvider(): OAuthProvider {
     const p = (sessionStorage.getItem(PROVIDER_KEY) || '').trim().toLowerCase()
     if (p === 'github') return 'github'
     if (p === 'agentos') return 'agentos'
+    if (p === 'keycloak') return 'keycloak'
     return 'gitcode'
   } catch {
     return 'gitcode'

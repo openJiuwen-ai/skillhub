@@ -11,9 +11,9 @@ from fastapi import Header, HTTPException, Request, status
 
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
+from plugins_market.core.context import set_user_id, set_user_name
 from plugins_market.core.errors import auth_error_payload, http_error_payload
 from plugins_market.core.logging import get_logger
-from plugins_market.core.context import set_user_id, set_user_name
 from plugins_market.core.oauth_user_profile import fetch_oauth_user_profile
 from plugins_market.core.review_admins import is_market_moderation_username
 from plugins_market.core.viewer_context import ViewerContext
@@ -88,11 +88,11 @@ def normalize_oauth_provider_header(raw: Optional[str]) -> str:
     if raw is None or not str(raw).strip():
         return "gitcode"
     p = str(raw).strip().lower()
-    if p in ("gitcode", "github", "agentos"):
+    if p in ("gitcode", "github", "agentos", "keycloak"):
         return p
     raise _http_exception(
         status.HTTP_400_BAD_REQUEST,
-        "Invalid X-OAuth-Provider; allowed: gitcode, github, agentos",
+        "Invalid X-OAuth-Provider; allowed: gitcode, github, agentos, keycloak",
         error="invalid_oauth_provider",
     )
 
