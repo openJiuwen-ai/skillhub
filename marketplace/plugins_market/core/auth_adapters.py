@@ -46,6 +46,10 @@ class AuthAdapter(ABC):
     async def fetch_user_profile(self, access_token: str) -> dict[str, Any] | None:
         """Validate a bearer token and return a normalized provider profile."""
 
+    async def logout_config(self) -> dict[str, str] | None:
+        """Return RP-initiated logout details when the provider supports them."""
+        return None
+
 
 class OAuth2AuthAdapter(AuthAdapter):
     """Configuration-driven adapter for the existing OAuth providers."""
@@ -256,6 +260,8 @@ class KeycloakAuthAdapter(OAuth2AuthAdapter):
         return await super().exchange_code(client, code, code_verifier)
 
     async def fetch_user_profile(self, access_token: str) -> dict[str, Any] | None:
+        if not self.enabled():
+            return None
         token = (access_token or "").strip()
         if not token:
             return None
@@ -283,6 +289,28 @@ class KeycloakAuthAdapter(OAuth2AuthAdapter):
             }
         except (httpx.HTTPError, ValueError):
             return None
+
+    async def logout_config(self) -> dict[str, str] | None:
+        """Build the browser logout handoff from trusted OIDC discovery metadata."""
+        metadata = await self._metadata()
+        endpoint = metadata.get("end_session_endpoint")
+        parts = urlsplit(endpoint) if isinstance(endpoint, str) else None
+        issuer_host = urlsplit(settings.keycloak_issuer_url).hostname
+        if (
+            parts is None
+            or parts.scheme != "https"
+            or not parts.hostname
+            or parts.hostname != issuer_host
+            or parts.username is not None
+            or parts.password is not None
+        ):
+            return None
+        frontend_login = f"{settings.oauth_frontend_origin.rstrip('/')}/login?logged_out=1"
+        return {
+            "end_session_endpoint": endpoint,
+            "client_id": settings.keycloak_client_id,
+            "post_logout_redirect_uri": frontend_login,
+        }
 
 
 _ADAPTERS: dict[str, AuthAdapter] = {

@@ -2,7 +2,7 @@
 
 import axios from 'axios'
 import { API_CONFIG } from './config'
-import type { OAuthProvider, OAuthUser } from '@/auth/gitcodeStorage'
+import type { OAuthLogoutInfo, OAuthProvider, OAuthUser } from '@/auth/gitcodeStorage'
 
 /** 避免 StrictMode 下重复兑换；统一支持 gitcode / github */
 export const OAUTH_PENDING_KEY = '__marketplace_oauth_pending'
@@ -13,6 +13,7 @@ export type OAuthSessionData = {
   access_token: string
   token_type?: string
   user: OAuthUser
+  logout?: OAuthLogoutInfo
 }
 
 type OAuthPendingPayload = {

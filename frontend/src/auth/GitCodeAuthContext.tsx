@@ -13,10 +13,13 @@ import {
 import axios from 'axios'
 import {
   clearOAuthSession,
+  getStoredOAuthLogoutInfo,
   getStoredOAuthProvider,
   getStoredOAuthToken,
   getStoredOAuthUser,
   setOAuthSession,
+  updateStoredOAuthUser,
+  type OAuthLogoutInfo,
   type OAuthProvider,
   type OAuthUser,
 } from './gitcodeStorage'
@@ -29,8 +32,8 @@ type GitCodeAuthState = {
   isAuthenticated: boolean
   /** Skill 上架审核管理员（配置文件用户名，与 /auth/me 一致） */
   isMarketModerationAdmin: boolean
-  login: (token: string, user: OAuthUser, provider: OAuthProvider) => void
-  logout: () => void
+  login: (token: string, user: OAuthUser, provider: OAuthProvider, logoutInfo?: OAuthLogoutInfo) => void
+  logout: () => boolean
 }
 
 const GitCodeAuthContext = createContext<GitCodeAuthState | null>(null)
@@ -66,7 +69,7 @@ export function GitCodeAuthProvider({ children }: { children: ReactNode }) {
     fetchOAuthMe(t, p)
       .then(profile => {
         setUser(profile)
-        setOAuthSession(t, profile, p)
+        updateStoredOAuthUser(profile)
       })
       .catch(err => {
         if (axios.isCancel(err)) return
@@ -79,18 +82,47 @@ export function GitCodeAuthProvider({ children }: { children: ReactNode }) {
       })
   }, [])
 
-  const login = useCallback((t: string, u: OAuthUser, p: OAuthProvider) => {
-    setOAuthSession(t, u, p)
+  const login = useCallback((t: string, u: OAuthUser, p: OAuthProvider, logoutInfo?: OAuthLogoutInfo) => {
+    setOAuthSession(t, u, p, logoutInfo)
     setToken(t)
     setUser(u)
     setProvider(p)
   }, [])
 
   const logout = useCallback(() => {
+    const provider = getStoredOAuthProvider()
+    const logoutInfo = getStoredOAuthLogoutInfo()
     clearOAuthSession()
     setToken(null)
     setUser(null)
     setProvider('gitcode')
+
+    if (provider !== 'keycloak' || !logoutInfo) return false
+    try {
+      const endpoint = new URL(logoutInfo.end_session_endpoint)
+      if (endpoint.protocol !== 'https:') return false
+      const form = document.createElement('form')
+      form.method = 'POST'
+      form.action = endpoint.toString()
+      form.hidden = true
+      for (const [name, value] of Object.entries({
+        client_id: logoutInfo.client_id,
+        id_token_hint: logoutInfo.id_token_hint,
+        post_logout_redirect_uri: logoutInfo.post_logout_redirect_uri,
+      })) {
+        const input = document.createElement('input')
+        input.type = 'hidden'
+        input.name = name
+        input.value = value
+        form.appendChild(input)
+      }
+      document.body.appendChild(form)
+      form.submit()
+      return true
+    } catch {
+      // Local logout has already completed; do not keep the user signed into SkillHub.
+      return false
+    }
   }, [])
 
   const value = useMemo(

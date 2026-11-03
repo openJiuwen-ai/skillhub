@@ -31,12 +31,15 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.original = (
             settings.keycloak_issuer_url,
+            settings.keycloak_oauth_enabled,
             settings.keycloak_client_id,
             settings.keycloak_client_secret,
             settings.keycloak_redirect_uri,
             settings.keycloak_oauth_scope,
+            settings.oauth_frontend_origin,
         )
         settings.keycloak_issuer_url = "https://iam.example/realms/demo"
+        settings.keycloak_oauth_enabled = True
         settings.keycloak_client_id = "marketplace"
         settings.keycloak_client_secret = ""
         settings.keycloak_redirect_uri = "https://hub.example/api/v1/auth/oauth/keycloak/callback"
@@ -45,10 +48,12 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         (
             settings.keycloak_issuer_url,
+            settings.keycloak_oauth_enabled,
             settings.keycloak_client_id,
             settings.keycloak_client_secret,
             settings.keycloak_redirect_uri,
             settings.keycloak_oauth_scope,
+            settings.oauth_frontend_origin,
         ) = self.original
 
     async def test_authorization_url_uses_discovery_and_pkce_s256(self) -> None:
@@ -84,7 +89,7 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         seen: dict[str, str] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
-            seen.update({key: values[0] for key, values in parse_qs(request.content.decode()).items()})
+            seen.update({key: values[0] for key, values in parse_qs(request.content.decode(), keep_blank_values=True).items()})
             return httpx.Response(200, json={"access_token": "access-token", "token_type": "Bearer"})
 
         verifier = create_pkce_verifier()
@@ -150,6 +155,45 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await adapter.fetch_user_profile("access-token"))
         finally:
             httpx.AsyncClient = original_async_client  # type: ignore[assignment]
+
+    async def test_disabled_provider_rejects_bearer_authentication(self) -> None:
+        settings.keycloak_oauth_enabled = False
+        adapter = KeycloakAuthAdapter()
+
+        self.assertIsNone(await adapter.fetch_user_profile("access-token"))
+
+    async def test_logout_config_uses_discovered_secure_endpoint_and_configured_redirect(self) -> None:
+        adapter = KeycloakAuthAdapter()
+        adapter._discovery = {
+            "issuer": settings.keycloak_issuer_url,
+            "authorization_endpoint": "https://iam.example/authorize",
+            "token_endpoint": "https://iam.example/token",
+            "userinfo_endpoint": "https://iam.example/userinfo",
+            "end_session_endpoint": "https://iam.example/logout",
+        }
+        settings.oauth_frontend_origin = "https://hub.example/subpath/"
+
+        self.assertEqual(
+            await adapter.logout_config(),
+            {
+                "end_session_endpoint": "https://iam.example/logout",
+                "client_id": "marketplace",
+                "post_logout_redirect_uri": "https://hub.example/subpath/login?logged_out=1",
+            },
+        )
+
+    async def test_logout_config_rejects_insecure_or_credentialed_endpoint(self) -> None:
+        adapter = KeycloakAuthAdapter()
+        for endpoint in ("http://iam.example/logout", "https://attacker@iam.example/logout"):
+            with self.subTest(endpoint=endpoint):
+                adapter._discovery = {
+                    "issuer": settings.keycloak_issuer_url,
+                    "authorization_endpoint": "https://iam.example/authorize",
+                    "token_endpoint": "https://iam.example/token",
+                    "userinfo_endpoint": "https://iam.example/userinfo",
+                    "end_session_endpoint": endpoint,
+                }
+                self.assertIsNone(await adapter.logout_config())
 
 
 if __name__ == "__main__":

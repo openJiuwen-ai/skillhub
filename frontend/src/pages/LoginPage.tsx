@@ -105,7 +105,7 @@ export default function LoginPage() {
     exchangeOAuthSession(pending.provider, pending.session)
       .then(async data => {
         const profile = await fetchOAuthMe(data.access_token, data.provider)
-        login(data.access_token, profile, data.provider)
+        login(data.access_token, profile, data.provider, data.logout)
       })
       .catch(e => {
         const msg = e instanceof Error ? e.message : t('auth.oauth.genericError')

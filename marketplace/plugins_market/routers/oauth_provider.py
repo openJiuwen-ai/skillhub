@@ -544,6 +544,15 @@ async def oauth_callback(
                         provider=provider,
                         redirect_to=redirect_to,
                     )
+                id_token = token_json.get("id_token")
+                if provider == OAuthProvider.keycloak and (not isinstance(id_token, str) or not id_token):
+                    return _oauth_redirect_error(
+                        f"{label} 未返回 ID Token",
+                        "SKILLHUB_OAUTH_ID_TOKEN_MISSING",
+                        "upstream",
+                        provider=provider,
+                        redirect_to=redirect_to,
+                    )
 
                 u = await fetch_oauth_user_profile(provider.value, access_token)
                 if not u:
@@ -601,6 +610,21 @@ async def oauth_callback(
                         "avatar_url": (avatar or None) if avatar else None,
                     },
                 }
+                if provider == OAuthProvider.keycloak:
+                    adapter = get_auth_adapter(provider.value)
+                    logout_config = await adapter.logout_config() if adapter is not None else None
+                    if not logout_config:
+                        return _oauth_redirect_error(
+                            f"{label} 未提供有效的 OIDC 登出端点",
+                            "SKILLHUB_OAUTH_LOGOUT_NOT_CONFIGURED",
+                            "upstream",
+                            provider=provider,
+                            redirect_to=redirect_to,
+                        )
+                    result["logout"] = {
+                        **logout_config,
+                        "id_token_hint": id_token,
+                    }
 
                 pending = secrets.token_urlsafe(24)
                 store.set_ex(
@@ -802,6 +826,6 @@ async def auth_me(
                 "name": name,
                 "login": login,
                 "avatar_url": profile.get("avatar_url") or profile.get("avatar"),
-                "is_market_moderation_admin": is_market_moderation_username(login),
+                "is_market_moderation_admin": is_market_moderation_username(login, prov),
             },
         )

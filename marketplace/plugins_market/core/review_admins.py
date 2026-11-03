@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""从环境变量 MARKET_REVIEW_ADMIN_USERNAMES 或列表文件加载「市场审核管理员」用户名（与 GitCode login 精确匹配）。"""
+"""从环境变量 MARKET_REVIEW_ADMIN_USERNAMES 或列表文件加载市场审核管理员用户名。"""
 
 from __future__ import annotations
 
@@ -67,7 +67,16 @@ def get_review_admin_usernames() -> FrozenSet[str]:
         return _cache_names
 
 
-def is_market_moderation_username(login: str | None) -> bool:
+def is_market_moderation_username(login: str | None, provider: str | None = None) -> bool:
+    """Check the configured moderation username, without trusting Keycloak names.
+
+    The existing allowlist is based on OAuth usernames. A Keycloak preferred
+    username/email is realm-controlled and may collide with a trusted username
+    from another IAM, so it must never grant moderation privileges by itself.
+    ``provider=None`` preserves the legacy behavior for existing callers.
+    """
+    if (provider or "").strip().lower() == "keycloak":
+        return False
     if not login or not str(login).strip():
         return False
     return str(login).strip() in get_review_admin_usernames()

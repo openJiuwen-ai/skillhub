@@ -45,10 +45,12 @@ def _http_exception(
     return HTTPException(status_code=status_code, detail=payload)
 
 
-def _is_market_moderation_admin(*, is_system_admin: bool, acting_user_name: Optional[str]) -> bool:
+def _is_market_moderation_admin(
+    *, is_system_admin: bool, acting_user_name: Optional[str], provider: Optional[str] = None
+) -> bool:
     if is_system_admin:
         return True
-    return is_market_moderation_username(acting_user_name)
+    return is_market_moderation_username(acting_user_name, provider)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class AuthContext:
     is_admin: bool
     acting_user_id: str
     acting_user_name: Optional[str] = None
+    acting_user_provider: str = "gitcode"
     is_market_moderation_admin: bool = False
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
@@ -166,6 +169,7 @@ async def require_auth(
                 is_admin=True,
                 acting_user_id=settings.system_admin_user,
                 acting_user_name=settings.system_admin_user,
+                acting_user_provider="system",
                 is_market_moderation_admin=True,
                 ip_address=client_ip,
                 user_agent=ua,
@@ -186,9 +190,11 @@ async def require_auth(
         is_admin=False,
         acting_user_id=oauth_user_id,
         acting_user_name=oauth_user_name,
+        acting_user_provider=oauth_provider,
         is_market_moderation_admin=_is_market_moderation_admin(
             is_system_admin=False,
             acting_user_name=oauth_user_name,
+            provider=oauth_provider,
         ),
         ip_address=client_ip,
         user_agent=ua,
@@ -226,7 +232,7 @@ async def resolve_viewer_context(
             uid, login = await get_oauth_user_id_and_login(token, prov)
             set_user_id(uid)
             set_user_name(login)
-            return ViewerContext(user_id=uid, user_login=login, is_system_admin=False)
+            return ViewerContext(user_id=uid, user_login=login, is_system_admin=False, user_provider=prov)
         except HTTPException:
             return ViewerContext(user_id=None, user_login=None, is_system_admin=False)
     return ViewerContext(user_id=None, user_login=None, is_system_admin=False)
