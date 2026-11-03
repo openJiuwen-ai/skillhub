@@ -385,7 +385,7 @@ async def _exchange_code_for_token_json(
             error_code="SKILLHUB_OAUTH_TOKEN_EXCHANGE_FAILED",
             error_class="upstream",
             meta=_safe_oauth_meta(provider, upstream_status=upstream_status),
-        )
+        ) from exc
     except (TypeError, ValueError):
         raise BusinessError(
             code=502,

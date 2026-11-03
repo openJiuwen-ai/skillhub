@@ -190,11 +190,16 @@ class KeycloakAuthAdapter(OAuth2AuthAdapter):
     pkce = True
     use_scope = True
 
-    def __init__(self) -> None:
-        self._discovery: dict[str, Any] | None = None
+    def __init__(self, discovery_metadata: dict[str, Any] | None = None) -> None:
+        self._discovery = discovery_metadata
 
     def enabled(self) -> bool:
-        return bool(settings.keycloak_oauth_enabled and settings.keycloak_issuer_url and settings.keycloak_client_id and settings.keycloak_redirect_uri)
+        return bool(
+            settings.keycloak_oauth_enabled
+            and settings.keycloak_issuer_url
+            and settings.keycloak_client_id
+            and settings.keycloak_redirect_uri
+        )
 
     @property
     def client_id(self) -> str:  # type: ignore[override]
@@ -294,16 +299,15 @@ class KeycloakAuthAdapter(OAuth2AuthAdapter):
         """Build the browser logout handoff from trusted OIDC discovery metadata."""
         metadata = await self._metadata()
         endpoint = metadata.get("end_session_endpoint")
-        parts = urlsplit(endpoint) if isinstance(endpoint, str) else None
+        if not isinstance(endpoint, str):
+            return None
+        parts = urlsplit(endpoint)
         issuer_host = urlsplit(settings.keycloak_issuer_url).hostname
-        if (
-            parts is None
-            or parts.scheme != "https"
-            or not parts.hostname
-            or parts.hostname != issuer_host
-            or parts.username is not None
-            or parts.password is not None
-        ):
+        if parts.scheme != "https" or not parts.hostname:
+            return None
+        if parts.hostname != issuer_host:
+            return None
+        if parts.username is not None or parts.password is not None:
             return None
         frontend_login = f"{settings.oauth_frontend_origin.rstrip('/')}/login?logged_out=1"
         return {

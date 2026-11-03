@@ -28,6 +28,16 @@ class AuthAdapterRegistryTests(unittest.TestCase):
 
 
 class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
+    def make_adapter(self, **metadata_updates: str) -> KeycloakAuthAdapter:
+        metadata = {
+            "issuer": settings.keycloak_issuer_url,
+            "authorization_endpoint": "https://iam.example/authorize",
+            "token_endpoint": "https://iam.example/token",
+            "userinfo_endpoint": "https://iam.example/userinfo",
+        }
+        metadata.update(metadata_updates)
+        return KeycloakAuthAdapter(discovery_metadata=metadata)
+
     def setUp(self) -> None:
         self.original = (
             settings.keycloak_issuer_url,
@@ -57,14 +67,7 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         ) = self.original
 
     async def test_authorization_url_uses_discovery_and_pkce_s256(self) -> None:
-        issuer = settings.keycloak_issuer_url
-        adapter = KeycloakAuthAdapter()
-        adapter._discovery = {
-            "issuer": issuer,
-            "authorization_endpoint": "https://iam.example/authorize",
-            "token_endpoint": "https://iam.example/token",
-            "userinfo_endpoint": "https://iam.example/userinfo",
-        }
+        adapter = self.make_adapter()
         verifier = create_pkce_verifier()
         url = await adapter.authorization_url("state-value", verifier)
 
@@ -78,18 +81,12 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query["scope"], ["openid profile email"])
 
     async def test_code_exchange_sends_pkce_and_omits_empty_public_client_secret(self) -> None:
-        issuer = settings.keycloak_issuer_url
-        adapter = KeycloakAuthAdapter()
-        adapter._discovery = {
-            "issuer": issuer,
-            "authorization_endpoint": "https://iam.example/authorize",
-            "token_endpoint": "https://iam.example/token",
-            "userinfo_endpoint": "https://iam.example/userinfo",
-        }
+        adapter = self.make_adapter()
         seen: dict[str, str] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
-            seen.update({key: values[0] for key, values in parse_qs(request.content.decode(), keep_blank_values=True).items()})
+            form_data = parse_qs(request.content.decode(), keep_blank_values=True)
+            seen.update({key: values[0] for key, values in form_data.items()})
             return httpx.Response(200, json={"access_token": "access-token", "token_type": "Bearer"})
 
         verifier = create_pkce_verifier()
@@ -102,20 +99,18 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("client_secret", seen)
 
     async def test_userinfo_is_normalized_to_oauth_profile(self) -> None:
-        issuer = settings.keycloak_issuer_url
-        adapter = KeycloakAuthAdapter()
-        adapter._discovery = {
-            "issuer": issuer,
-            "authorization_endpoint": "https://iam.example/authorize",
-            "token_endpoint": "https://iam.example/token",
-            "userinfo_endpoint": "https://iam.example/userinfo",
-        }
+        adapter = self.make_adapter()
 
         def handler(request: httpx.Request) -> httpx.Response:
             self.assertEqual(request.headers["Authorization"], "Bearer access-token")
             return httpx.Response(
                 200,
-                json={"sub": "user-123", "preferred_username": "sso_user", "name": "SSO User", "picture": "https://iam.example/avatar.png"},
+                json={
+                    "sub": "user-123",
+                    "preferred_username": "sso_user",
+                    "name": "SSO User",
+                    "picture": "https://iam.example/avatar.png",
+                },
             )
 
         original_async_client = httpx.AsyncClient
@@ -137,17 +132,12 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["avatar_url"], "https://iam.example/avatar.png")
 
     async def test_userinfo_requires_subject(self) -> None:
-        adapter = KeycloakAuthAdapter()
-        adapter._discovery = {
-            "issuer": settings.keycloak_issuer_url,
-            "authorization_endpoint": "https://iam.example/authorize",
-            "token_endpoint": "https://iam.example/token",
-            "userinfo_endpoint": "https://iam.example/userinfo",
-        }
+        adapter = self.make_adapter()
         original_async_client = httpx.AsyncClient
 
         def client_factory(*args, **kwargs):
-            kwargs["transport"] = httpx.MockTransport(lambda _: httpx.Response(200, json={"preferred_username": "no-sub"}))
+            response = httpx.Response(200, json={"preferred_username": "no-sub"})
+            kwargs["transport"] = httpx.MockTransport(lambda _: response)
             return original_async_client(*args, **kwargs)
 
         httpx.AsyncClient = client_factory  # type: ignore[assignment]
@@ -163,14 +153,7 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await adapter.fetch_user_profile("access-token"))
 
     async def test_logout_config_uses_discovered_secure_endpoint_and_configured_redirect(self) -> None:
-        adapter = KeycloakAuthAdapter()
-        adapter._discovery = {
-            "issuer": settings.keycloak_issuer_url,
-            "authorization_endpoint": "https://iam.example/authorize",
-            "token_endpoint": "https://iam.example/token",
-            "userinfo_endpoint": "https://iam.example/userinfo",
-            "end_session_endpoint": "https://iam.example/logout",
-        }
+        adapter = self.make_adapter(end_session_endpoint="https://iam.example/logout")
         settings.oauth_frontend_origin = "https://hub.example/subpath/"
 
         self.assertEqual(
@@ -183,16 +166,9 @@ class KeycloakAuthAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_logout_config_rejects_insecure_or_credentialed_endpoint(self) -> None:
-        adapter = KeycloakAuthAdapter()
         for endpoint in ("http://iam.example/logout", "https://attacker@iam.example/logout"):
             with self.subTest(endpoint=endpoint):
-                adapter._discovery = {
-                    "issuer": settings.keycloak_issuer_url,
-                    "authorization_endpoint": "https://iam.example/authorize",
-                    "token_endpoint": "https://iam.example/token",
-                    "userinfo_endpoint": "https://iam.example/userinfo",
-                    "end_session_endpoint": endpoint,
-                }
+                adapter = self.make_adapter(end_session_endpoint=endpoint)
                 self.assertIsNone(await adapter.logout_config())
 
 
