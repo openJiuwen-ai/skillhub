@@ -25,10 +25,12 @@ marketplace/.ruff_cache
 marketplace/logs
 marketplace/*.log
 marketplace/data
-# 排除 marketplace 下的 Markdown；保留默认隐私声明
+# 排除 marketplace 下的 Markdown；保留默认隐私声明与上传指南
 marketplace/*.md
 marketplace/**/*.md
 !marketplace/privacy-statement.md
+!marketplace/publish-guide.md
+!marketplace/publish-guide.en.md
 
 # skill-runner（独立微服务源码）
 skill-runner/.venv
