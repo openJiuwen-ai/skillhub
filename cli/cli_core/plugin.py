@@ -876,20 +876,31 @@ def plugin_pack(plugin_path: Path, output_dir: Path | None = None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     zip_name = f"{name}-{version}.zip" if version else f"{name}.zip"
     zip_path = out / zip_name
+    sha256_path = zip_path.with_suffix(zip_path.suffix + ".sha256")
+    excluded = {zip_path, sha256_path}
+    if out != root and out.is_relative_to(root):
+        excluded.add(out)
+    exclude_paths = frozenset(excluded)
     prefix = f"{name}-{version}" if version else name
 
     if runtime_type in SKILL_LIKE_RUNTIME_TYPES:
-        _pack_plugin_skill(root, name, prefix, zip_path)
+        _pack_plugin_skill(root, name, prefix, zip_path, exclude_paths=exclude_paths)
     else:
-        _pack_plugin_directory(root, prefix, zip_path)
+        _pack_plugin_directory(root, prefix, zip_path, exclude_paths=exclude_paths)
 
     digest = sha256_file_hex(zip_path)
-    sha256_path = zip_path.with_suffix(zip_path.suffix + ".sha256")
     sha256_path.write_text(f"{digest}  {zip_name}\n", encoding="utf-8")
     return zip_path
 
 
-def _pack_plugin_skill(root: Path, name: str, prefix: str, zip_path: Path) -> None:
+def _pack_plugin_skill(
+    root: Path,
+    name: str,
+    prefix: str,
+    zip_path: Path,
+    *,
+    exclude_paths: frozenset[Path] = frozenset(),
+) -> None:
     """Pack skill/swarmskill: skill tree under ``<name>/`` only (no plugin.yaml / icon.png in the zip)."""
     ws = _find_skill_workspace(root)
     if ws is not None and ws[1] == name:
@@ -909,12 +920,20 @@ def _pack_plugin_skill(root: Path, name: str, prefix: str, zip_path: Path) -> No
         if readme.is_file():
             zf.write(readme, f"{prefix}/README.md".replace("\\", "/"))
         arc_prefix = f"{prefix}/{name}".replace("\\", "/")
-        n_files = plugin_zip_write_directory_tree(zf, skill_dir, arcname_prefix=arc_prefix)
+        n_files = plugin_zip_write_directory_tree(
+            zf, skill_dir, arcname_prefix=arc_prefix, exclude_paths=exclude_paths
+        )
         if n_files == 0:
             raise ValueError(f"no files packed under skill directory: {skill_dir}")
 
 
-def _pack_plugin_directory(root: Path, prefix: str, zip_path: Path) -> None:
+def _pack_plugin_directory(
+    root: Path,
+    prefix: str,
+    zip_path: Path,
+    *,
+    exclude_paths: frozenset[Path] = frozenset(),
+) -> None:
     """Pack a wrapped Agent asset. The market outer layer is plugin.yaml, optional icon.png, and one inner directory."""
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         plugin_zip_write_directory_tree(
@@ -922,6 +941,7 @@ def _pack_plugin_directory(root: Path, prefix: str, zip_path: Path) -> None:
             root,
             arcname_prefix=prefix,
             skip_relative=frozenset({"README.md"}),
+            exclude_paths=exclude_paths,
         )
 
 
@@ -931,9 +951,11 @@ def plugin_zip_write_directory_tree(
     *,
     arcname_prefix: str = "",
     skip_relative: frozenset[str] = frozenset(),
+    exclude_paths: frozenset[Path] = frozenset(),
 ) -> int:
-    """Append files under ``root`` to ``zf``; return number of files written."""
+    """将根目录下的文件写入压缩包，跳过指定路径及其子路径，返回写入文件数。"""
     base = root.resolve()
+    excluded = frozenset(path.resolve() for path in exclude_paths)
     prefix = arcname_prefix.strip().replace("\\", "/").strip("/")
     n = 0
     for path in sorted(base.rglob("*")):
@@ -941,9 +963,12 @@ def plugin_zip_write_directory_tree(
             continue
         if not path.is_file():
             continue
+        resolved = path.resolve()
         try:
-            path.resolve().relative_to(base)
+            resolved.relative_to(base)
         except ValueError:
+            continue
+        if any(resolved.is_relative_to(excluded_path) for excluded_path in excluded):
             continue
         rel = path.relative_to(base)
         parts = rel.parts
