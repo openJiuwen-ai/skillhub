@@ -60,6 +60,34 @@ Skill / SwarmSkill，且 `MARKET_SKILL_REVIEW_ENABLED=true`：
 
 系统 Token（`X-System-Token`，对应系统管理员）发布六类资产都直接 `APPROVED`，跳过审查和审核。
 
+## SkillPack 兼容发布
+
+SkillPack 首版仍使用普通 `skill` 分类，沿用现有审查、审核、展示、检索和下载流程。
+Hub 读取包内容根目录 `SKILL.md` 的 YAML 头；遇到 `kind: skillpack`，额外校验同级
+`skillpack.lock.json`，不依赖标签判断成员是否合法。
+
+- `SKILL.md.skills` 与 lock 的成员名称、数量和顺序必须一致；lock 使用
+  `openjiuwen.skillpack.lock/v1`，Pack 名称、版本须与本次发布一致。
+- 每个成员通过 `name`、`asset_id`、精确 `version` 和 `artifact_sha256` 锁定。
+  成员必须是当前 Hub 中公开、可下载的普通单 Agent Skill；不允许 SwarmSkill 或嵌套 SkillPack。
+  审核状态按锁定版本检查，不以其他版本已通过代替。
+- `artifact_sha256` 对照成员原始制品接口（`is_cli_download=true`）返回的存储 ZIP 校验，
+  不是解包内容或下载时生成的 `.raw.zip` 的摘要。
+  Pack ZIP 只携带执行说明和锁文件，不携带成员源码。
+- 上传时校验失败不写入 Pack 制品；审核员点击通过前重新检查成员，失败时不改变待审状态。
+  系统管理员免审发布、同制品重试、Git 或批量导入也不能绕过发布校验。
+
+例如，Pack 引用 `report-skill@1.0.0`，即使 `2.0.0` 已通过审核，`1.0.0` 未通过、
+被删除或原始 ZIP 摘要不一致，仍不能发布该 Pack。WorkSwarm 可先发布缺失成员，
+等成员审核通过后再提交 Pack。
+
+上传校验和仍校验接收到的 ZIP；若发布表单覆盖元数据或自动包装改变了 ZIP，版本记录和
+存储对象摘要使用最终保存、可通过原始制品接口下载的 ZIP。旧版本若曾被包装但仍记录
+包装前摘要，不自动修改历史数据，需以新版本重新发布后引用。
+
+这不是持续依赖监控：已上架 Pack 的成员后续变化仍需消费端在安装时重新校验。
+本期不增加原生 `skillpack` 分类、独立页面或成员删除的反向引用保护。
+
 ## 可见性
 
 - 访客只能看到已通过的对外版本。待审新版本不会换掉已经公开的版本。

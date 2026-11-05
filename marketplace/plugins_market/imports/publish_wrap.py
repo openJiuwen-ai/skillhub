@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import tempfile
@@ -12,12 +13,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from plugins_market.core.errors import PublishError
 from plugins_market.imports.bundle_safe_extract import skill_import_extract_zip_to_dir
 from plugins_market.imports.skill_entries import detect_import_entry_type, entry_to_publish_zip
 from plugins_market.imports.yaml_util import load_json_object_file
 from plugins_market.validation._pipeline import _find_plugin_yaml_path
 from plugins_market.validation.constants import (
+    MAX_FILE_SIZE,
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_GROUP,
@@ -39,7 +43,12 @@ from plugins_market.validation.plugin_yaml import (
     validate_plugin_yaml_bytes,
     validate_plugin_yaml_public,
 )
-from plugins_market.validation.zip_utils import DecompressCounter, open_zip_bytes, safe_read_zip_member
+from plugins_market.validation.zip_utils import (
+    DecompressCounter,
+    open_zip_bytes,
+    safe_read_zip_member,
+    validate_zip_safety,
+)
 
 
 _PUBLISH_VERSION_FALLBACK = "0.0.1"
@@ -107,7 +116,52 @@ def _read_wrapped_plugin_yaml_fields(content: bytes) -> dict[str, Any]:
             "display_name": public.display_name,
             "description": str(yaml_data.get("description") or public.short_desc or "").strip(),
             "tags": tags,
+            "runtime_type": public.runtime_type,
         }
+
+
+def _rewrite_wrapped_skill_metadata(content: bytes, overrides: PublishMetadataOverrides) -> bytes:
+    """Keep a standard Skill's payload and wrapper files when only form metadata changes."""
+    with open_zip_bytes(content) as source:
+        validate_zip_safety(source)
+        yaml_path = _find_plugin_yaml_path(source)
+        if yaml_path is None:
+            raise PublishError(code=400, error="invalid_plugin_config", message="缺少 plugin.yaml")
+        counter = DecompressCounter()
+        raw = safe_read_zip_member(source, yaml_path, counter)
+        manifest = safe_load_yaml(validate_plugin_yaml_bytes(raw), context="plugin.yaml")
+        fields = _overrides_entry_map(overrides)
+        for field in ("version", "display_name", "description"):
+            if field in fields:
+                manifest[field] = fields[field]
+        if overrides.tags is not None:
+            manifest["metadata"]["tags"] = list(overrides.tags)
+        validate_plugin_yaml_public(manifest)
+        updated_yaml = yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False).encode("utf-8")
+        validate_plugin_yaml_bytes(updated_yaml)
+        result = io.BytesIO()
+        paths: set[str] = set()
+        with zipfile.ZipFile(result, "w") as target:
+            # Fixed ordering/timestamps make retries of identical input reproducible.
+            for original in sorted(source.infolist(), key=lambda item: item.filename):
+                normalized = original.filename.replace("\\", "/").rstrip("/")
+                if normalized in paths:
+                    raise PublishError(
+                        code=400, error="invalid_plugin_structure", message="资产包包含重复文件路径",
+                    )
+                paths.add(normalized)
+                data = updated_yaml if original.filename == yaml_path else safe_read_zip_member(
+                    source, original.filename, counter,
+                )
+                entry = zipfile.ZipInfo(original.filename, date_time=(1980, 1, 1, 0, 0, 0))
+                entry.compress_type = original.compress_type
+                entry.create_system = original.create_system
+                entry.external_attr = original.external_attr
+                target.writestr(entry, data)
+        rewritten = result.getvalue()
+        if len(rewritten) > MAX_FILE_SIZE:
+            raise PublishError(code=400, error="file_too_large", message="覆盖发布信息后的制品超过大小限制")
+        return rewritten
 
 
 def _wrapped_overrides_differ(
@@ -253,9 +307,17 @@ def prepare_publish_zip_content(
     has_market_layout = _zip_has_market_plugin_yaml(content)
     entry_overrides = _overrides_entry_map(overrides)
     needs_wrap = not has_market_layout
-    if has_market_layout and _has_publish_overrides(overrides):
+    if has_market_layout and (_has_publish_overrides(overrides) or overrides.tags is not None):
         current = _read_wrapped_plugin_yaml_fields(content)
-        needs_wrap = needs_wrap or _wrapped_overrides_differ(current, overrides)
+        overrides_differ = _wrapped_overrides_differ(current, overrides)
+        same_skill_name = (
+            current.get("runtime_type") == RUNTIME_SKILL
+            and entry_overrides.get("name", current["name"]) == current["name"]
+        )
+        tags_differ = overrides.tags is not None and overrides.tags != current.get("tags")
+        if same_skill_name and (overrides_differ or tags_differ):
+            return _rewrite_wrapped_skill_metadata(content, overrides)
+        needs_wrap = needs_wrap or overrides_differ
     if not needs_wrap:
         return content
 
