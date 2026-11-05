@@ -106,6 +106,7 @@ export interface SiteConfig {
   gitcode_oauth_enabled: boolean
   github_oauth_enabled: boolean
   agentos_oauth_enabled: boolean
+  keycloak_oauth_enabled: boolean
   rec_list_top_k: number
   hot_list_top_k: number
 }

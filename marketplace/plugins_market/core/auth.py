@@ -11,9 +11,9 @@ from fastapi import Header, HTTPException, Request, status
 
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
+from plugins_market.core.context import set_user_id, set_user_name
 from plugins_market.core.errors import auth_error_payload, http_error_payload
 from plugins_market.core.logging import get_logger
-from plugins_market.core.context import set_user_id, set_user_name
 from plugins_market.core.oauth_user_profile import fetch_oauth_user_profile
 from plugins_market.core.review_admins import is_market_moderation_username
 from plugins_market.core.viewer_context import ViewerContext
@@ -45,10 +45,12 @@ def _http_exception(
     return HTTPException(status_code=status_code, detail=payload)
 
 
-def _is_market_moderation_admin(*, is_system_admin: bool, acting_user_name: Optional[str]) -> bool:
+def _is_market_moderation_admin(
+    *, is_system_admin: bool, acting_user_name: Optional[str], provider: Optional[str] = None
+) -> bool:
     if is_system_admin:
         return True
-    return is_market_moderation_username(acting_user_name)
+    return is_market_moderation_username(acting_user_name, provider)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class AuthContext:
     is_admin: bool
     acting_user_id: str
     acting_user_name: Optional[str] = None
+    acting_user_provider: str = "gitcode"
     is_market_moderation_admin: bool = False
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
@@ -88,11 +91,11 @@ def normalize_oauth_provider_header(raw: Optional[str]) -> str:
     if raw is None or not str(raw).strip():
         return "gitcode"
     p = str(raw).strip().lower()
-    if p in ("gitcode", "github", "agentos"):
+    if p in ("gitcode", "github", "agentos", "keycloak"):
         return p
     raise _http_exception(
         status.HTTP_400_BAD_REQUEST,
-        "Invalid X-OAuth-Provider; allowed: gitcode, github, agentos",
+        "Invalid X-OAuth-Provider; allowed: gitcode, github, agentos, keycloak",
         error="invalid_oauth_provider",
     )
 
@@ -166,6 +169,7 @@ async def require_auth(
                 is_admin=True,
                 acting_user_id=settings.system_admin_user,
                 acting_user_name=settings.system_admin_user,
+                acting_user_provider="system",
                 is_market_moderation_admin=True,
                 ip_address=client_ip,
                 user_agent=ua,
@@ -186,9 +190,11 @@ async def require_auth(
         is_admin=False,
         acting_user_id=oauth_user_id,
         acting_user_name=oauth_user_name,
+        acting_user_provider=oauth_provider,
         is_market_moderation_admin=_is_market_moderation_admin(
             is_system_admin=False,
             acting_user_name=oauth_user_name,
+            provider=oauth_provider,
         ),
         ip_address=client_ip,
         user_agent=ua,
@@ -226,7 +232,7 @@ async def resolve_viewer_context(
             uid, login = await get_oauth_user_id_and_login(token, prov)
             set_user_id(uid)
             set_user_name(login)
-            return ViewerContext(user_id=uid, user_login=login, is_system_admin=False)
+            return ViewerContext(user_id=uid, user_login=login, is_system_admin=False, user_provider=prov)
         except HTTPException:
             return ViewerContext(user_id=None, user_login=None, is_system_admin=False)
     return ViewerContext(user_id=None, user_login=None, is_system_admin=False)

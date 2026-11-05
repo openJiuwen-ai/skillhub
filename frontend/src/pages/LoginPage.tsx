@@ -33,6 +33,7 @@ export default function LoginPage() {
   const [gitcodeOAuthEnabled, setGitcodeOAuthEnabled] = useState(false)
   const [githubOAuthEnabled, setGithubOAuthEnabled] = useState(false)
   const [agentosOAuthEnabled, setAgentosOAuthEnabled] = useState(false)
+  const [keycloakOAuthEnabled, setKeycloakOAuthEnabled] = useState(false)
 
   // 是否从标星按钮跳来：从 URL 参数同步读取，惰性初始化避免闪烁
   const [fromStar, setFromStar] = useState(() => searchParams.get('from') === 'star')
@@ -43,6 +44,7 @@ export default function LoginPage() {
         setGitcodeOAuthEnabled(Boolean(cfg.gitcode_oauth_enabled))
         setGithubOAuthEnabled(Boolean(cfg.github_oauth_enabled))
         setAgentosOAuthEnabled(Boolean(cfg.agentos_oauth_enabled))
+        setKeycloakOAuthEnabled(Boolean(cfg.keycloak_oauth_enabled))
       })
       .catch(() => { /* 获取失败按未启用处理 */ })
   }, [])
@@ -79,11 +81,11 @@ export default function LoginPage() {
     if (fromUrl) {
       const providerFromUrl = (searchParams.get('oauth_provider') || '').trim().toLowerCase()
       const provider =
-        providerFromUrl === 'github' || providerFromUrl === 'gitcode' || providerFromUrl === 'agentos'
+        providerFromUrl === 'github' || providerFromUrl === 'gitcode' || providerFromUrl === 'agentos' || providerFromUrl === 'keycloak'
           ? providerFromUrl
           : (() => {
               const stored = (sessionStorage.getItem(OAUTH_ACTIVE_PROVIDER_KEY) || 'gitcode').toLowerCase()
-              if (stored === 'github' || stored === 'agentos') return stored as OAuthProvider
+              if (stored === 'github' || stored === 'agentos' || stored === 'keycloak') return stored as OAuthProvider
               return 'gitcode'
             })()
       sessionStorage.setItem(OAUTH_PENDING_KEY, stringifyOAuthPending({ provider, session: fromUrl }))
@@ -103,7 +105,7 @@ export default function LoginPage() {
     exchangeOAuthSession(pending.provider, pending.session)
       .then(async data => {
         const profile = await fetchOAuthMe(data.access_token, data.provider)
-        login(data.access_token, profile, data.provider)
+        login(data.access_token, profile, data.provider, data.logout)
       })
       .catch(e => {
         const msg = e instanceof Error ? e.message : t('auth.oauth.genericError')
@@ -209,6 +211,18 @@ export default function LoginPage() {
                 <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
               </button>
             )}
+            {fromStar || !keycloakOAuthEnabled ? null : (
+              <button
+                type="button"
+                disabled={exchanging}
+                onClick={() => startOAuth('keycloak')}
+                className="group relative mt-3 inline-flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl border border-slate-300 bg-white px-5 text-[15px] font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7d2fe] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <ShieldCheck className="h-4 w-4" aria-hidden />
+                <span>{t('auth.login.keycloakButton')}</span>
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+              </button>
+            )}
             {fromStar || githubOAuthEnabled ? (
             <button
               type="button"
@@ -231,7 +245,7 @@ export default function LoginPage() {
               <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
             </button>
             ) : null}
-            {!fromStar && !gitcodeOAuthEnabled && !githubOAuthEnabled && !agentosOAuthEnabled ? (
+            {!fromStar && !gitcodeOAuthEnabled && !githubOAuthEnabled && !agentosOAuthEnabled && !keycloakOAuthEnabled ? (
               <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200/80 bg-red-50/80 px-3 py-2.5 text-sm text-red-800">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden />
                 <span className="leading-relaxed">{t('auth.login.noProviderError')}</span>
