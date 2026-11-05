@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import io
 import json
@@ -115,6 +117,10 @@ from plugins_market.validation.zip_utils import (
     validate_zip_safety,
 )
 from plugins_market.services.agent_package_inspect import extract_agent_package_profile
+from plugins_market.services.skillpack_validation import (
+    validate_skillpack_for_publish,
+    validate_stored_skillpack,
+)
 from plugins_market.services.skill_review import (
     REVIEW_STATUS_SYSTEM_FAILED,
     build_review_summary,
@@ -708,6 +714,9 @@ def publish(
             error_class="validation",
         ) from exc
 
+    # Transport validation above covers the uploaded bytes. Version identity and
+    # download checksums must cover the final artifact after metadata wrapping.
+    computed = _compute_checksum(content)
     meta = extract_plugin_metadata(content)
     content_size = len(content)
     name = (meta["name"] or "").strip()
@@ -918,6 +927,11 @@ def publish(
     initial_version_publish_result = initial_publish_result if is_moderated_publish else PUBLISH_RESULT_SUCCESS
     _validate_asset_name_immutable_for_skill(existing_asset, name, plugin_type)
     _ensure_skill_review_model_configured(needs_skill_review)
+    # This also applies to system publishers and same-artifact retries.
+    validate_skillpack_for_publish(
+        content=content, name=name, version=version, plugin_type=publish_plugin_type,
+        db=db, read_artifact=partial(_read_skillpack_artifact, storage),
+    )
 
     version_dir = _version_dir_prefix(user_id, asset_id, version, asset_type, plugin_type)
     zip_key = _build_storage_path(
@@ -2249,6 +2263,35 @@ def _resolve_artifact_key_from_version_row(
     return zip_keys[0] if zip_keys else fallback_key
 
 
+def _read_skillpack_artifact(
+    storage: S3StorageClient, asset: MarketAssetDB, version_row: MarketAssetVersionDB,
+) -> bytes:
+    """Read a bounded original ZIP from trusted Hub storage, never a supplied URL."""
+    body = None
+    try:
+        fallback = _build_artifact_key(
+            asset.publisher_id, asset.asset_id, version_row.version, asset.name, asset.plugin_type,
+        )
+        key = _resolve_artifact_key_from_version_row(storage, version_row, fallback)
+        response = storage.s3_client.get_object(Bucket=storage.config.bucket_name, Key=key)
+        body = response.get("Body")
+        if body is None:
+            raise ValueError("missing artifact body")
+        content = body.read(MAX_FILE_SIZE + 1)
+        if not content or len(content) > MAX_FILE_SIZE:
+            raise ValueError("invalid artifact size")
+        return content
+    except Exception as exc:
+        raise PublishError(
+            code=502, error="skillpack_artifact_unavailable",
+            message=f"无法读取待校验的 Skill 制品（{asset.asset_id}@{version_row.version}），请稍后重试",
+            error_code="SKILLHUB_SKILLPACK_ARTIFACT_UNAVAILABLE", error_class="upstream",
+        ) from exc
+    finally:
+        if body is not None:
+            body.close()
+
+
 def _extract_size_and_checksum_from_head(head: dict[str, Any]) -> tuple[int | None, str]:
     metadata = head.get("metadata") or {}
     checksum_sha256 = str(metadata.get("sha256") or "").strip().lower()
@@ -2689,6 +2732,50 @@ def _resolve_unspecified_moderated_download_version_row(
     return version_row
 
 
+@dataclass(frozen=True)
+class _SkillApprovalSnapshot:
+    version_id: str
+    version: str
+    artifact_sha256: str | None
+    file_path: str | None
+    status: str | None
+    moderation_status: str | None
+    publish_result: str | None
+
+
+def _skill_approval_snapshot(version_row: MarketAssetVersionDB) -> _SkillApprovalSnapshot:
+    """Capture the exact version/state checked before any slow artifact I/O."""
+    return _SkillApprovalSnapshot(
+        version_id=version_row.version_id,
+        version=version_row.version,
+        artifact_sha256=version_row.artifact_sha256,
+        file_path=version_row.file_path,
+        status=version_row.status,
+        moderation_status=version_row.moderation_status,
+        publish_result=version_row.publish_result,
+    )
+
+
+def _prevalidate_skill_approval(
+    *, asset: MarketAssetDB, version: str, action: str,
+    db: Session, storage: S3StorageClient,
+) -> _SkillApprovalSnapshot | None:
+    """Validate storage before taking the version write lock; tags are not evidence."""
+    if asset.plugin_type != "skill" or action != "approve":
+        return None
+    candidate = MarketAssetVersionRepository(db).get_version(asset_id=asset.asset_id, version=version)
+    if candidate is None or not is_skill_in_manual_moderation_stage(
+        candidate.publish_result, candidate.moderation_status,
+    ) or (candidate.moderation_status or "").strip().upper() not in (MODERATION_PENDING, MODERATION_REJECTED):
+        return None
+    snapshot = _skill_approval_snapshot(candidate)
+    validate_stored_skillpack(
+        asset=asset, version_row=candidate, db=db,
+        read_artifact=partial(_read_skillpack_artifact, storage),
+    )
+    return snapshot
+
+
 def moderate_skill_asset_service(
     *,
     asset_id: str,
@@ -2736,9 +2823,17 @@ def moderate_skill_asset_service(
         vstr = (asset.latest_version or "").strip()
     if not vstr:
         raise _http_exception(status.HTTP_404_NOT_FOUND, "Version not found")
+    act = (action or "").strip().lower()
+    checked_snapshot = _prevalidate_skill_approval(
+        asset=asset, version=vstr, action=act, db=db, storage=storage,
+    )
     vrow = version_repo.lock_version_for_update(asset_id=asset_id, version=vstr)
     if not vrow:
         raise _http_exception(status.HTTP_404_NOT_FOUND, "Version not found")
+    if checked_snapshot is not None:
+        # SELECT FOR UPDATE can reuse an ORM identity already loaded above.
+        # Refresh under the lock so the comparison observes concurrent changes.
+        db.refresh(vrow, with_for_update=True)
 
     raw_moderation_status = (getattr(vrow, "moderation_status", None) or "").strip().upper()
     cur = moderation_coalesce_display(getattr(vrow, "moderation_status", None))
@@ -2746,7 +2841,6 @@ def moderate_skill_asset_service(
         getattr(vrow, "publish_result", None),
         getattr(vrow, "moderation_status", None),
     )
-    act = (action or "").strip().lower()
     if act == "approve":
         if current_publish_result == PUBLISH_RESULT_REVIEWING:
             raise PublishError(
@@ -2777,6 +2871,14 @@ def moderate_skill_asset_service(
                 error_code="SKILLHUB_REVIEW_MODERATION_STATE_INVALID",
                 error_class="validation",
             )
+        if asset.plugin_type == "skill":
+            if checked_snapshot != _skill_approval_snapshot(vrow):
+                raise PublishError(
+                    code=409,
+                    error="moderation_version_changed",
+                    message="校验期间版本或审核状态发生变化，请刷新后重新审核",
+                    error_class="conflict",
+                )
         vrow.moderation_status = MODERATION_APPROVED
         vrow.moderation_reject_reason = None
         vrow.publish_result = PUBLISH_RESULT_SUCCESS
