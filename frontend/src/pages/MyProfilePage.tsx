@@ -31,6 +31,7 @@ import { useMutation, useQuery, useQueryClient } from 'react-query'
 import { AuditLogTab } from '@/components/AuditLog/AuditLogTab'
 import {
   deletePluginAllVersions,
+  deletePluginVersionsBatch,
   getMyLikes,
   getMyStars,
   getPlugins,
@@ -40,6 +41,7 @@ import {
   type MarketplacePluginItem,
   getSkillModerationAuditHistory,
   type SkillModerationAuditItem,
+  postSkillModerationBatch,
 } from '@/api/plugin'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import { setPostLoginRedirect } from '@/auth/postLoginRedirect'
@@ -92,6 +94,36 @@ function resolveSkillReviewVersion(item: MarketplacePluginItem): string {
   return orderedVersions[orderedVersions.length - 1] || ''
 }
 
+/** 待审核队列一条待处理项：资产 + 待审版本 + 是否「审查中」。 */
+type PendingSelectionEntry = {
+  asset_id: string
+  version: string
+  /** publish_result === 'reviewing'：不允许通过 / 驳回，但允许删除 */
+  reviewing: boolean
+  /** 该版本是否为资产唯一版本（删除后整资产被删） */
+  onlyVersion: boolean
+  title: string
+}
+
+function pendingVersionKey(assetId: string, version: string): string {
+  return `${assetId}\u0000${version}`
+}
+
+function isReviewingPendingVersion(item: MarketplacePluginItem, version: string): boolean {
+  const publishResultMap = getSkillLikeVersionPublishResultMap(item)
+  return String(publishResultMap[version] || '').trim().toLowerCase() === 'reviewing'
+}
+
+function pendingSelectionEntry(item: MarketplacePluginItem, version: string): PendingSelectionEntry {
+  return {
+    asset_id: item.asset_id,
+    version,
+    reviewing: isReviewingPendingVersion(item, version),
+    onlyVersion: (Array.isArray(item.all_versions) ? item.all_versions.length : 0) <= 1,
+    title: item.display_name || item.name || item.asset_id,
+  }
+}
+
 export default function MyProfilePage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -108,6 +140,19 @@ export default function MyProfilePage() {
   const [deleteTarget, setDeleteTarget] = useState<MarketplacePluginItem | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [revokingGrantKey, setRevokingGrantKey] = useState<string | null>(null)
+  const [pendingSearch, setPendingSearch] = useState('')
+  const [pendingSearchDebounced, setPendingSearchDebounced] = useState('')
+  const [pendingPublisher, setPendingPublisher] = useState('')
+  const [pendingPublisherDebounced, setPendingPublisherDebounced] = useState('')
+  const [selectedPending, setSelectedPending] = useState<Record<string, PendingSelectionEntry>>({})
+  const [batchDialog, setBatchDialog] = useState<'reject' | 'delete' | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
+  const [batchSubmitting, setBatchSubmitting] = useState(false)
+  const [batchResult, setBatchResult] = useState<{
+    label: string
+    succeeded: number
+    failed: { asset_id: string; version: string; title?: string; message: string }[]
+  } | null>(null)
 
   useEffect(() => {
     if (isAuthenticated) return
@@ -139,7 +184,23 @@ export default function MyProfilePage() {
 
   useEffect(() => {
     setPage(1)
-  }, [activeTab, search, pendingTypeFilter])
+  }, [activeTab, search, pendingTypeFilter, pendingSearchDebounced, pendingPublisherDebounced])
+
+  // 用户名 / 名称搜索 300ms debounce，避免每次按键都请求服务端。
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPendingSearchDebounced(pendingSearch.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [pendingSearch])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPendingPublisherDebounced(pendingPublisher.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [pendingPublisher])
+
+  // 勾选状态只对当前页生效；翻页 / 换筛选 / 切页后清空。
+  useEffect(() => {
+    setSelectedPending({})
+  }, [activeTab, page, pendingTypeFilter, pendingSearchDebounced, pendingPublisherDebounced])
 
   const pendingPluginTypeQuery =
     pendingTypeFilter === 'all' ? MODERATED_MARKET_QUERY_VALUE : pendingTypeFilter
@@ -177,13 +238,15 @@ export default function MyProfilePage() {
   )
 
   const pendingSkillsQuery = useQuery(
-    ['admin-pending-skills', page, pageSize, pendingPluginTypeQuery],
+    ['admin-pending-skills', page, pageSize, pendingPluginTypeQuery, pendingSearchDebounced, pendingPublisherDebounced],
     () =>
       getPlugins({
         page,
         page_size: pageSize,
         plugin_type: pendingPluginTypeQuery,
         moderation_status: 'PENDING',
+        search_keyword: pendingSearchDebounced || undefined,
+        publisher_name: pendingPublisherDebounced || undefined,
         order_by: 'update_time',
         desc: true,
       }),
@@ -305,12 +368,14 @@ export default function MyProfilePage() {
     if (page > totalPages) setPage(totalPages)
   }, [data, total, pageSize, page, isGroupSkillTab, isGroupsTab])
 
-  /** 客户端过滤当前页结果，保证搜索体验与服务端分页兼容（审核历史走服务端分页，不参与本地过滤） */
+  /** 客户端过滤当前页结果，保证搜索体验与服务端分页兼容（审核历史/待审核走服务端分页，不参与本地过滤） */
   const filteredItems = useMemo(() => {
     if (isAuditTab) return []
     if (isGitTab) return []
     if (isGroupsTab) return groupItems
     if (isGroupSkillTab) return groupSkillItems
+    // 待审核页：搜索 / 用户名筛选已由服务端完成，前端不再二次过滤，空状态与分页 total 都用接口返回。
+    if (isPendingTab) return items
     const list = items as MarketplacePluginItem[]
     const q = search.trim().toLowerCase()
     if (!q) return list
@@ -319,7 +384,7 @@ export default function MyProfilePage() {
       const b = (it.name || '').toLowerCase()
       return a.includes(q) || b.includes(q)
     })
-  }, [items, search, isAuditTab, isGitTab, isGroupsTab, groupItems, isGroupSkillTab, groupSkillItems])
+  }, [items, search, isAuditTab, isGitTab, isGroupsTab, groupItems, isGroupSkillTab, groupSkillItems, isPendingTab])
 
   const errMsg = useMemo(() => {
     if (!error) return ''
@@ -448,6 +513,121 @@ export default function MyProfilePage() {
     } finally {
       setRevokingGrantKey(null)
     }
+  }
+
+  // ----- 待审核批量操作 -----
+  const pendingList = (items as MarketplacePluginItem[]) ?? []
+  const selectedPendingValues = Object.values(selectedPending)
+  const selectedCount = selectedPendingValues.length
+  const selectedWholeAssetCount = selectedPendingValues.filter(s => s.onlyVersion).length
+  // 审查中（reviewing）的卡片不能通过 / 驳回，但允许删除。
+  const selectedModeratableCount = selectedPendingValues.filter(s => !s.reviewing).length
+  const allSelectedOnPage =
+    pendingList.length > 0 &&
+    pendingList.every(it => {
+      const version = resolveSkillReviewVersion(it)
+      return !version || Boolean(selectedPending[pendingVersionKey(it.asset_id, version)])
+    })
+
+  const togglePendingSelect = (item: MarketplacePluginItem) => {
+    const version = resolveSkillReviewVersion(item)
+    if (!version) return
+    const key = pendingVersionKey(item.asset_id, version)
+    setSelectedPending(prev => {
+      const next = { ...prev }
+      if (next[key]) delete next[key]
+      else next[key] = pendingSelectionEntry(item, version)
+      return next
+    })
+  }
+
+  const toggleSelectAllPending = () => {
+    if (allSelectedOnPage) {
+      setSelectedPending({})
+      return
+    }
+    const next: Record<string, PendingSelectionEntry> = {}
+    for (const item of pendingList) {
+      const version = resolveSkillReviewVersion(item)
+      if (!version) continue
+      next[pendingVersionKey(item.asset_id, version)] = pendingSelectionEntry(item, version)
+    }
+    setSelectedPending(next)
+  }
+
+  const invalidatePendingCaches = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['admin-pending-skills'] }),
+      queryClient.invalidateQueries({ queryKey: ['plugins'] }),
+    ])
+  }
+
+  const selectedBatchItems = () =>
+    selectedPendingValues.map(s => ({ asset_id: s.asset_id, version: s.version }))
+
+  const runBatchModeration = async (action: 'approve' | 'reject', reason?: string) => {
+    const items = selectedBatchItems()
+    if (!items.length) return
+    setBatchSubmitting(true)
+    try {
+      const result = await postSkillModerationBatch({ action, reason, items })
+      setSelectedPending({})
+      setBatchResult({
+        label: action === 'approve' ? t('profile.batchApproveResultTitle') : t('profile.batchRejectResultTitle'),
+        succeeded: result.succeeded.length,
+        failed: result.failed.map(f => ({
+          asset_id: f.asset_id,
+          version: f.version,
+          title: selectedPending[pendingVersionKey(f.asset_id, f.version)]?.title,
+          message: f.message,
+        })),
+      })
+      await invalidatePendingCaches()
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : t('profile.batchFailed'))
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }
+
+  const handleBatchApprove = () => runBatchModeration('approve')
+
+  const confirmBatchReject = () => {
+    const reason = rejectReason.trim()
+    if (!reason) return
+    setBatchDialog(null)
+    setRejectReason('')
+    runBatchModeration('reject', reason)
+  }
+
+  const runBatchDelete = async () => {
+    const items = selectedBatchItems()
+    if (!items.length) return
+    setBatchSubmitting(true)
+    try {
+      const result = await deletePluginVersionsBatch(items)
+      setSelectedPending({})
+      setBatchResult({
+        label: t('profile.batchDeleteResultTitle'),
+        succeeded: result.succeeded.length,
+        failed: result.failed.map(f => ({
+          asset_id: f.asset_id,
+          version: f.version,
+          title: selectedPending[pendingVersionKey(f.asset_id, f.version)]?.title,
+          message: f.message,
+        })),
+      })
+      await invalidatePendingCaches()
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : t('profile.batchFailed'))
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }
+
+  const confirmBatchDelete = () => {
+    setBatchDialog(null)
+    runBatchDelete()
   }
 
   if (!isAuthenticated || !user) {
@@ -734,7 +914,7 @@ export default function MyProfilePage() {
             {(isSkillTab || isGroupsTab || isGroupSkillTab || isPendingTab || isStarsTab || isLikesTab) ? (
               <div className="relative mt-4 space-y-3">
                 {isPendingTab ? (
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                     <label htmlFor="pending-type-filter" className="text-xs font-medium text-[#6B7280]">
                       {t('profile.pendingTypeFilterLabel')}
                     </label>
@@ -751,21 +931,90 @@ export default function MyProfilePage() {
                         </option>
                       ))}
                     </select>
+
+                    <label htmlFor="pending-publisher-filter" className="text-xs font-medium text-[#6B7280]">
+                      {t('profile.pendingPublisherFilterLabel')}
+                    </label>
+                    <input
+                      id="pending-publisher-filter"
+                      type="text"
+                      value={pendingPublisher}
+                      onChange={e => setPendingPublisher(e.target.value)}
+                      placeholder={t('profile.pendingPublisherPlaceholder')}
+                      className="h-9 w-40 rounded-lg border border-[#E5E7EB] bg-white px-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
+                    />
+
+                    <div className="relative flex-1 min-w-[200px]">
+                      <Search
+                        className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
+                        aria-hidden
+                      />
+                      <input
+                        type="text"
+                        value={pendingSearch}
+                        onChange={e => setPendingSearch(e.target.value)}
+                        placeholder={t('profile.searchPlaceholder')}
+                        className="h-9 w-full rounded-lg border border-[#E5E7EB] bg-white pl-9 pr-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <Search
+                      className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
+                      aria-hidden
+                    />
+                    <input
+                      type="text"
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      placeholder={t('profile.searchPlaceholder')}
+                      className="h-10 w-full rounded-lg border border-[#E5E7EB] bg-white pl-10 pr-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
+                    />
+                  </div>
+                )}
+
+                {isPendingTab ? (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-[#374151]">
+                      <input
+                        type="checkbox"
+                        checked={allSelectedOnPage}
+                        onChange={toggleSelectAllPending}
+                        className="h-4 w-4 cursor-pointer accent-[#4F46E5]"
+                      />
+                      <span>{t('profile.batchSelectAllPage')}</span>
+                    </label>
+                    <span className="text-xs text-[#6B7280]">
+                      {t('profile.batchSelectedCount', { count: selectedCount })}
+                    </span>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      disabled={selectedModeratableCount === 0 || batchSubmitting}
+                      onClick={handleBatchApprove}
+                      className="inline-flex h-8 items-center justify-center rounded-full border border-emerald-600 bg-white px-4 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t('profile.batchApprove')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedModeratableCount === 0 || batchSubmitting}
+                      onClick={() => setBatchDialog('reject')}
+                      className="inline-flex h-8 items-center justify-center rounded-full border border-amber-600 bg-white px-4 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t('profile.batchReject')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedCount === 0 || batchSubmitting}
+                      onClick={() => setBatchDialog('delete')}
+                      className="inline-flex h-8 items-center justify-center rounded-full border border-red-600 bg-white px-4 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t('profile.batchDelete')}
+                    </button>
                   </div>
                 ) : null}
-                <div className="relative">
-                <Search
-                  className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
-                  aria-hidden
-                />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder={t('profile.searchPlaceholder')}
-                  className="h-10 w-full rounded-lg border border-[#E5E7EB] bg-white pl-10 pr-3 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
-                />
-                </div>
               </div>
             ) : null}
 
@@ -877,19 +1126,26 @@ export default function MyProfilePage() {
                       />
                       )
                     })
-                    : (filteredItems as MarketplacePluginItem[]).map(row => (
-                      <SkillCard
-                        key={row.asset_id}
-                        item={row}
-                        showDelete={isSkillTab}
-                        statusMode={isSkillTab ? 'publish' : 'moderation'}
-                        showModerationStatus={isSkillTab || isPendingTab}
-                        showPluginType={isPendingTab}
-                        onOpen={() => openDetail(row)}
-                        onOpenReview={isPendingTab ? () => openReviewDetail(row) : undefined}
-                        onDelete={() => setDeleteTarget(row)}
-                      />
-                    ))}
+                    : (filteredItems as MarketplacePluginItem[]).map(row => {
+                      const version = resolveSkillReviewVersion(row)
+                      const selected = Boolean(version) && Boolean(selectedPending[pendingVersionKey(row.asset_id, version)])
+                      return (
+                        <SkillCard
+                          key={row.asset_id}
+                          item={row}
+                          showDelete={isSkillTab}
+                          statusMode={isSkillTab ? 'publish' : 'moderation'}
+                          showModerationStatus={isSkillTab || isPendingTab}
+                          showPluginType={isPendingTab}
+                          selectable={isPendingTab}
+                          selected={selected}
+                          onToggleSelect={() => togglePendingSelect(row)}
+                          onOpen={() => openDetail(row)}
+                          onOpenReview={isPendingTab ? () => openReviewDetail(row) : undefined}
+                          onDelete={() => setDeleteTarget(row)}
+                        />
+                      )
+                    })}
                 </div>
               )}
             </div>
@@ -920,6 +1176,43 @@ export default function MyProfilePage() {
             if (!deleting) setDeleteTarget(null)
           }}
           onConfirm={handleConfirmDelete}
+        />
+      ) : null}
+
+      {batchDialog === 'delete' ? (
+        <BatchDeleteDialog
+          count={selectedCount}
+          wholeAssetCount={selectedWholeAssetCount}
+          loading={batchSubmitting}
+          onCancel={() => {
+            if (!batchSubmitting) setBatchDialog(null)
+          }}
+          onConfirm={confirmBatchDelete}
+        />
+      ) : null}
+
+      {batchDialog === 'reject' ? (
+        <RejectReasonDialog
+          count={selectedCount}
+          value={rejectReason}
+          onChange={setRejectReason}
+          loading={batchSubmitting}
+          onCancel={() => {
+            if (!batchSubmitting) {
+              setBatchDialog(null)
+              setRejectReason('')
+            }
+          }}
+          onConfirm={confirmBatchReject}
+        />
+      ) : null}
+
+      {batchResult ? (
+        <BatchResultDialog
+          title={batchResult.label}
+          succeeded={batchResult.succeeded}
+          failed={batchResult.failed}
+          onClose={() => setBatchResult(null)}
         />
       ) : null}
     </div>
@@ -1054,6 +1347,10 @@ type SkillCardProps = {
   showModerationStatus?: boolean
   /** 待审页展示资产类型（Skill / Agent 等） */
   showPluginType?: boolean
+  /** 待审页展示勾选框 */
+  selectable?: boolean
+  selected?: boolean
+  onToggleSelect?: () => void
   /** 该授权对当前用户的可见来源（admin/owner/group/public） */
   accessSource?: 'admin' | 'owner' | 'group' | 'public' | null
   /** 撤销组群授权回调；传入则展示撤销按钮 */
@@ -1157,6 +1454,9 @@ function SkillCard({
   statusMode = 'publish',
   showModerationStatus = true,
   showPluginType = false,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
   accessSource,
   onRevoke,
   revoking,
@@ -1193,6 +1493,19 @@ function SkillCard({
       }}
       className="group relative flex cursor-pointer items-center gap-3 rounded-xl border border-[#E5E7EB] bg-white px-4 py-3 transition-all hover:border-[#CBD5E1] hover:shadow-[0_4px_12px_rgba(16,24,40,0.06)]"
     >
+      {selectable ? (
+        <input
+          type="checkbox"
+          checked={selected}
+          onClick={e => e.stopPropagation()}
+          onChange={e => {
+            e.stopPropagation()
+            onToggleSelect?.()
+          }}
+          aria-label={t('profile.batchSelect')}
+          className="h-4 w-4 shrink-0 cursor-pointer accent-[#4F46E5]"
+        />
+      ) : null}
       {showUserIcon ? (
         <img
           src={iconUrl}
@@ -1363,6 +1676,160 @@ function DeleteSkillDialog({ name, loading, onCancel, onConfirm }: DeleteSkillDi
             className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full border border-[#D1D5DB] bg-white px-4 text-sm font-medium text-[#374151] transition-colors hover:border-[#9CA3AF] hover:text-[#111827] disabled:opacity-60"
           >
             {t('profile.card.cancel')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type RejectReasonDialogProps = {
+  count: number
+  value: string
+  onChange: (value: string) => void
+  loading: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+/** 批量驳回：整批共用一条原因。 */
+function RejectReasonDialog({ count, value, onChange, loading, onCancel, onConfirm }: RejectReasonDialogProps) {
+  const { t } = useTranslation()
+  const canSubmit = Boolean(value.trim()) && !loading
+  return (
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={() => !loading && onCancel()} />
+      <div className="relative z-10 w-full max-w-[440px] rounded-2xl bg-white px-6 py-6 shadow-xl">
+        <div className="text-base font-semibold text-[#111827]">{t('profile.batchRejectDialogTitle')}</div>
+        <div className="mt-2 text-sm leading-6 text-[#374151]">
+          {t('profile.batchRejectDialogBody', { count })}
+        </div>
+        <textarea
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          rows={3}
+          placeholder={t('profile.batchRejectReasonPlaceholder')}
+          className="mt-3 w-full resize-none rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:border-[#4F46E5] focus:outline-none focus:ring-2 focus:ring-[#E0E7FF]"
+        />
+        <div className="mt-6 flex items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={!canSubmit}
+            className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full bg-[linear-gradient(99.61deg,#1E54F9_0%,#852EFE_100%)] px-4 text-sm font-medium text-white shadow-sm transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {t('profile.card.confirm')}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full border border-[#D1D5DB] bg-white px-4 text-sm font-medium text-[#374151] transition-colors hover:border-[#9CA3AF] hover:text-[#111827] disabled:opacity-60"
+          >
+            {t('profile.card.cancel')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type BatchDeleteDialogProps = {
+  count: number
+  wholeAssetCount: number
+  loading: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+/** 批量删除确认：标明条数，并标出有多少条会整资产删除。 */
+function BatchDeleteDialog({ count, wholeAssetCount, loading, onCancel, onConfirm }: BatchDeleteDialogProps) {
+  const { t } = useTranslation()
+  return (
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={() => !loading && onCancel()} />
+      <div className="relative z-10 w-full max-w-[440px] rounded-2xl bg-white px-6 py-6 shadow-xl">
+        <div className="text-base font-semibold text-[#111827]">{t('profile.batchDeleteDialogTitle')}</div>
+        <div className="mt-2 text-sm leading-6 text-[#374151]">
+          {t('profile.batchDeleteDialogBody', { count })}
+        </div>
+        {wholeAssetCount > 0 ? (
+          <div className="mt-2 text-sm leading-6 text-[#B45309]">
+            {t('profile.batchDeleteDialogWholeAsset', { count: wholeAssetCount })}
+          </div>
+        ) : null}
+        <div className="mt-6 flex items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full bg-red-600 px-4 text-sm font-medium text-white shadow-sm transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {t('profile.card.confirm')}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full border border-[#D1D5DB] bg-white px-4 text-sm font-medium text-[#374151] transition-colors hover:border-[#9CA3AF] hover:text-[#111827] disabled:opacity-60"
+          >
+            {t('profile.card.cancel')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type BatchResultDialogProps = {
+  title: string
+  succeeded: number
+  failed: { asset_id: string; version: string; title?: string; message: string }[]
+  onClose: () => void
+}
+
+/** 批量操作结果：成功 / 失败计数，失败可展开原因。 */
+function BatchResultDialog({ title, succeeded, failed, onClose }: BatchResultDialogProps) {
+  const { t } = useTranslation()
+  const [showFailures, setShowFailures] = useState(false)
+  return (
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-[460px] rounded-2xl bg-white px-6 py-6 shadow-xl">
+        <div className="text-base font-semibold text-[#111827]">{title}</div>
+        <div className="mt-3 space-y-1 text-sm leading-6 text-[#374151]">
+          <div>{t('profile.batchResultSuccess', { count: succeeded })}</div>
+          <div>{t('profile.batchResultFailed', { count: failed.length })}</div>
+        </div>
+        {failed.length > 0 ? (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => setShowFailures(v => !v)}
+              className="text-xs font-medium text-[#0950DE] hover:underline"
+            >
+              {showFailures ? t('profile.batchResultHideFailures') : t('profile.batchResultShowFailures')}
+            </button>
+            {showFailures ? (
+              <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-lg bg-[#F9FAFB] p-3">
+                {failed.map((f, idx) => (
+                  <li key={`${f.asset_id}-${f.version}-${idx}`} className="text-xs leading-5 text-[#374151]">
+                    <span className="font-medium">{f.title || f.asset_id}</span>
+                    {f.version ? <span className="text-[#9CA3AF]">（{f.version}）</span> : null}
+                    <span className="text-[#6B7280]">：{f.message}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="mt-6 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full bg-[linear-gradient(99.61deg,#1E54F9_0%,#852EFE_100%)] px-4 text-sm font-medium text-white shadow-sm transition-opacity hover:opacity-90"
+          >
+            {t('profile.card.confirm')}
           </button>
         </div>
       </div>
