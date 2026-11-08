@@ -1,5 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
+import codecs
 import hashlib
 import json
 import os
@@ -1213,6 +1214,30 @@ class PluginCommandsTest(unittest.TestCase):
             result = plugin_validate(plugin_root)
             self.assertFalse(result.ok)
             self.assertTrue(any("description" in e.lower() for e in result.errors))
+
+    def test_validate_skill_accepts_utf8_bom(self) -> None:
+        """A UTF-8 BOM must not make the frontmatter fence invisible."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root = plugin_init("bom-skill", Path(tmp), plugin_type="skill")
+            skill_md = plugin_root / "SKILL.md"
+            original = skill_md.read_bytes()
+            self.assertTrue(original.startswith(b"---"), "template should start with frontmatter")
+            skill_md.write_bytes(codecs.BOM_UTF8 + original)
+            result = plugin_validate(plugin_root)
+            self.assertTrue(result.ok, msg=f"errors: {result.errors}")
+
+    def test_validate_skill_reports_non_utf8_as_error(self) -> None:
+        """Undecodable bytes must become a validation error, not an exception."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root = plugin_init("enc-skill", Path(tmp), plugin_type="skill")
+            skill_md = plugin_root / "SKILL.md"
+            payload = (
+                "---" + "\n" + "name: enc-skill" + "\n" + "description: ok" + "\n" + "---" + "\n" + "\n" + "# x" + "\n"
+            ).encode("utf-8")
+            skill_md.write_bytes(payload + bytes([0xFF, 0xFE]) + b" not utf-8" + bytes([10]))
+            result = plugin_validate(plugin_root)
+            self.assertFalse(result.ok)
+            self.assertTrue(any("UTF-8" in e for e in result.errors), result.errors)
 
     def test_install_second_install_without_force_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

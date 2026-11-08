@@ -209,9 +209,14 @@ def _validate_skill_slug(value: str, *, field: str = "name") -> str | None:
 
 def _parse_skill_frontmatter(skill_md: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
-        text = skill_md.read_text(encoding="utf-8")
+        raw = skill_md.read_bytes()
     except OSError as e:
         return None, f"cannot read SKILL.md: {e}"
+    try:
+        # utf-8-sig drops a BOM if present; a BOM must not hide the frontmatter fence.
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        return None, f"SKILL.md must be UTF-8 encoded: {e}"
     if not text.lstrip().startswith("---"):
         return None, "SKILL.md must start with YAML frontmatter (---)"
     rest = text.lstrip()[3:].lstrip("\n")
