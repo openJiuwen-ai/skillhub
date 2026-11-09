@@ -90,6 +90,26 @@ async function inspectBareNativeZip(zip: JSZip, paths: string[]): Promise<AgentZ
         isBareNative: true,
       }
     }
+    if (packageType === 'extension') {
+      const pkg = (manifest.package && typeof manifest.package === 'object' && !Array.isArray(manifest.package))
+        ? (manifest.package as Record<string, unknown>)
+        : {}
+      const display = (manifest.display && typeof manifest.display === 'object' && !Array.isArray(manifest.display))
+        ? (manifest.display as Record<string, unknown>)
+        : {}
+      const name = firstNonEmpty(pkg.id)
+      const version = firstNonEmpty(pkg.version)
+      if (!name) throw new Error('AGENT_ZIP_MISSING_NAME')
+      return {
+        pluginType: 'system-plugin',
+        name,
+        version,
+        displayName: localizedText(display.name) || name,
+        description: localizedText(display.description),
+        tags: localizedTags(display.tags),
+        isBareNative: true,
+      }
+    }
     const pluginType = normalizePluginType(
       packageType === 'plugin'
         ? 'agent-plugin'

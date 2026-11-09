@@ -314,6 +314,41 @@ def _extract_mcp_profile(
     }
 
 
+def _extract_system_plugin_profile(manifest: dict[str, Any]) -> dict[str, Any]:
+    package = manifest.get("package")
+    package = package if isinstance(package, dict) else {}
+    display = manifest.get("display")
+    display = display if isinstance(display, dict) else {}
+
+    domain = package.get("domain")
+    if domain not in ("agentserver", "gateway"):
+        domain = "agentserver"
+
+    events: list[dict[str, str]] = []
+    raw_events = display.get("events")
+    if isinstance(raw_events, list):
+        for item in raw_events:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            events.append(
+                {
+                    "name": name.strip(),
+                    "description": _localized_item_text(item.get("description")),
+                }
+            )
+
+    return {
+        "package_type": "extension",
+        "domain": domain,
+        "details": _localized_item_text(display.get("details")) or None,
+        "events": events,
+        "manifest_tags": localized_manifest_tags(display.get("tags")),
+    }
+
+
 def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
     """Parse inner manifest.json for wrapped Agent asset detail display."""
     names = [info.filename for info in zf.infolist() if not info.is_dir()]
@@ -338,5 +373,8 @@ def extract_agent_package_profile(zf: zipfile.ZipFile) -> dict[str, Any] | None:
 
     if package_type == "mcp":
         return _extract_mcp_profile(zf, names, manifest, prefix)
+
+    if package_type == "extension":
+        return _extract_system_plugin_profile(manifest)
 
     return None

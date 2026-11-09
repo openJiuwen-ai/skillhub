@@ -144,6 +144,7 @@ export type DetectedPublishPluginType =
   | 'agent-template'
   | 'agent-group'
   | 'agent-mcp'
+  | 'system-plugin'
   | 'unknown'
 
 export function mapSkillFrontmatterKindToPluginType(kind: string | null | undefined): DetectedPublishPluginType {

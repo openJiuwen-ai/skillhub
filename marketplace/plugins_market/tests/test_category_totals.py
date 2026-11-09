@@ -2,7 +2,7 @@
 
 """category_totals_by_type 聚合测试：口径与 list_plugins 的 total 一致（匿名访客市场口径）。
 
-覆盖：按 tab 类型切片（agent 四类要求 asset_type == plugin_type == tab，
+覆盖：按 tab 类型切片（agent 五类要求 asset_type == plugin_type == tab，
 skill 两类只按 plugin_type）、未分类计入 all 不计入 totals、
 OFFLINE/私有/待审剔除。
 """

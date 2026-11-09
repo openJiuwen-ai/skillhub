@@ -25,6 +25,8 @@ from plugins_market.validation.constants import (
     MAX_DECOMPRESSED_TOTAL,
     MAX_ZIP_ENTRIES,
     PNG_MAGIC,
+    PREVIEW_MAX_BYTES,
+    PREVIEW_MAX_PIXELS,
     ZIP_ENTRY_WINDOWS_DRIVE_PATTERN,
     ZIP_STREAM_READ_CHUNK_BYTES,
 )
@@ -290,6 +292,28 @@ def has_src_tree(names: set[str], prefix: str) -> bool:
 # ---------------------------------------------------------------------------
 # PNG icon validation（仅当调用方已确认存在 icon 成员时调用）
 # ---------------------------------------------------------------------------
+
+def validate_png_preview_bytes(data: bytes, *, path: str = "preview.png") -> None:
+    """校验预览图 PNG 魔数与大小上限；无预览图时不要调用。"""
+    if len(data) > PREVIEW_MAX_BYTES:
+        raise PublishError(
+            code=400,
+            error="invalid_plugin_structure",
+            message=(
+                f"{path} 大小超过上限（最大 {PREVIEW_MAX_BYTES // (1024 * 1024)} MB）"
+            ),
+        )
+    if not data.startswith(PNG_MAGIC):
+        raise PublishError(
+            code=400,
+            error="invalid_plugin_structure",
+            message=f"{path} 不是有效的 PNG 文件（文件头魔数不匹配）",
+        )
+
+    from plugins_market.validation.icon_png_optimize import assert_png_decodable
+
+    assert_png_decodable(data, path=path, max_pixels=PREVIEW_MAX_PIXELS)
+
 
 def validate_png_icon_bytes(data: bytes, *, path: str = "icon.png") -> None:
     """校验 PNG 魔数与大小上限；无图标时不要调用。"""

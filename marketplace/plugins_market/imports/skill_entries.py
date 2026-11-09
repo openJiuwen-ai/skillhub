@@ -26,10 +26,12 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_SKILL,
+    RUNTIME_SYSTEM_PLUGIN,
     SKILL_DESC_MAX_LEN,
     SKILL_NAME_MAX_LEN,
     SKILL_NAME_PATTERN,
     is_valid_market_version,
+    is_valid_system_plugin_name,
 )
 from plugins_market.validation.localized_manifest import (
     localized_manifest_tags,
@@ -93,10 +95,17 @@ _ADMIN_IMPORT_RUNTIME_TYPES = {
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_MCP,
+    RUNTIME_SYSTEM_PLUGIN,
 }
 
 
-def _validate_wrapped_asset_name(name: str) -> None:
+def _validate_wrapped_asset_name(name: str, runtime_type: str) -> None:
+    if runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        if not is_valid_system_plugin_name(name):
+            raise ValueError(
+                "system plugin name must match ^[a-z][a-z0-9.-]*$ without '..' or trailing '.'"
+            )
+        return
     if not name or not NAME_PATTERN.match(name):
         raise ValueError("asset name must match ^[a-z][a-z0-9-]*$")
 
@@ -127,13 +136,20 @@ def _patch_native_agent_manifest(
     if not manifest_path.is_file():
         return
     manifest = load_json_object_file(manifest_path, label="manifest.json")
-    manifest["version"] = version
-    if runtime_type == RUNTIME_AGENT_PLUGIN:
-        manifest["id"] = name
-    elif runtime_type in (RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
-        manifest["name"] = name
-    elif runtime_type == RUNTIME_AGENT_MCP:
-        manifest["id"] = name
+    if runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        package = manifest.get("package")
+        if not isinstance(package, dict):
+            raise ValueError("manifest.package must be an object")
+        package["id"] = name
+        package["version"] = version
+    else:
+        manifest["version"] = version
+        if runtime_type == RUNTIME_AGENT_PLUGIN:
+            manifest["id"] = name
+        elif runtime_type in (RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
+            manifest["name"] = name
+        elif runtime_type == RUNTIME_AGENT_MCP:
+            manifest["id"] = name
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -152,7 +168,32 @@ def _build_native_agent_staging(
     manifest: dict[str, Any] | None = None,
     allow_publish_overrides: bool = False,
 ) -> tuple[str, str]:
-    if runtime_type in (
+    if runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        if manifest is None:
+            manifest = load_json_object_file(
+                entry / "manifest.json", label="manifest.json"
+            )
+        package = manifest.get("package")
+        if not isinstance(package, dict):
+            raise ValueError("manifest.package must be an object")
+        name = str(package.get("id") or "").strip()
+        version = str(package.get("version") or "").strip()
+        display = manifest.get("display")
+        display = display if isinstance(display, dict) else {}
+        display_name = localized_manifest_text(display.get("name"))
+        description = localized_manifest_text(display.get("description"))
+        manifest_tags = localized_manifest_tags(display.get("tags"))
+        override_name = (
+            _resolved_override_text(entry_overrides, "name", "")
+            if allow_publish_overrides
+            else ""
+        )
+        override_version = entry_overrides.get("version")
+        if allow_publish_overrides and override_name:
+            name = override_name
+        if allow_publish_overrides and override_version not in (None, ""):
+            version = str(override_version).strip()
+    elif runtime_type in (
         RUNTIME_AGENT_PLUGIN,
         RUNTIME_AGENT_TEMPLATE,
         RUNTIME_AGENT_GROUP,
@@ -197,7 +238,7 @@ def _build_native_agent_staging(
         description = ""
         manifest_tags = []
 
-    _validate_wrapped_asset_name(name)
+    _validate_wrapped_asset_name(name, runtime_type)
     if not _is_valid_market_version_within_length(version):
         raise ValueError("resolved asset version must be semver x.y.z or git commit hex")
 
@@ -216,6 +257,7 @@ def _build_native_agent_staging(
         RUNTIME_AGENT_TEMPLATE,
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
+        RUNTIME_SYSTEM_PLUGIN,
     ):
         _patch_native_agent_manifest(
             staging / name,
@@ -257,6 +299,7 @@ def detect_import_entry_type(entry: Path) -> str | None:
             "agent_template": RUNTIME_AGENT_TEMPLATE,
             "agent_group": RUNTIME_AGENT_GROUP,
             "mcp": RUNTIME_AGENT_MCP,
+            "extension": RUNTIME_SYSTEM_PLUGIN,
         }.get(package_type)
         if manifest_type is not None:
             return manifest_type
@@ -526,7 +569,7 @@ def entry_to_publish_zip(
                     data = load_plugin_yaml(str(staging / "plugin.yaml"))
                     name = str(data.get("name") or "").strip()
                     version = str(data.get("version") or "").strip()
-                    _validate_wrapped_asset_name(name)
+                    _validate_wrapped_asset_name(name, entry_type)
                     if not _is_valid_market_version_within_length(version):
                         raise ValueError(
                             "plugin.yaml version must be semver x.y.z or git commit hex"
@@ -544,6 +587,7 @@ def entry_to_publish_zip(
                 RUNTIME_AGENT_PLUGIN,
                 RUNTIME_AGENT_TEMPLATE,
                 RUNTIME_AGENT_GROUP,
+                RUNTIME_SYSTEM_PLUGIN,
             ):
                 if entry_overrides.get("version") not in (None, ""):
                     if not allow_publish_overrides:

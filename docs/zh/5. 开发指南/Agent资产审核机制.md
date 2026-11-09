@@ -1,6 +1,6 @@
 # Agent资产审核机制
 
-六类 Agent 资产（Skill、SwarmSkill、插件、连接器、专家、专家团）都要审核通过后，才会出现在公开市场并允许下载。审查只发生在 Skill 和 SwarmSkill 上。
+七类 Agent 资产（Skill、SwarmSkill、插件、连接器、专家、专家团、系统插件）都要审核通过后，才会出现在公开市场并允许下载。审查只发生在 Skill 和 SwarmSkill 上。
 
 ## 两条路径
 
@@ -18,10 +18,10 @@ Skill / SwarmSkill，且 `MARKET_SKILL_REVIEW_ENABLED=true`：
 
 | 阶段 | 谁会遇到 | 说明 |
 |------|----------|------|
-| 发布校验 | 六类资产 | 包结构、版本、图标、路径安全。失败则直接拒绝，不进后续环节 |
+| 发布校验 | 七类资产 | 包结构、版本、图标、路径安全。失败则直接拒绝，不进后续环节 |
 | 审查 | 仅 Skill、SwarmSkill | 规则或 AI 检查风险。开关 `MARKET_SKILL_REVIEW_ENABLED`，默认关闭 |
-| 审核 | 六类资产 | 审核员通过或驳回。驳回必填原因 |
-| 市场展示 | 六类资产 | 只展示审核通过的版本 |
+| 审核 | 七类资产 | 审核员通过或驳回。驳回必填原因 |
+| 市场展示 | 七类资产 | 只展示审核通过的版本 |
 
 插件、连接器、专家、专家团没有审查记录，发布成功后就是 `pending_moderation`。
 
@@ -58,7 +58,7 @@ Skill / SwarmSkill，且 `MARKET_SKILL_REVIEW_ENABLED=true`：
 
 审查中的 Skill / SwarmSkill 不能点审核通过。接口会返回 `invalid_moderation_state`。
 
-系统 Token（`X-System-Token`，对应系统管理员）发布六类资产都直接 `APPROVED`，跳过审查和审核。
+系统 Token（`X-System-Token`，对应系统管理员）发布七类资产都直接 `APPROVED`，跳过审查和审核。
 
 ## SkillPack 兼容发布
 
@@ -103,7 +103,7 @@ Hub 读取包内容根目录 `SKILL.md` 的 YAML 头；遇到 `kind: skillpack`�
 MARKET_REVIEW_ADMIN_USERNAMES=alice,bob
 ```
 
-`GET /api/v1/auth/me` 返回 `is_market_moderation_admin: true` 时，前端显示审核菜单。可审核的类型是 Skill、SwarmSkill、插件、连接器、专家、专家团。
+`GET /api/v1/auth/me` 返回 `is_market_moderation_admin: true` 时，前端显示审核菜单。可审核的类型是 Skill、SwarmSkill、插件、连接器、专家、专家团、系统插件。
 
 默认禁止审核自己发布的资产。内部单人维护可打开：
 

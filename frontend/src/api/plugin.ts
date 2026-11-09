@@ -23,7 +23,7 @@ export interface MarketplacePluginListRequest {
   publisher_id?: string
   /** 与后端 `asset_id` 一致 */
   asset_id?: string
-  /** 资产主类型；四类 Agent 资产与 plugin_type 同值，用于检索与存储分组 */
+  /** 资产主类型；五类 Agent 资产与 plugin_type 同值，用于检索与存储分组 */
   asset_type?: string
   /** 与后端 Query 一致：`plugin_type`（如 tools / mcp-stdio / restful-api / skill） */
   plugin_type?: string
@@ -514,8 +514,16 @@ export interface AgentPackageCapabilityItem {
   description?: string | null
 }
 
+export interface AgentPackageEventItem {
+  name: string
+  description?: string | null
+}
+
 export interface AgentPackageProfileData {
   package_type?: string | null
+  domain?: string | null
+  details?: string | null
+  events?: AgentPackageEventItem[]
   category?: string | null
   source?: string | null
   integration_type?: string | null
@@ -545,6 +553,7 @@ export interface PluginVersionDetailData {
   changelog?: string | null
   file_path?: string | null
   icon_uri?: string | null
+  preview_url?: string | null
   publish_result?: 'reviewing' | 'pending_moderation' | 'publish_success' | 'publish_failed' | string | null
   publish_failed_reason?: string | null
   review_status?: string | null

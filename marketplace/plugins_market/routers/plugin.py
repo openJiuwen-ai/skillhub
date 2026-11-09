@@ -73,9 +73,11 @@ from plugins_market.core.s3_storage_client import get_storage_client
 from plugins_market.repositories.git_source_repository import GitSourceRepository
 from plugins_market.validation.constants import (
     MAX_FILE_SIZE,
+    RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_SYSTEM_PLUGIN,
     ZIP_STREAM_READ_CHUNK_BYTES,
 )
 from plugins_market.imports.skill_import_service import skill_import_from_bundle
@@ -145,8 +147,10 @@ def _asset_audit_resource_type(plugin_type: str | None) -> str:
         ResourceType.SWARMSKILL: ResourceType.SWARMSKILL,
         ResourceType.PLUGIN: ResourceType.PLUGIN,
         RUNTIME_AGENT_PLUGIN: ResourceType.AGENT_PLUGIN,
+        RUNTIME_AGENT_GROUP: ResourceType.AGENT_GROUP,
         RUNTIME_AGENT_TEMPLATE: ResourceType.AGENT_TEMPLATE,
         RUNTIME_AGENT_MCP: ResourceType.AGENT_MCP,
+        RUNTIME_SYSTEM_PLUGIN: ResourceType.SYSTEM_PLUGIN,
     }.get((plugin_type or "").strip().lower(), ResourceType.PLUGIN)
 
 
@@ -1437,7 +1441,7 @@ async def get_artifact_download(
         )
 
     # 审计：下载是系统对外提供数据出口，需长期保留下载记录。
-    # resource_type 依资产实际 plugin_type 记录；四类 Agent 资产保留精确 type。
+    # resource_type 依资产实际 plugin_type 记录；五类 Agent 资产保留精确 type。
     # 团队技能下载会被统计成 skill，会污染 resource_type 维度下的“使用量”展示。
     # 失败下载（404/403 等）当前由 GET 路径外，不在 audit_failed 覆盖范围内，暂不补录失败；
     # 若未来需要追踪未授权访问尝试，可在上方 except 分支前补一条 FAILED 审计。

@@ -102,10 +102,12 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_SYSTEM_PLUGIN,
     VERSION_PATTERN,
     is_valid_market_version,
 )
 from plugins_market.validation.icon_png_optimize import optimize_png_icon_bytes
+from plugins_market.validation.preview_png_optimize import optimize_png_preview_bytes
 from plugins_market.validation.plugin_yaml import (
     safe_load_yaml,
     validate_plugin_yaml_bytes,
@@ -198,7 +200,7 @@ def _is_wrapped_agent_asset_type(plugin_type: str | None) -> bool:
 def _ensure_agent_asset_publish_allowed(
     plugin_type: str | None, *, is_system_admin: bool
 ) -> None:
-    """四类 Agent 资产允许已登录用户发布（鉴权在路由层完成）；保留钩子便于后续加配额等限制。"""
+    """五类 Agent 资产允许已登录用户发布（鉴权在路由层完成）；保留钩子便于后续加配额等限制。"""
     del plugin_type, is_system_admin
     return
 
@@ -224,7 +226,7 @@ def _normalize_agent_list_query(query: PluginListQuery) -> PluginListQuery:
 
 
 def _moderation_for_publish(*, user_id: str, plugin_type: str | None) -> tuple[str | None, str | None]:
-    """非 moderated 类型始终已通过；Skill/SwarmSkill/四类 Agent 由普通用户发布为审核中，系统管理员发布为通过。"""
+    """非 moderated 类型始终已通过；Skill/SwarmSkill/五类 Agent 由普通用户发布为审核中，系统管理员发布为通过。"""
     if not is_moderated_market_asset_type(plugin_type):
         return MODERATION_APPROVED, None
     if (user_id or "").strip() == (settings.system_admin_user or "").strip():
@@ -366,6 +368,8 @@ def _storage_root(asset_type: str | None, plugin_type: str | None = None) -> str
         return "agent-plugins"
     if normalized_asset_type == RUNTIME_AGENT_MCP:
         return "agent-mcps"
+    if normalized_asset_type == RUNTIME_SYSTEM_PLUGIN:
+        return "system-plugins"
     return "skills" if is_skill_like_plugin_type(plugin_type) else "plugins"
 
 
@@ -776,13 +780,13 @@ def publish(
             error_class="validation",
         )
     # 开关：开启后拒绝 tools / mcp-stdio / restful-api 等非 moderated 类型；
-    # 放行 Skill / SwarmSkill / 四类 Agent（审核或系统身份免审由 _moderation_for_publish 处理）。
+    # 放行 Skill / SwarmSkill / 五类 Agent（审核或系统身份免审由 _moderation_for_publish 处理）。
     if settings.block_nonskill_plugin_publish and not is_moderated_market_asset_type(rt):
         raise PublishError(
             code=403,
             error="plugin_type_publish_disabled",
             message=(
-                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / agent-mcp；"
+                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / agent-mcp / system-plugin；"
                 "tools / mcp-stdio / restful-api 类型发布已关闭"
             ),
         )
@@ -794,6 +798,9 @@ def publish(
     icon_bytes = meta.get("icon_bytes") or b""
     if icon_bytes:
         icon_bytes = optimize_png_icon_bytes(icon_bytes)
+    preview_bytes = meta.get("preview_bytes") or b""
+    if preview_bytes:
+        preview_bytes = optimize_png_preview_bytes(preview_bytes)
 
     asset_repo = MarketAssetRepository(db)
     version_repo = MarketAssetVersionRepository(db)
@@ -910,7 +917,7 @@ def publish(
     existing_version = version_repo.get_version(asset_id=asset_id, version=version)
     is_skill_like_publish = is_skill_like_plugin_type(plugin_type)
     is_moderated_publish = is_moderated_market_asset_type(plugin_type)
-    # LLM 审查仅 Skill / SwarmSkill；四类 Agent 直接进审核（或系统身份免审）。
+    # LLM 审查仅 Skill / SwarmSkill；五类 Agent 直接进审核（或系统身份免审）。
     supports_system_skill_review = is_skill_like_publish
     needs_skill_review = bool(
         supports_system_skill_review and settings.skill_review_enabled and not is_system_admin_publisher
@@ -1024,6 +1031,16 @@ def publish(
                 message=r.get("error", "插件图标上传失败"),
             )
 
+    if preview_bytes:
+        preview_key = f"{version_dir}preview.png"
+        r = storage.upload_bytes(preview_bytes, preview_key)
+        if not r.get("success"):
+            raise PublishError(
+                code=500,
+                error="storage_error",
+                message=r.get("error", "插件预览图上传失败"),
+            )
+
     if detail_desc is not None:
         readme_key = f"{version_dir}readme.md"
         r = storage.upload_bytes(detail_desc.encode("utf-8"), readme_key)
@@ -1080,6 +1097,7 @@ def publish(
                 file_path=file_path,
                 artifact_sha256=computed,
                 has_icon=bool(icon_bytes),
+                has_preview=bool(preview_bytes),
                 moderation_status=mod_st,
                 moderation_reject_reason=mod_rs if mod_st == MODERATION_REJECTED else None,
                 publish_result=initial_version_publish_result,
@@ -1160,6 +1178,7 @@ def publish(
                 existing_version.file_path = file_path
                 existing_version.artifact_sha256 = computed
                 existing_version.has_icon = bool(icon_bytes)
+                existing_version.has_preview = bool(preview_bytes)
                 existing_version.moderation_status = mod_st
                 existing_version.moderation_reject_reason = mod_rs if mod_st == MODERATION_REJECTED else None
                 existing_version.publish_result = initial_version_publish_result
@@ -1175,6 +1194,7 @@ def publish(
                     file_path=file_path,
                     artifact_sha256=computed,
                     has_icon=bool(icon_bytes),
+                    has_preview=bool(preview_bytes),
                     moderation_status=mod_st,
                     moderation_reject_reason=mod_rs if mod_st == MODERATION_REJECTED else None,
                     publish_result=initial_version_publish_result,
@@ -1263,23 +1283,47 @@ def _rows_pin_order_first(
     return [x[2] for x in pinned] + unpinned
 
 
+def _version_image_presigned_url(
+    storage: S3StorageClient,
+    file_path: str | None,
+    filename: str,
+    present: bool,
+    *,
+    label: str,
+) -> str | None:
+    if not present:
+        return None
+    prefix = _version_prefix_from_file_path(storage, file_path)
+    if not prefix:
+        return None
+    key = f"{prefix}{filename}"
+    try:
+        return storage.presigned_get_url(key)
+    except Exception as e:
+        logger.warning("预签名%s链接失败 key=%s: %s", label, key, e)
+        return None
+
+
 def _icon_presigned_url_from_file_path(
     storage: S3StorageClient,
     file_path: str | None,
     has_icon: bool = False,
 ) -> str | None:
     """图标固定为版本目录下 icon.png，与 file_path 拼出对象 Key 后预签名。"""
-    if not has_icon:
-        return None
-    prefix = _version_prefix_from_file_path(storage, file_path)
-    if not prefix:
-        return None
-    icon_key = f"{prefix}icon.png"
-    try:
-        return storage.presigned_get_url(icon_key)
-    except Exception as e:
-        logger.warning("预签名图标链接失败 key=%s: %s", icon_key, e)
-        return None
+    return _version_image_presigned_url(
+        storage, file_path, "icon.png", has_icon, label="图标"
+    )
+
+
+def _preview_presigned_url_from_file_path(
+    storage: S3StorageClient,
+    file_path: str | None,
+    has_preview: bool = False,
+) -> str | None:
+    """预览图固定为版本目录下 preview.png，与 file_path 拼出对象 Key 后预签名。"""
+    return _version_image_presigned_url(
+        storage, file_path, "preview.png", has_preview, label="预览图"
+    )
 
 
 def _asset_matches_list_moderation_filter(asset: MarketAssetDB, ms: str) -> bool:
@@ -1649,7 +1693,7 @@ def list_plugins_service(
     market_public_scoped = repo.is_market_public_scoped_list(query, viewer)
 
     keyword = (query.search_keyword or "").strip()
-    # 默认仍只搜 skill/swarmskill（与原行为一致）；仅当显式检索四类新增智能体资产
+    # 默认仍只搜 skill/swarmskill（与原行为一致）；仅当显式检索五类新增智能体资产
     # 时才跳过该默认，避免扩大旧调用方的返回范围。
     if (
         not query.plugin_type
@@ -2048,6 +2092,9 @@ def get_plugin_version_detail_service(
         changelog=version_row.changelog,
         file_path=version_row.file_path,
         icon_uri=_icon_presigned_url_from_file_path(storage, version_row.file_path, version_row.has_icon),
+        preview_url=_preview_presigned_url_from_file_path(
+            storage, version_row.file_path, version_row.has_preview
+        ),
         review_status=review_row.review_status if skill_review_visible and review_row else None,
         review_failed_reason=review_row.review_failed_reason if skill_review_visible and review_row else None,
         review_summary=review_summary,
@@ -2802,7 +2849,10 @@ def moderate_skill_asset_service(
         raise PublishError(
             code=400,
             error="not_skill",
-            message="仅支持对 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / agent-mcp 类型资源进行审核",
+            message=(
+                "仅支持对 Skill / SwarmSkill / agent-plugin / agent-template / "
+                "agent-group / agent-mcp / system-plugin 类型资源进行审核"
+            ),
             error_code="SKILLHUB_PLUGIN_NOT_SKILL",
             error_class="validation",
         )
@@ -3412,6 +3462,7 @@ def _load_agent_package_profile_for_version(
         RUNTIME_AGENT_TEMPLATE,
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
+        RUNTIME_SYSTEM_PLUGIN,
     ):
         return None
     from plugins_market.core.cache import cache_get, cache_set  # noqa: PLC0415

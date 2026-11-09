@@ -77,6 +77,7 @@ def _asset(
         ("agent-template", "agent-templates"),
         ("agent-group", "agent-groups"),
         ("agent-mcp", "agent-mcps"),
+        ("system-plugin", "system-plugins"),
     ],
 )
 def test_agent_index_records_use_asset_type_and_public_obs_root(
@@ -217,7 +218,9 @@ def test_retrieval_search_routes_by_agent_asset_type() -> None:
     assert manager.groups == ["agent-plugin", "agent-plugin"]
 
 
-@pytest.mark.parametrize("storage_root", ["agent-plugins", "agent-templates", "agent-groups", "agent-mcps"])
+@pytest.mark.parametrize(
+    "storage_root", ["agent-plugins", "agent-templates", "agent-groups", "agent-mcps", "system-plugins"]
+)
 def test_agent_index_catalog_path_maps_back_to_asset_id(storage_root: str) -> None:
     record = SimpleNamespace(
         payload="cid-1",
@@ -239,10 +242,12 @@ def test_agent_index_settings_have_separate_obs_prefixes_and_direct_paths() -> N
     assert settings.retrieval_agent_template_index_obs_prefix == "agent-templates-index"
     assert settings.retrieval_agent_group_index_obs_prefix == "agent-groups-index"
     assert settings.retrieval_agent_mcp_index_obs_prefix == "agent-mcps-index"
+    assert settings.retrieval_system_plugin_index_obs_prefix == "system-plugins-index"
     assert settings.retrieval_agent_plugin_index_path == ""
     assert settings.retrieval_agent_template_index_path == ""
     assert settings.retrieval_agent_group_index_path == ""
     assert settings.retrieval_agent_mcp_index_path == ""
+    assert settings.retrieval_system_plugin_index_path == ""
 
 
 def test_rebuild_all_adds_agent_groups_without_changing_existing_groups() -> None:
@@ -254,7 +259,9 @@ def test_rebuild_all_adds_agent_groups_without_changing_existing_groups() -> Non
     prefixes = {
         "agent-plugin": "agent-plugins-index",
         "agent-template": "agent-templates-index",
+        "agent-group": "agent-groups-index",
         "agent-mcp": "agent-mcps-index",
+        "system-plugin": "system-plugins-index",
     }
     with patch("plugins_market.retrieval.daily_rebuild.rebuild_one_group") as rebuild:
         rebuild_all(
@@ -272,7 +279,9 @@ def test_rebuild_all_adds_agent_groups_without_changing_existing_groups() -> Non
         ("plugin", "plugins-index"),
         ("agent-plugin", "agent-plugins-index"),
         ("agent-template", "agent-templates-index"),
+        ("agent-group", "agent-groups-index"),
         ("agent-mcp", "agent-mcps-index"),
+        ("system-plugin", "system-plugins-index"),
     ]
 
 
@@ -283,6 +292,7 @@ def test_rebuild_all_adds_agent_groups_without_changing_existing_groups() -> Non
         ("agent-template", "agent-templates-tag"),
         ("agent-group", "agent-groups-tag"),
         ("agent-mcp", "agent-mcps-tag"),
+        ("system-plugin", "system-plugins-tag"),
     ],
 )
 def test_agent_tag_outputs_are_separate(asset_type: str, tag_prefix: str) -> None:
@@ -454,7 +464,9 @@ def test_refresh_agent_tags_runs_each_group_with_its_index_and_metadata() -> Non
     prefixes = {
         "agent-plugin": "agent-plugins-index",
         "agent-template": "agent-templates-index",
+        "agent-group": "agent-groups-index",
         "agent-mcp": "agent-mcps-index",
+        "system-plugin": "system-plugins-index",
     }
 
     def records(_db, group: str, _bucket: str, uri_scheme: str = "obs"):
@@ -539,7 +551,9 @@ def test_skill_retrieval_text_does_not_gain_agent_only_detail_field() -> None:
     assert "AGENT_ONLY_DETAIL_MARKER" not in records[0].retrieval_text
 
 
-@pytest.mark.parametrize("storage_root", ["agent-plugins", "agent-templates", "agent-groups", "agent-mcps"])
+@pytest.mark.parametrize(
+    "storage_root", ["agent-plugins", "agent-templates", "agent-groups", "agent-mcps", "system-plugins"]
+)
 def test_same_named_agent_assets_from_different_publishers_remain_unique(storage_root: str) -> None:
     first = _unique_dir_name(
         f"obs://bucket/{storage_root}/publisher-a/asset-a/1.0.0/file.zip",

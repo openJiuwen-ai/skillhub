@@ -51,7 +51,7 @@ class TestModeratedTypeHelpers(unittest.TestCase):
         self.assertEqual(SKILL_LIKE_PLUGIN_TYPES, frozenset({"skill", "swarmskill"}))
         self.assertEqual(
             AGENT_ASSET_PLUGIN_TYPES,
-            frozenset({"agent-plugin", "agent-template", "agent-group", "agent-mcp"}),
+            frozenset({"agent-plugin", "agent-template", "agent-group", "agent-mcp", "system-plugin"}),
         )
         self.assertEqual(MODERATED_MARKET_ASSET_TYPES, SKILL_LIKE_PLUGIN_TYPES | AGENT_ASSET_PLUGIN_TYPES)
 

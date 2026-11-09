@@ -27,6 +27,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_SKILL,
+    RUNTIME_SYSTEM_PLUGIN,
     SKILL_NAME_MAX_LEN,
     SKILL_NAME_PATTERN,
     SUPPORTED_RUNTIME_TYPES,
@@ -35,6 +36,7 @@ from plugins_market.validation.constants import (
     YAML_MAX_NODES,
     YAML_MAX_SCALAR_LEN,
     is_valid_market_version,
+    is_valid_system_plugin_name,
 )
 
 
@@ -228,10 +230,6 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
 
     # name
     name = require_string_field(data.get("name"), "name")
-    if not NAME_PATTERN.match(name):
-        raise_invalid_config(
-            "plugin.yaml 中 name 必须符合 ^[a-z][a-z0-9-]*$"
-        )
 
     # version is optional at this stage – publish() handles missing version.
     version_val = data.get("version")
@@ -272,6 +270,16 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
             f"（支持 {', '.join(sorted(SUPPORTED_RUNTIME_TYPES))}）"
         )
     runtime_type = runtime_type_raw
+
+    if runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        if not is_valid_system_plugin_name(name):
+            raise_invalid_config(
+                "系统插件 name 必须符合 ^[a-z][a-z0-9.-]*$，且不得包含连续点号或以点号结尾"
+            )
+    elif not NAME_PATTERN.match(name):
+        raise_invalid_config(
+            "plugin.yaml 中 name 必须符合 ^[a-z][a-z0-9-]*$"
+        )
 
     # metadata
     metadata = data.get("metadata")
@@ -341,6 +349,7 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
         RUNTIME_AGENT_TEMPLATE,
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
+        RUNTIME_SYSTEM_PLUGIN,
     ):
         _validate_compatibility_python(data)
 

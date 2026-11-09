@@ -9,10 +9,12 @@ export const AGENT_ASSET_PLUGIN_TYPES = [
   'agent-mcp',
   'agent-template',
   'agent-group',
+  'system-plugin',
 ] as const
 export const AGENT_ASSET_QUERY_VALUE = AGENT_ASSET_PLUGIN_TYPES.join(',')
 
-/** 市场六个平级 Tab（与后端 MODERATED_MARKET_ASSET_TYPES 对齐，顺序即 Tab / 发布类型下拉顺序）。 */
+/** 与后端 MODERATED_MARKET_ASSET_TYPES 对齐，顺序即发布类型下拉顺序；
+ *  市场页 system-plugin 与 agent-plugin 共用顶部「插件」Tab，通过二级切换区分。 */
 export const MARKET_TAB_PLUGIN_TYPES = [
   'swarmskill',
   'skill',

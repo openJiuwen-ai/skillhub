@@ -111,6 +111,7 @@ class MarketAssetVersionDB(Base):
     file_path = Column(String(512), nullable=True)
     artifact_sha256 = Column(String(64), nullable=True)
     has_icon = Column(Boolean, nullable=False, default=False)
+    has_preview = Column(Boolean, nullable=False, default=False)
     # 版本级审核：PENDING | APPROVED | REJECTED；NULL 按已通过（与历史库兼容）
     moderation_status = Column(String(32), nullable=True)
     moderation_reject_reason = Column(Text, nullable=True)

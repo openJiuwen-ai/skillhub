@@ -20,6 +20,7 @@ from plugins_market.validation.constants import (
     RUNTIME_MCP_STDIO,
     RUNTIME_RESTFUL_API,
     RUNTIME_SKILL,
+    RUNTIME_SYSTEM_PLUGIN,
     RUNTIME_TOOLS,
 )
 from plugins_market.validation.plugin_yaml import (
@@ -32,6 +33,7 @@ from plugins_market.validation.zip_utils import (
     DecompressCounter,
     open_zip_bytes,
     safe_read_zip_member,
+    validate_png_preview_bytes,
     validate_zip_safety,
 )
 from plugins_market.validation.types.skill import (
@@ -80,6 +82,18 @@ def _plugin_prefix(plugin_yaml_path: str) -> str:
     if "/" not in path:
         return ""
     return path.rsplit("/", 1)[0] + "/"
+
+
+def _find_preview_png_path(zf: zipfile.ZipFile, payload_prefix: str) -> str | None:
+    """定位包内预览图：优先 assets/preview.png，兼容载荷根目录 preview.png。"""
+    root = payload_prefix.replace("\\", "/").strip("/")
+    prefix = f"{root}/" if root else ""
+    by_lower: dict[str, str] = {}
+    for name in zf.namelist():
+        normalized = name.replace("\\", "/").strip("/")
+        if normalized and not normalized.endswith("/"):
+            by_lower.setdefault(normalized.lower(), normalized)
+    return by_lower.get(f"{prefix}assets/preview.png".lower()) or by_lower.get(f"{prefix}preview.png".lower())
 
 
 def _merge_agent_market_fields(
@@ -215,7 +229,12 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             detail_desc = readme_raw.decode("utf-8", errors="replace")
             icon_bytes = layout["icon_bytes"]
 
-        elif rt in (RUNTIME_AGENT_PLUGIN, RUNTIME_AGENT_TEMPLATE, RUNTIME_AGENT_GROUP):
+        elif rt in (
+            RUNTIME_AGENT_PLUGIN,
+            RUNTIME_AGENT_TEMPLATE,
+            RUNTIME_AGENT_GROUP,
+            RUNTIME_SYSTEM_PLUGIN,
+        ):
             layout = validate_agent_asset_layout(
                 zf,
                 AgentAssetOuterRef(
@@ -255,6 +274,13 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
                 message=f"不支持的 runtime.type: {rt!r}",
             )
 
+        preview_bytes = b""
+        if rt == RUNTIME_SYSTEM_PLUGIN:
+            preview_path = _find_preview_png_path(zf, f"{prefix}{public.name}/")
+            if preview_path:
+                preview_bytes = safe_read_zip_member(zf, preview_path, counter)
+                validate_png_preview_bytes(preview_bytes, path=preview_path)
+
         if isinstance(detail_desc, str):
             detail_bytes = len(detail_desc.encode("utf-8"))
             if detail_bytes > MARKET_ASSET_DETAIL_DESC_MAX_BYTES:
@@ -279,6 +305,7 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
         "publisher_name": public.publisher_name,
         "plugin_type": derived_plugin_type,
         "icon_bytes": icon_bytes,
+        "preview_bytes": preview_bytes,
     }
     result.update(extra_meta)
     return result

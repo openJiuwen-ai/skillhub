@@ -278,3 +278,56 @@ def test_prepare_publish_leaves_wrapped_package_when_overrides_match(tmp_path: P
         assert same == original
     finally:
         publish_zip.unlink(missing_ok=True)
+
+
+def test_prepare_publish_wraps_bare_system_plugin(tmp_path: Path) -> None:
+    entry = tmp_path / "auth_login_demo"
+    entry.mkdir()
+    (entry / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "package_type": "extension",
+                "package": {
+                    "id": "webui.login-demo",
+                    "version": "1.0.0",
+                    "domain": "gateway",
+                },
+                "display": {
+                    "name": {"zh": "认证与登录"},
+                    "description": {"zh": "登录页面与鉴权"},
+                    "details": {"zh": "## 功能\n登录页面"},
+                    "tags": [{"zh": "登录"}],
+                    "events": [{"name": "ui.ready", "description": {"zh": "渲染"}}],
+                },
+                "extensions": [
+                    {
+                        "id": "login-demo",
+                        "runtime": "backend",
+                        "module": "auth_login_demo/extensions.py",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (entry / "README.md").write_text("# 登录插件", encoding="utf-8")
+    raw_zip = tmp_path / "raw.zip"
+    _zip_dir(entry, raw_zip)
+
+    wrapped = prepare_publish_zip_content(
+        raw_zip.read_bytes(),
+        filename="auth_login_demo.zip",
+        overrides=PublishMetadataOverrides(),
+        default_author="tester",
+    )
+
+    metadata = extract_plugin_metadata(wrapped)
+    plugin_yaml = yaml.safe_load(_zip_text(wrapped, "/plugin.yaml"))
+    assert metadata["plugin_type"] == "system-plugin"
+    assert metadata["display_name"] == "认证与登录"
+    assert metadata["detail_desc"] == "# 登录插件"
+    assert plugin_yaml["name"] == "webui.login-demo"
+    assert plugin_yaml["version"] == "1.0.0"
+    assert plugin_yaml["runtime"]["type"] == "system-plugin"

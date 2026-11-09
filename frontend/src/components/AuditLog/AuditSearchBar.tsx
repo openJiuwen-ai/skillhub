@@ -28,6 +28,7 @@ export const SKILL_TYPE_OPTIONS: SkillTypeFilterValue[] = [
   { kind: 'resource_type', value: 'agent-mcp', label: '连接器' },
   { kind: 'resource_type', value: 'agent-template', label: '专家' },
   { kind: 'resource_type', value: 'agent-group', label: '专家团' },
+  { kind: 'resource_type', value: 'system-plugin', label: '系统插件' },
   { kind: 'resource_type', value: 'git_source', label: 'Git 源' },
   { kind: 'resource_type', value: 'skill_bundle', label: '批量包' },
 ]

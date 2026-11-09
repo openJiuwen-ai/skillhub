@@ -4,7 +4,7 @@
 
 | 目录 | 发行名 / 命令 | 说明 |
 |------|---|---|
-| `openjiuwen_agentichub/` | `openjiuwen-agentichub` / `agentichub` | 六类 Agent 资产的脚手架、校验、打包与市场操作 |
+| `openjiuwen_agentichub/` | `openjiuwen-agentichub` / `agentichub` | 七类 Agent 资产的脚手架、校验、打包与市场操作 |
 | `cli_core/` | - | 参数解析、校验、打包、市场请求 |
 
 ## 开发安装

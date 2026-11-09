@@ -23,6 +23,7 @@ import { isAgentAssetPluginType, MARKET_TAB_PLUGIN_TYPES } from '@/utils/pluginT
 import { resolvePublishFormFieldLabels, resolvePublishTypeLabel } from '@/utils/publishFieldLabels'
 
 const SKILL_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+const SYSTEM_PLUGIN_NAME_PATTERN = /^[a-z][a-z0-9.-]*$/
 const SKILL_NAME_MAX_LEN = 64
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+$/
 const SKILL_ZIP_ERROR_KEYS: Record<string, string> = {
@@ -98,9 +99,15 @@ type PublishFormProps = {
   onTypeChange?: (type: PublishDrawerType) => void
 }
 
-function validateSkillName(value: string): string | null {
+function validateSkillName(value: string, type: PublishDrawerType): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
+  if (type === 'system-plugin') {
+    if (!SYSTEM_PLUGIN_NAME_PATTERN.test(trimmed) || trimmed.includes('..') || trimmed.endsWith('.')) {
+      return 'publish.systemPluginErrorInvalidName'
+    }
+    return null
+  }
   if (trimmed.length > SKILL_NAME_MAX_LEN) return 'publish.skillErrorInvalidNameTooLong'
   if (!SKILL_NAME_PATTERN.test(trimmed)) return 'publish.skillErrorInvalidName'
   return null
@@ -699,7 +706,7 @@ export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: Publish
     e.preventDefault()
     if (!skillFormReady || uploading || successMsg || typeMismatchError) return
 
-    const nameErrorKey = validateSkillName(skillPkgName)
+    const nameErrorKey = validateSkillName(skillPkgName, selectedType)
     if (nameErrorKey) {
       setFieldErrors(prev => ({ ...prev, skillPkgName: t(nameErrorKey) }))
       scrollToFirstError()
@@ -997,7 +1004,7 @@ export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: Publish
               onChange={e => {
                 const val = e.target.value
                 setSkillPkgName(val)
-                const skKey = validateSkillName(val)
+                const skKey = validateSkillName(val, selectedType)
                 setFieldErrors(prev => fieldErrorMerge(prev, 'skillPkgName', skKey ? t(skKey) : null))
               }}
               disabled={skillMetadataLocked}

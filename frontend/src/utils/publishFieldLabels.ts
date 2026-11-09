@@ -11,6 +11,7 @@ const PUBLISH_TYPE_LABEL_KEYS: Record<string, string> = {
   'agent-template': 'publish.typeAgentTemplate',
   'agent-group': 'publish.typeAgentGroup',
   'agent-mcp': 'publish.typeAgentMcp',
+  'system-plugin': 'publish.typeSystemPlugin',
 }
 
 export function resolvePublishTypeLabel(type: string, t: TFunction): string {
@@ -70,6 +71,14 @@ function agentPluginLinkKeys(type: PublishDrawerType): {
       metadataLocked: 'publish.fieldMetadataLockedHintAgentMcp',
     }
   }
+  if (type === 'system-plugin') {
+    return {
+      label: 'publish.fieldPluginIdSystemPlugin',
+      hint: 'publish.fieldPluginIdHelpSystemPlugin',
+      newOption: 'publish.pluginIdNewOptionSystemPlugin',
+      metadataLocked: 'publish.fieldMetadataLockedHintSystemPlugin',
+    }
+  }
   return {
     label: 'publish.fieldPluginIdAgentPlugin',
     hint: 'publish.fieldPluginIdHelpAgentPlugin',
@@ -89,7 +98,9 @@ export function resolvePublishFormFieldLabels(type: PublishDrawerType, t: TFunct
           ? 'publish.fieldPkgNameAgentGroup'
           : type === 'agent-mcp'
             ? 'publish.fieldPkgNameAgentMcp'
-            : 'publish.fieldPkgNameAgentPlugin'
+            : type === 'system-plugin'
+              ? 'publish.fieldPkgNameSystemPlugin'
+              : 'publish.fieldPkgNameAgentPlugin'
     const placeholderKey =
       type === 'agent-template'
         ? 'publish.namePlaceholderAgentTemplate'
@@ -97,10 +108,12 @@ export function resolvePublishFormFieldLabels(type: PublishDrawerType, t: TFunct
           ? 'publish.namePlaceholderAgentGroup'
           : type === 'agent-mcp'
             ? 'publish.namePlaceholderAgentMcp'
-            : 'publish.namePlaceholderAgentPlugin'
+            : type === 'system-plugin'
+              ? 'publish.namePlaceholderSystemPlugin'
+              : 'publish.namePlaceholderAgentPlugin'
     return {
       pkgName: t(pkgNameKey),
-      pkgNameHelp: t('publish.fieldPkgNameAgentHelp'),
+      pkgNameHelp: t(type === 'system-plugin' ? 'publish.fieldPkgNameSystemPluginHelp' : 'publish.fieldPkgNameAgentHelp'),
       pkgNamePlaceholder: t(placeholderKey),
       versionHelp: t('publish.fieldVersionAgentHelp'),
       displayName: t('publish.fieldDisplayName'),

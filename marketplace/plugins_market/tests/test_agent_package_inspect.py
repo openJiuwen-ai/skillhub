@@ -131,3 +131,31 @@ def test_extract_agent_mcp_profile() -> None:
     assert profile["quick_inputs"] == ["查询附近的餐厅"]
     kinds = {item["kind"] for item in profile["capabilities"]}
     assert kinds == {"skill", "integration"}
+
+
+def test_extract_system_plugin_profile() -> None:
+    manifest = {
+        "package_type": "extension",
+        "package": {"id": "coach", "version": "1.0.0", "domain": "gateway"},
+        "display": {
+            "name": {"zh": "登录插件"},
+            "details": {"zh": "## 功能\n登录与鉴权"},
+            "events": [
+                {"name": "ui.ready", "description": {"zh": "页面挂载后渲染"}},
+                {"name": "request.bind", "description": {"zh": "请求注入令牌"}},
+            ],
+            "tags": [{"zh": "登录"}],
+        },
+    }
+    zf = _build_zip({"manifest.json": json.dumps(manifest)})
+    with zf:
+        profile = extract_agent_package_profile(zf)
+    assert profile is not None
+    assert profile["package_type"] == "extension"
+    assert profile["domain"] == "gateway"
+    assert profile["details"] == "## 功能\n登录与鉴权"
+    assert profile["events"] == [
+        {"name": "ui.ready", "description": "页面挂载后渲染"},
+        {"name": "request.bind", "description": "请求注入令牌"},
+    ]
+    assert profile["manifest_tags"] == ["登录"]

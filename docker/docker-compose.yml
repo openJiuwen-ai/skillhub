@@ -25,7 +25,7 @@ name: skillhub
 services:
   # ── MySQL ─────────────────────────────────────────────────────────────
   # 首次启动通过 docker/mysql-init/01-init.sh 执行 sql/baseline/ DDL，
-  # 再按版本执行 sql/incremental/ 的 B001–B005。
+  # 再按版本执行 sql/incremental/ 的 B001–B006。
   # backend 启动时 create_all 只补尚未存在的表，不会给已有表加列。
   mysql:
     image: mysql:8.0

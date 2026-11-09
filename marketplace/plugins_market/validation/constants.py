@@ -11,6 +11,18 @@ import re
 # Generic plugin name: ^[a-z][a-z0-9-]*$
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
 
+# 系统插件 package.id：允许点号（如 webui.login-demo），禁止连续点与首尾点
+SYSTEM_PLUGIN_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9.-]*$")
+
+
+def is_valid_system_plugin_name(name: str) -> bool:
+    """系统插件 id 校验：字母开头，仅含小写字母/数字/点/连字符，且无 ".." 与结尾点。"""
+
+    if not name or not SYSTEM_PLUGIN_NAME_PATTERN.match(name):
+        return False
+    return ".." not in name and not name.endswith(".")
+
+
 # Skill name: starts with lowercase letter, segments separated by single hyphens,
 # no leading/trailing hyphen, no consecutive '--'.
 # Equivalent to CLI: NAME_PATTERN + SKILL_NAME_PATTERN + _validate_skill_slug
@@ -74,6 +86,7 @@ RUNTIME_AGENT_PLUGIN = "agent-plugin"
 RUNTIME_AGENT_TEMPLATE = "agent-template"
 RUNTIME_AGENT_GROUP = "agent-group"
 RUNTIME_AGENT_MCP = "agent-mcp"
+RUNTIME_SYSTEM_PLUGIN = "system-plugin"
 SUPPORTED_RUNTIME_TYPES = {
     RUNTIME_SKILL,
     RUNTIME_TOOLS,
@@ -83,6 +96,7 @@ SUPPORTED_RUNTIME_TYPES = {
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_MCP,
+    RUNTIME_SYSTEM_PLUGIN,
 }
 WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
     {
@@ -90,6 +104,7 @@ WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
         RUNTIME_AGENT_TEMPLATE,
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
+        RUNTIME_SYSTEM_PLUGIN,
     }
 )
 
@@ -153,3 +168,9 @@ PNG_MAGIC = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a"  # 8-byte PNG signature
 ICON_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 # 写入 OBS 前：icon 最长边像素上限（列表约 48px，256 已覆盖常见高 DPR）
 ICON_PUBLISH_MAX_EDGE_PX = 256
+
+# Preview（详情页大图，仅当包内存在 assets/preview.png 时读取）
+PREVIEW_MAX_BYTES = 5 * 1024 * 1024  # 5 MB：原始文件上限
+PREVIEW_PUBLISH_MAX_EDGE_PX = 1600  # 发布后最长边像素上限
+PREVIEW_PUBLISH_MAX_BYTES = 2 * 1024 * 1024  # 2 MB：压缩后上限
+PREVIEW_MAX_PIXELS = 40_000_000  # 解码前像素上限，避免小文件解压后占用过多内存

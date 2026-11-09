@@ -126,6 +126,38 @@ class PluginCommandsTest(unittest.TestCase):
             self.assertTrue(result.ok, msg=f"errors: {result.errors}")
             self.assertEqual(result.runtime_type, "agent-mcp")
 
+    def test_init_and_validate_system_plugin_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root = plugin_init("webui.login-demo", Path(tmp), plugin_type="system-plugin")
+            manifest = plugin_root / "webui.login-demo" / "manifest.json"
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(data["package_type"], "extension")
+            self.assertEqual(data["package"]["id"], "webui.login-demo")
+            self.assertEqual(data["package"]["domain"], "agentserver")
+            result = plugin_validate(plugin_root)
+            self.assertTrue(result.ok, msg=f"errors: {result.errors}")
+            self.assertEqual(result.runtime_type, "system-plugin")
+
+    def test_validate_system_plugin_rejects_bad_identity_domain_and_display(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root = plugin_init("webui.login-demo", Path(tmp), plugin_type="system-plugin")
+            manifest_path = plugin_root / "webui.login-demo" / "manifest.json"
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data["package"]["id"] = "other-plugin"
+            data["package"]["domain"] = "desktop"
+            data["display"].pop("name")
+            manifest_path.write_text(json.dumps(data), encoding="utf-8")
+            result = plugin_validate(plugin_root)
+            self.assertFalse(result.ok)
+            self.assertTrue(any("package.id" in error for error in result.errors))
+            self.assertTrue(any("package.domain" in error for error in result.errors))
+            self.assertTrue(any("display.name" in error for error in result.errors))
+
+    def test_init_rejects_invalid_system_plugin_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "system plugin name"):
+                plugin_init("webui..login", Path(tmp), plugin_type="system-plugin")
+
     def test_validate_agent_mcp_rejects_bare_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root = plugin_init("demo-mcp", Path(tmp), plugin_type="agent-mcp")
@@ -942,7 +974,15 @@ class PluginCommandsTest(unittest.TestCase):
             m.return_value.json.return_value = {"code": 200, "message": "ok", "data": {"items": [], "total": 0}}
             plugin_search("http://127.0.0.1:9", PluginListQuery(asset_id="asset-1"))
             plugin_type = m.call_args[1]["params"]["plugin_type"]
-            for required in ("skill", "swarmskill", "agent-plugin", "agent-mcp", "agent-template", "agent-group"):
+            for required in (
+                "skill",
+                "swarmskill",
+                "agent-plugin",
+                "agent-mcp",
+                "agent-template",
+                "agent-group",
+                "system-plugin",
+            ):
                 self.assertIn(required, plugin_type.split(","))
 
     def test_plugin_search_desc_true_by_default(self) -> None:

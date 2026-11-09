@@ -183,7 +183,7 @@ class PluginVersionDeleteData(BaseModel):
 class AssetVersionDeleteData(PluginVersionDeleteData):
     """Delete response for agent assets, retaining their exact asset type."""
 
-    asset_type: Literal["agent-plugin", "agent-template", "agent-group", "agent-mcp"]
+    asset_type: Literal["agent-plugin", "agent-template", "agent-group", "agent-mcp", "system-plugin"]
 
 
 class PluginTemplatePresignData(BaseModel):
@@ -201,8 +201,16 @@ class AgentPackageCapabilityItem(BaseModel):
     description: Optional[str] = None
 
 
+class AgentPackageEvent(BaseModel):
+    name: str
+    description: str = ""
+
+
 class AgentPackageProfile(BaseModel):
     package_type: Optional[str] = None
+    domain: Optional[str] = None
+    details: Optional[str] = None
+    events: List[AgentPackageEvent] = Field(default_factory=list)
     category: Optional[str] = None
     source: Optional[str] = None
     integration_type: Optional[str] = Field(
@@ -252,6 +260,9 @@ class PluginVersionDetail(BaseModel):
     changelog: Optional[str] = None
     file_path: Optional[str] = None
     icon_uri: Optional[str] = None
+    preview_url: Optional[str] = Field(
+        None, description="版本预览图预签名链接（包内 assets/preview.png）"
+    )
     publish_result: Optional[str] = None
     publish_failed_reason: Optional[str] = None
     review_status: Optional[str] = None
@@ -291,7 +302,7 @@ class PluginVersionDetail(BaseModel):
     )
     agent_package_profile: Optional[AgentPackageProfile] = Field(
         None,
-        description="agent-plugin / agent-template / agent-group / agent-mcp 内层 manifest 只读摘要",
+        description="agent-plugin / agent-template / agent-group / agent-mcp / system-plugin 内层 manifest 只读摘要",
     )
 
 
@@ -353,7 +364,7 @@ class PluginListQuery(BaseModel):
     )
     search_keyword: Optional[str] = Field(
         None,
-        description="搜索关键词；Skill/SwarmSkill 与四类 Agent 资产使用各自独立的检索索引",
+        description="搜索关键词；Skill/SwarmSkill 与五类 Agent 资产使用各自独立的检索索引",
     )
     moderation_status: Optional[str] = Field(
         None,
