@@ -1,11 +1,11 @@
 # Publish an asset
 
-openJiuwen Agentic Hub accepts six kinds of assets: Skill, Swarm Skill, plugin, connector, expert, and expert team. The **+ Publish** button and `POST /api/v1/plugins` go through the same review. Until a version is approved, the market keeps showing the last approved version.
+openJiuwen Agentic Hub accepts seven kinds of assets: Skill, Swarm Skill, plugin, connector, expert, expert team, and system plugin. The **+ Publish** button and `POST /api/v1/plugins` go through the same review. Until a version is approved, the market keeps showing the last approved version.
 
 ## Publish on the website
 
 1. Sign in, then click **+ Publish** at the top right.
-2. Choose a type. For a Skill or Swarm Skill, select a local folder. For a plugin, connector, expert, or expert team, select a zip. The page detects the package type and blocks submit when it does not match.
+2. Choose a type. For a Skill or Swarm Skill, select a local folder. For a plugin, connector, expert, expert team, or system plugin, select a zip. The page detects the package type and blocks submit when it does not match.
 3. For a first publish, choose **New Skill** or the matching **New …** item. To publish another version of an existing asset, pick that asset in the related dropdown. The package name and display name stay locked.
 4. Enter a version of three numeric parts, such as `1.0.0`, with no `v` prefix. If that version already exists, check **Force overwrite** before submitting.
 5. Choose visibility. Public assets appear on the market after approval. Private assets are available only to the author, admins, and groups that were granted access. A new version keeps the existing visibility.
@@ -34,7 +34,7 @@ Content-Type: multipart/form-data
 
 | Field | Description |
 |-------|-------------|
-| `file` | Zip, required. A Skill or Swarm Skill must include `SKILL.md`. The other four types may be a raw package with `manifest.json`, or a market package that already has `plugin.yaml` |
+| `file` | Zip, required. A Skill or Swarm Skill must include `SKILL.md`. The other five types may be a raw package with `manifest.json`, or a market package that already has `plugin.yaml` |
 | `plugin_version` | For example `1.0.0`. If omitted, the version inside the package is used |
 | `plugin_id` | Set to `asset_id` when publishing a new version of an existing asset. Omit it for the first publish |
 | `asset_name` | Package name. A rename must match the directory inside the package |
@@ -71,7 +71,7 @@ For a self-hosted instance, replace the host with your market address. On succes
 | Zip cannot be opened | Upload a real zip. Empty files, damaged archives, and folders renamed to `.zip` are rejected |
 | Wrapped package version mismatch | `plugin_version` must equal `version` in `manifest.json` |
 
-## Prepare the six package types
+## Prepare the seven package types
 
 ### Skill
 
@@ -110,7 +110,7 @@ roles:
 
 A publish is rejected when `kind` is missing, there are fewer than two roles, an `id` is duplicated, `name` does not match the directory, or the YAML indentation is wrong.
 
-### Plugin, connector, expert, and expert team
+### Plugin, connector, expert, expert team, and system plugin
 
 Upload a zip. `package_type` in `manifest.json` must match the type you selected.
 
@@ -120,10 +120,13 @@ Upload a zip. `package_type` in `manifest.json` must match the type you selected
 | Connector | `mcp` | Connectors |
 | Expert | `agent_template` | Experts |
 | Expert team | `agent_group` | Expert teams |
+| System plugin | `extension` | System plugins |
 
 A connector also needs a file for how it connects: local MCP uses `mcp.json` with `command`; remote MCP uses `mcp.json` with `url`; a command-line connector uses `cli.json`. An old package that has only `mcp.json` and no `manifest.json` cannot be published. Use a PNG icon and set it in `manifest.icon`.
 
 If an expert is detected as a plugin, set `package_type` to `agent_template`. If an expert team is detected as an expert, set it to `agent_group`.
+
+A system plugin needs `package.id`, `package.version`, `package.domain` (`agentserver` or `gateway`), and `display.name` / `display.description` in its inner `manifest.json`. Optional fields are `display.details`, `display.tags`, `display.avatar`, and `display.events`. Put the detail preview at `assets/preview.png` (PNG, source file up to 5 MB; publishing scales it to at most 1600 px on the long edge and 2 MB). The avatar uses the PNG at `display.avatar`, or falls back to `assets/avatar.png`.
 
 ## Generate locally, then upload
 
@@ -139,4 +142,4 @@ agentichub publish my-demo-skill \
   --token <token>
 ```
 
-`--type` may also be `swarmskill`, `agent-plugin`, `agent-mcp`, `agent-template`, or `agent-group`. For an existing zip, use `agentichub publish --file out/my-demo-skill.zip`.
+`--type` may also be `swarmskill`, `agent-plugin`, `agent-mcp`, `agent-template`, `agent-group`, or `system-plugin`. For an existing zip, use `agentichub publish --file out/my-demo-skill.zip`.

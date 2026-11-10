@@ -450,17 +450,22 @@ function AgentPackageProfilePanel({
 }) {
   const capabilities = profile.capabilities ?? []
   const quickInputs = profile.quick_inputs ?? []
+  const events = profile.events ?? []
+  const details = profile.details?.trim() || ''
   const isMcp = profile.package_type === 'mcp'
   const hasMeta = Boolean(
-    profile.category?.trim()
+    profile.domain?.trim()
+    || profile.category?.trim()
     || profile.source?.trim()
     || profile.integration_type?.trim()
     || profile.credentials_type?.trim(),
   )
+  const hasDetails = Boolean(details)
+  const hasEvents = events.length > 0
   const hasCapabilities = capabilities.length > 0
   const hasPersona = Boolean(profile.persona_markdown?.trim())
   const hasQuickInputs = quickInputs.length > 0
-  if (!hasMeta && !hasCapabilities && !hasPersona && !hasQuickInputs) return null
+  if (!hasMeta && !hasDetails && !hasEvents && !hasCapabilities && !hasPersona && !hasQuickInputs) return null
 
   return (
     <div className="mt-8 space-y-8 border-t border-[#F0F0F0] pt-8">
@@ -470,6 +475,12 @@ function AgentPackageProfilePanel({
             {t('plugins.skillPage.agentManifestMetaHeading')}
           </h2>
           <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+            {profile.domain?.trim() ? (
+              <div>
+                <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentDomain')}</div>
+                <div className="mt-1 text-[13px] text-[#404040]">{profile.domain}</div>
+              </div>
+            ) : null}
             {profile.category?.trim() ? (
               <div>
                 <div className="text-[12px] text-[#8C8C8C]">{t('plugins.skillPage.agentCategory')}</div>
@@ -495,6 +506,33 @@ function AgentPackageProfilePanel({
               </div>
             ) : null}
           </div>
+        </section>
+      ) : null}
+
+      {hasDetails ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentDetailsHeading')}
+          </h2>
+          <p className="whitespace-pre-line text-[13px] leading-6 text-[#404040]">{details}</p>
+        </section>
+      ) : null}
+
+      {hasEvents ? (
+        <section>
+          <h2 className="mb-4 text-[16px] font-semibold leading-[22px] text-[#191919]">
+            {t('plugins.skillPage.agentEventsHeading')}
+          </h2>
+          <ul className="space-y-3">
+            {events.map(event => (
+              <li key={event.name} className="rounded-lg border border-slate-100 bg-slate-50/80 px-4 py-3">
+                <div className="text-[13px] font-medium text-[#404040]">{event.name}</div>
+                {event.description?.trim() ? (
+                  <p className="mt-1.5 text-[12px] leading-5 text-[#666666]">{event.description}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 
@@ -610,6 +648,8 @@ export default function AssetDetailPage() {
   const [changelogError, setChangelogError] = useState<string | null>(null)
   /** 版本详情接口返回的 detail_desc（后端已从 OBS 读取版本专属内容） */
   const [detailDescFromApi, setDetailDescFromApi] = useState<string | null>(null)
+  /** 版本详情接口返回的预览图 URL（system plugin 可选） */
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   /** 来自版本详情接口的 install_count；未拉到前用列表里的 installCount */
   const [installCountFromVersionApi, setInstallCountFromVersionApi] = useState<number | null>(null)
   /** 来自版本详情接口的 view_count（成功拉详情后会递增）；未拉到前用列表里的 viewCount */
@@ -711,6 +751,7 @@ export default function AssetDetailPage() {
     setUpdateTimeFromVersionApi(null)
     setVersionDetailViewerModerator(null)
     setDetailDescFromApi(null)
+    setPreviewUrl(null)
     setPublishResult(skill.publishResult)
     setPublishFailedReason('')
     setSecurityReview(buildSecurityReviewSnapshot(skillRaw?.__versionDetail))
@@ -730,6 +771,7 @@ export default function AssetDetailPage() {
 
   const applyVersionDetailResult = useCallback((res: PluginVersionDetailData) => {
     setDetailDescFromApi(res.detail_desc?.trim() || null)
+    setPreviewUrl(res.preview_url?.trim() || null)
     setChangelog(res.changelog?.trim() || null)
 
     setInstallCountFromVersionApi(res.install_count ?? 0)
@@ -762,6 +804,7 @@ export default function AssetDetailPage() {
       setChangelogLoading(false)
       setChangelogError(null)
       setDetailDescFromApi(null)
+      setPreviewUrl(null)
       return
     }
     const cachedVersionDetail = detailQuery.data?.__versionDetail
@@ -770,6 +813,7 @@ export default function AssetDetailPage() {
     setChangelogError(null)
     setChangelog(null)
     setDetailDescFromApi(null)
+    setPreviewUrl(null)
     setAgentPackageProfile(null)
     fileContentAbortRef.current?.abort()
     fileContentAbortRef.current = null
@@ -1446,6 +1490,22 @@ export default function AssetDetailPage() {
                         ))}
                       </select>
                     </div>
+
+                    {previewUrl ? (
+                      <section className="mt-6" data-testid="asset-detail-preview">
+                        <h2 className="mb-3 text-[16px] font-semibold leading-[22px] text-[#191919]">
+                          {t('plugins.detail.preview')}
+                        </h2>
+                        <div className="overflow-hidden rounded-xl border border-[#E6E6E6] bg-slate-50">
+                          <img
+                            src={previewUrl}
+                            alt={skill.displayName}
+                            className="mx-auto block max-h-[360px] w-auto max-w-full object-contain"
+                            loading="lazy"
+                          />
+                        </div>
+                      </section>
+                    ) : null}
 
                     {/* Tab navigation */}
                     <div className="mt-6 border-b border-[#EDEDED]">

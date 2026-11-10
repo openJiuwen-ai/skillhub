@@ -1197,6 +1197,7 @@ export default function PluginMarketPage() {
 
   const locale = i18n.language?.startsWith('zh') ? 'zh-CN' : 'en-US'
   const marketTypeLabel = t(`plugins.marketTypeLabel.${activeType}`)
+  const isPluginGroupTab = activeType === 'agent-plugin' || activeType === 'system-plugin'
   const noMatchingSkillTitle = t(`plugins.noMatchingSkillByType.${activeType}`)
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
@@ -1737,7 +1738,9 @@ export default function PluginMarketPage() {
                     icon: AgentGroupGlyph,
                   },
                 ]).map(option => {
-                  const active = activeType === option.value
+                  const active =
+                    activeType === option.value ||
+                    (option.value === 'agent-plugin' && activeType === 'system-plugin')
                   const Icon = option.icon
                   return (
                     <button
@@ -1840,13 +1843,46 @@ export default function PluginMarketPage() {
             </div>
           )}
 
+          {isPluginGroupTab && (
+            <div className="mt-6 flex justify-center">
+              <div
+                className="flex gap-1 rounded-[8px] bg-[#F1F3F9] p-1"
+                role="tablist"
+                aria-label={t('plugins.pluginSubTypeAria')}
+              >
+                {([
+                  { value: 'agent-plugin' as const, label: t('plugins.pluginSubTypeLabel.agent-plugin') },
+                  { value: 'system-plugin' as const, label: t('plugins.pluginSubTypeLabel.system-plugin') },
+                ]).map(option => {
+                  const active = activeType === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => handleSetType(option.value)}
+                      className={`min-w-[96px] rounded-[6px] px-4 py-1.5 text-[13px] font-medium transition-colors duration-200 ${
+                        active
+                          ? 'bg-white text-[#191919] shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
+                          : 'text-gray-500 hover:text-[#191919]'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}
 
-          <section className="pb-2 pt-16 lg:pt-[64px]">
+          <section className={`pb-2 ${isPluginGroupTab ? 'pt-8' : 'pt-16 lg:pt-[64px]'}`}>
             {categoryMobileNav}
             {/* 桌面端标题与视图切换按钮同行：左栏标题（248px）与右栏右对齐工具栏高度对齐 */}
             <div className="mb-4 hidden items-center xl:grid xl:grid-cols-[248px_minmax(0,1fr)] xl:gap-6">

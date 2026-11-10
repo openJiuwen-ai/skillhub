@@ -31,7 +31,7 @@
 | GET | `/plugins/publish-template` | Query：`kind`（`plugin` \| `skill` \| `swarmskill`） | Bearer **或** System Token | 登录用户 / 系统 |
 | DELETE | `/plugins/{asset_id}/versions/{version}` | 路径：`asset_id`、`version`（`all`=删全部） | Bearer **或** System Token | 发布者 / 系统 |
 | POST | `/plugins/skill-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（仅保持原 Skill 集合包语义） | 仅 System Token | 系统 |
-| POST | `/plugins/asset-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（支持六类 Agent 资产混合集合包） | 仅 System Token | 系统 |
+| POST | `/plugins/asset-import` | Header：`X-Checksum-SHA256`✱；Form：`file`✱、`force`、`fail_fast`（支持七类 Agent 资产混合集合包） | 仅 System Token | 系统 |
 | **Git 源** | | | | |
 | GET | `/plugins/git-sources` | — | Bearer **或** System Token | 登录用户 / 系统 |
 | POST | `/plugins/git-sources` | Body：`repo_url`✱、`ref`、`skills_subpath`、`name` | Bearer **或** System Token | 登录用户 / 系统 |
@@ -142,7 +142,7 @@
 
 ## Agent 资产可见性速查
 
-适用于六类 Agent 资产：Skill、SwarmSkill、插件、连接器、专家、专家团。
+适用于七类 Agent 资产：Skill、SwarmSkill、插件、连接器、专家、专家团、系统插件。
 
 | 调用者 | 公开市场列表 | 下载已通过版本 | 查看待审/驳回版本 | 审核 |
 |--------|:------------:|:--------------:|:-----------------:|:--------:|
@@ -269,7 +269,7 @@ X-OAuth-Provider: gitcode
 
 ### `GET /plugins`
 
-返回 Agent 资产分页列表。未指定 `asset_type` / `plugin_type` 时仅返回 Skill / SwarmSkill；查插件、连接器、专家、专家团须显式传入对应类型。`search_keyword` 对 Skill / SwarmSkill 走语义检索，对 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp` 固定走数据库关键词匹配。未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 或未启用推荐时，`order_by=recommend` 按 `install_count` 查表。`order_by=hot_score` 按火爆值排序；前端「热门」在无搜索、无标签时另传 `top_k`（取 `GET /site/config` 的 `hot_list_top_k`），`total` 同步封顶。市场前端侧边栏精选数量不调用推荐参数，用已上架数与 `rec_list_top_k` 的较小值。可选 Bearer 或 X-System-Token 用于发布者/管理员个性化字段；无效凭证或同时提供两种凭证时按匿名访问。列表项含 `publisher_official`（发布者 ID 为系统管理员时为 true，名称字段仍为原名）和 `hot_score`。
+返回 Agent 资产分页列表。未指定 `asset_type` / `plugin_type` 时仅返回 Skill / SwarmSkill；查插件、连接器、专家、专家团、系统插件须显式传入对应类型。`search_keyword` 对 Skill / SwarmSkill 走语义检索，对 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`、`system-plugin` 固定走数据库关键词匹配。未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 或未启用推荐时，`order_by=recommend` 按 `install_count` 查表。`order_by=hot_score` 按火爆值排序；前端「热门」在无搜索、无标签时另传 `top_k`（取 `GET /site/config` 的 `hot_list_top_k`），`total` 同步封顶。市场前端侧边栏精选数量不调用推荐参数，用已上架数与 `rec_list_top_k` 的较小值。可选 Bearer 或 X-System-Token 用于发布者/管理员个性化字段；无效凭证或同时提供两种凭证时按匿名访问。列表项含 `publisher_official`（发布者 ID 为系统管理员时为 true，名称字段仍为原名）和 `hot_score`。
 
 **Query 参数**
 
@@ -281,10 +281,10 @@ X-OAuth-Provider: gitcode
 | `publisher_id` | string | — | 发布者 ID（查「我的 Skills」时传当前用户 `id`） |
 | `publisher_name` | string | — | 发布者名称模糊匹配 |
 | `category_id` | string | — | 分类 ID（精确匹配；与 `order_by=recommend` 同时出现时回退下载量排序） |
-| `plugin_type` | string | — | `skill`、`swarmskill`、`agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`；可逗号多值。不传且不带 `plugin_type_exclude`/`asset_type` 时默认 `skill,swarmskill` |
+| `plugin_type` | string | — | `skill`、`swarmskill`、`agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`、`system-plugin`；可逗号多值。不传且不带 `plugin_type_exclude`/`asset_type` 时默认 `skill,swarmskill` |
 | `plugin_type_exclude` | string | — | 排除某类型 |
-| `asset_type` | string | — | 资产大类过滤；取值为 `plugin` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp`（Agent 资产与 `plugin_type` 同值） |
-| `search_keyword` | string | — | 关键词。Skill / SwarmSkill 走语义检索；插件、连接器、专家、专家团走数据库关键词匹配 |
+| `asset_type` | string | — | 资产大类过滤；取值为 `plugin` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` / `system-plugin`（Agent 资产与 `plugin_type` 同值） |
+| `search_keyword` | string | — | 关键词。Skill / SwarmSkill 走语义检索；插件、连接器、专家、专家团、系统插件走数据库关键词匹配 |
 | `moderation_status` | string | — | `PENDING` \| `APPROVED` \| `REJECTED` |
 | `tags` | string | - | 按标签过滤，逗号分隔（如 `python,cli`）；标签内不能含逗号（发布校验同口径）。长度上限 512 字符（超出 422），超过 20 个标签静默截断 |
 | `tags_match` | string | `all` | 标签匹配模式：`all`=同时包含全部标签（子集）；`any`=包含任一标签（交集） |
@@ -353,7 +353,7 @@ curl "https://agentichub.openjiuwen.com/api/v1/plugins?plugin_type=skill&tags=py
 
 | 参数 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `plugin_type` | string | - | 限定插件类型：`skill` / `swarmskill` / `agent-plugin` / `agent-template` / `agent-mcp`，缺省为全部类型 |
+| `plugin_type` | string | - | 限定插件类型：`skill` / `swarmskill` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` / `system-plugin`，缺省为全部类型 |
 | `keyword` | string | - | 标签名称子串；提供时跳过运营置顶，按匹配标签的使用次数排序 |
 | `limit` | int | `20` | 返回的标签数量上限（1–100） |
 
@@ -376,7 +376,7 @@ curl "https://agentichub.openjiuwen.com/api/v1/plugins/tags?plugin_type=skill&li
 
 ### `GET /plugins/{asset_id}/versions/{version}`
 
-返回指定 Agent 资产版本的元数据、changelog、审查摘要（若启用）等。响应 `data` 始终包含 `asset_type`，并通过 `plugin_type` 给出具体运行类型；插件、连接器、专家、专家团的这两个字段同值。
+返回指定 Agent 资产版本的元数据、changelog、审查摘要（若启用）等。响应 `data` 始终包含 `asset_type`，并通过 `plugin_type` 给出具体运行类型；插件、连接器、专家、专家团、系统插件的这两个字段同值。系统插件若包内有 `assets/preview.png`，`preview_url` 返回可访问的预签名链接；否则为 `null`。
 
 | 项 | 说明 |
 |----|------|
@@ -422,7 +422,7 @@ curl "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0
 | `version` | 最新对外版本 | 如 `1.0.0` |
 | `is_cli_download` | `false` | `true` 时返回 CLI 原始 zip |
 
-`is_cli_download=false` 时返回 `*.raw.zip`：Skill / SwarmSkill 为首个 `SKILL.md` 所在目录的内容；插件、连接器、专家、专家团为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。
+`is_cli_download=false` 时返回 `*.raw.zip`：Skill / SwarmSkill 为首个 `SKILL.md` 所在目录的内容；插件、连接器、专家、专家团、系统插件为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。
 
 响应 `data` 关键字段：`download_url`、`version`、`checksum_sha256`、`file_size`、`name`、`asset_type`、`plugin_type`。
 
@@ -438,9 +438,9 @@ curl "https://agentichub.openjiuwen.com/api/v1/artifacts/{asset_id}?version=1.0.
 
 ### `POST /plugins`
 
-发布 Agent 资产（multipart zip）。六类均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过审核。须携带 `X-Checksum-SHA256`。
+发布 Agent 资产（multipart zip）。七类均支持 **Bearer 登录用户** 或 **X-System-Token** 发布；系统管理员身份可跳过审核。须携带 `X-Checksum-SHA256`。
 
-> 插件、连接器、专家、专家团支持**裸原生包**（含 `manifest.json`）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「Agent 资产」一节。
+> 插件、连接器、专家、专家团、系统插件支持**裸原生包**（含 `manifest.json`）或**市场包装包**；表单元数据字段优先于包内解析值，服务端自动补全/重写外层 `plugin.yaml`。包结构与错误码见「Agent 资产」一节。
 
 **请求头**
 
@@ -454,12 +454,12 @@ Content-Type: multipart/form-data
 
 | 字段 | 必填 | 说明 |
 |------|:----:|------|
-| `file` | ✓ | `.zip` Agent 资产包。Skill / SwarmSkill 以 `SKILL.md` 为入口；插件、连接器、专家、专家团可为裸包或包装包 |
+| `file` | ✓ | `.zip` Agent 资产包。Skill / SwarmSkill 以 `SKILL.md` 为入口；插件、连接器、专家、专家团、系统插件可为裸包或包装包 |
 | `plugin_id` | | 已有资产发新版时填 `asset_id`；首次发布不传 |
 | `plugin_version` | | 如 `1.0.0`（不含 `v` 前缀）或 7 位小写 git commit；缺省从包内 `plugin.yaml` / manifest 读取 |
 | `version_desc` | | 版本更新说明 |
 | `force` | | `true` 强制覆盖同版本 |
-| `visibility` | | `public`（默认）或 `private`；对六类 Agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
+| `visibility` | | `public`（默认）或 `private`；对七类 Agent 资产均生效，仅发布者与系统管理员可查看详情或下载，不进入公开列表 |
 | `asset_name` | | 市场外层 `plugin.yaml.name`；Agent 裸包/包装包均可覆盖，并同步 patch 内层 `manifest.id`（须与包内路径一致） |
 | `display_name` | | 展示名；表单优先于包内 |
 | `description` | | 简短描述；表单优先于包内 |
@@ -494,7 +494,7 @@ curl -X POST "https://agentichub.openjiuwen.com/api/v1/plugins" \
 }
 ```
 
-`publish_result` 典型流转：`reviewing`（审查中，仅审查开启时的 Skill / SwarmSkill）→ `pending_moderation`（审核中）→ `publish_success` / `publish_failed`。插件、连接器、专家、专家团发布成功时，`asset_type` 与 `plugin_type` 返回对应的 `agent-*` 值。
+`publish_result` 典型流转：`reviewing`（审查中，仅审查开启时的 Skill / SwarmSkill）→ `pending_moderation`（审核中）→ `publish_success` / `publish_failed`。插件、连接器、专家、专家团、系统插件发布成功时，`asset_type` 与 `plugin_type` 返回对应类型值。
 
 **常见错误**
 
@@ -525,11 +525,11 @@ curl -X POST "https://agentichub.openjiuwen.com/api/v1/plugins" \
 
 ### `DELETE /plugins/{asset_id}/versions/{version}`
 
-删除指定市场资产版本，支持 Skill、普通插件以及 `agent-plugin`、`agent-template`、`agent-mcp`。仅 **发布者本人** 或 **System Token** 可调用。
+删除指定市场资产版本，支持 Skill、普通插件以及 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`、`system-plugin`。仅 **发布者本人** 或 **System Token** 可调用。
 
 ⚠️ `version=all` 将 **不可逆** 删除该资产全部版本及对象存储文件。
 
-删除插件、连接器、专家、专家团时，响应 `data` 会额外返回精确的 `asset_type`；Skill / SwarmSkill 与历史插件类型的删除响应结构保持不变。
+删除插件、连接器、专家、专家团、系统插件时，响应 `data` 会额外返回精确的 `asset_type`；Skill / SwarmSkill 与历史插件类型的删除响应结构保持不变。
 
 ```bash
 curl -X DELETE "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0" \
@@ -566,8 +566,8 @@ curl -X DELETE "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/vers
 
 | 条目形态 | 识别为 |
 |----------|--------|
-| 含 `plugin.yaml` 且 `runtime.type` ∈ `skill` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` | 对应类型（标准包装条目） |
-| 裸目录含 `manifest.json` 且 `package_type` = `plugin` / `agent_template` / `agent_group` / `mcp` | `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp`（服务端自动生成外层 `plugin.yaml`；名称取自 `manifest.id` / `manifest.name`） |
+| 含 `plugin.yaml` 且 `runtime.type` ∈ `skill` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` / `system-plugin` | 对应类型（标准包装条目） |
+| 裸目录含 `manifest.json` 且 `package_type` = `plugin` / `agent_template` / `agent_group` / `mcp` / `extension` | `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` / `system-plugin`（服务端自动生成外层 `plugin.yaml`；系统插件名称取自 `manifest.package.id`） |
 | 裸 Skill 目录（仅根目录含 `SKILL.md`，且未命中上述 agent 标识） | `skill` |
 
 各类型的包内容校验规则与 `POST /plugins` 单资产发布一致（见「Agent 资产」一节）。
@@ -586,7 +586,7 @@ curl -X DELETE "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/vers
 
 ## Agent 资产
 
-Agent 资产共六类，都走 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}`。Skill、SwarmSkill 以 `SKILL.md` 为入口，包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。下面是插件、连接器、专家、专家团多出来的包装和画像字段。
+Agent 资产共七类，都走 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}`。Skill、SwarmSkill 以 `SKILL.md` 为入口，包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。下面是插件、连接器、专家、专家团、系统插件多出来的包装和画像字段。
 
 | 资产 | `plugin_type` | 内层入口 |
 |------|---------------|----------|
@@ -594,33 +594,36 @@ Agent 资产共六类，都走 `POST /plugins`、`GET /plugins`、`GET /artifact
 | 连接器 | `agent-mcp` | `manifest.json`（`package_type: mcp`） |
 | 专家 | `agent-template` | `manifest.json`（`package_type: agent_template`） |
 | 专家团 | `agent-group` | `manifest.json`（`package_type: agent_group`） |
+| 系统插件 | `system-plugin` | `manifest.json`（`package_type: extension`） |
 
 **包结构：** 外层 `plugin.yaml` + 内层 `<name>/manifest.json`；可上传裸原生包由服务端自动包装。连接器包 **必须**含 manifest，**拒绝**无 manifest 旧包。
 
-**检索：** 这四类须显式传 `plugin_type`；默认列表只有 Skill、SwarmSkill。`search_keyword` 走 DB 关键词匹配。
+**检索：** 这些类型须显式传 `plugin_type`；默认列表只有 Skill、SwarmSkill。`search_keyword` 走 DB 关键词匹配。
 
 **下载：** `is_cli_download=false` 返回 `raw.zip`（仅内层原生包，根目录为 `manifest.json`）；`true` 返回完整市场包装。
 
 版本详情里的 `agent_package_profile` 来自内层 `manifest.json`，只读：
 
-| 字段 | 插件 | 专家 | 专家团 | 连接器 |
-|------|:----:|:----:|:------:|:------:|
-| `package_type` | `plugin` | `agent_template` | `agent_group` | `mcp` |
-| `category` / `source` | ✓ | ✓ | ✓ | ✓ |
-| `integration_type` | — | — | — | ✓ |
-| `credentials_type` | — | — | — | ✓ |
-| `persona_markdown` | — | ✓ | ✓（`instruction`） | — |
-| `quick_inputs` | ✓ | ✓ | ✓ | ✓（来自 `examples`） |
-| `capabilities[]` | skill/tool/rail/mcp/subagent | 同左 | agent/skill | skill/integration |
-| `manifest_tags` | ✓ | ✓ | ✓ | ✓ |
+| 字段 | 插件 | 专家 | 专家团 | 连接器 | 系统插件 |
+|------|:----:|:----:|:------:|:------:|:--------:|
+| `package_type` | `plugin` | `agent_template` | `agent_group` | `mcp` | `extension` |
+| `category` / `source` | ✓ | ✓ | ✓ | ✓ | — |
+| `domain` | — | — | — | — | ✓ |
+| `details` / `events[]` | — | — | — | — | ✓ |
+| `integration_type` | — | — | — | ✓ | — |
+| `credentials_type` | — | — | — | ✓ | — |
+| `persona_markdown` | — | ✓ | ✓（`instruction`） | — | — |
+| `quick_inputs` | ✓ | ✓ | ✓ | ✓（来自 `examples`） | — |
+| `capabilities[]` | skill/tool/rail/mcp/subagent | 同左 | agent/skill | skill/integration | — |
+| `manifest_tags` | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-`capabilities[]` 每项为 `kind`、`id`、`name`、`description`。`detail_desc` 取内层 `README.md`，没有则为空。`icon_uri`：专家、专家团和插件用 `manifest.avatar` 或外层 `icon.png`；连接器用 `manifest.icon`。
+`capabilities[]` 每项为 `kind`、`id`、`name`、`description`。`detail_desc` 取内层 `README.md`，没有则为空。`icon_uri`：专家、专家团和插件用 `manifest.avatar` 或外层 `icon.png`；连接器用 `manifest.icon`；系统插件用 `display.avatar` 指向的 PNG，否则用 `assets/avatar.png`。
 
 包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。
 
 ### 发布（`POST /plugins`）
 
-六类 Agent 资产相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入审核；系统管理员可跳过。插件、连接器、专家、专家团可上传裸原生包，或通过表单覆盖元数据。
+七类 Agent 资产相同：**已登录用户（Bearer）** 或 **System Token** 均可发布。普通用户发布进入审核；系统管理员可跳过。插件、连接器、专家、专家团、系统插件可上传裸原生包，或通过表单覆盖元数据。
 
 Agent 包装包：`plugin_version` 须与内层 `manifest.version` 一致，否则 `400 invalid_version`。
 

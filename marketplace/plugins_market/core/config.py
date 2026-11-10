@@ -261,6 +261,13 @@ class Settings(BaseSettings):
             "RETRIEVAL_AGENT_MCP_INDEX_OBS_PREFIX",
         ),
     )
+    retrieval_system_plugin_index_obs_prefix: str = Field(
+        default="system-plugins-index",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_SYSTEM_PLUGIN_INDEX_OBS_PREFIX",
+            "RETRIEVAL_SYSTEM_PLUGIN_INDEX_OBS_PREFIX",
+        ),
+    )
 
     # 检索模块：OBS 上保留的索引版本数（默认 168 = 每小时构建一次保留最近一周）
     retrieval_index_max_versions: int = Field(
@@ -347,6 +354,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "MARKET_RETRIEVAL_AGENT_MCP_INDEX_PATH",
             "RETRIEVAL_AGENT_MCP_INDEX_PATH",
+        ),
+    )
+    retrieval_system_plugin_index_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "MARKET_RETRIEVAL_SYSTEM_PLUGIN_INDEX_PATH",
+            "RETRIEVAL_SYSTEM_PLUGIN_INDEX_PATH",
         ),
     )
 
@@ -564,7 +578,7 @@ class Settings(BaseSettings):
     )
 
     # 开关：开启后服务端拒绝发布非 moderated 类型（tools / mcp-stdio / restful-api 等），
-    # 仅允许 Skill / SwarmSkill / 四类 Agent 上架。默认开启（安全优先）；
+    # 仅允许 Skill / SwarmSkill / 五类 Agent 上架。默认开启（安全优先）；
     # 如需放开历史插件类型，置 MARKET_BLOCK_NONSKILL_PLUGIN_PUBLISH=false。
     block_nonskill_plugin_publish: bool = Field(
         default=True,

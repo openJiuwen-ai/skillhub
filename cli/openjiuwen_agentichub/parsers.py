@@ -16,7 +16,7 @@ def _add_init_parser(plugin_subparsers) -> None:
         "--type",
         dest="plugin_type",
         default="skill",
-        choices=("skill", "swarmskill", "agent-plugin", "agent-mcp", "agent-template", "agent-group"),
+        choices=("skill", "swarmskill", "agent-plugin", "agent-mcp", "agent-template", "agent-group", "system-plugin"),
         help="Asset type (default: skill)",
     )
 
@@ -107,7 +107,10 @@ def _add_search_parser(plugin_subparsers) -> None:
         dest="plugin_type",
         default=None,
         metavar="STR",
-        help="Filter by asset type (skill, swarmskill, agent-plugin, agent-mcp, agent-template, agent-group)",
+        help=(
+            "Filter by asset type (skill, swarmskill, agent-plugin, agent-mcp, "
+            "agent-template, agent-group, system-plugin)"
+        ),
     )
     search_parser.add_argument(
         "--author",

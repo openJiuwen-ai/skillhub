@@ -154,7 +154,7 @@ def skill_moderation_list_clause(
     publisher_scoped: bool = False,
     moderation_queue_scoped: bool = False,
 ):
-    """市场列表/检索可见性（Skill / SwarmSkill / 四类 Agent）。
+    """市场列表/检索可见性（Skill / SwarmSkill / 五类 Agent）。
 
     - 公开市场（首页、搜索、未带本人 publisher_id）：仅展示已通过审核的 moderated 资产。
     - 个人「我的」（publisher_id 筛选且为本人）：展示本人全部状态。
@@ -345,7 +345,7 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
     def category_totals_by_type(self) -> Dict[str, Tuple[Dict[str, int], int]]:
         """一次 GROUP BY (asset_type, plugin_type, category_id)，切片出每个市场 tab 类型的分类计数。
 
-        口径与 list_plugins 的 total 一致（匿名访客市场口径）；agent 四类与列表同样
+        口径与 list_plugins 的 total 一致（匿名访客市场口径）；agent 五类与列表同样
         要求 asset_type == plugin_type == tab，skill 两类只按 plugin_type。
         返回 {tab_type: ({category_id: count}，未分类不进 totals, 含未分类的总数)}。
         """

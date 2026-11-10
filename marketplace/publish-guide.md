@@ -1,11 +1,11 @@
 # 上传资产
 
-openJiuwen Agentic Hub 可以发布六类资产：Skill、Swarm Skill、插件、连接器、专家、专家团。网页上的「+ 发布」和接口 `POST /api/v1/plugins` 走同一条审核。通过之前，市场仍显示该资产上一个已通过的版本。
+openJiuwen Agentic Hub 可以发布七类资产：Skill、Swarm Skill、插件、连接器、专家、专家团、系统插件。网页上的「+ 发布」和接口 `POST /api/v1/plugins` 走同一条审核。通过之前，市场仍显示该资产上一个已通过的版本。
 
 ## 在网页上发布
 
 1. 登录后，点击右上角「+ 发布」。
-2. 选择类型。Skill、Swarm Skill 选择本地文件夹；插件、连接器、专家、专家团选择 zip。页面会识别包内类型，与所选不一致时不能提交。
+2. 选择类型。Skill、Swarm Skill 选择本地文件夹；插件、连接器、专家、专家团、系统插件选择 zip。页面会识别包内类型，与所选不一致时不能提交。
 3. 第一次发布选「新 Skill」或对应的「新 xxx」。给已有资产发新版本时，在关联下拉里选中该项。包名和显示名锁定，不能改。
 4. 填写版本号，三段数字，例如 `1.0.0`，不要加 `v`。同版本已存在时，勾选「强制覆盖」后再提交。
 5. 选择可见性。公开：审核通过后出现在市场。私有：仅作者、管理员和被授权的组群可以访问。发新版本时沿用已有可见性，不能在这里改。
@@ -34,7 +34,7 @@ Content-Type: multipart/form-data
 
 | 字段 | 说明 |
 |------|------|
-| `file` | zip，必填。Skill / Swarm Skill 里要有 `SKILL.md`；其余四类可以是含 `manifest.json` 的裸包，或已经带 `plugin.yaml` 的包装包 |
+| `file` | zip，必填。Skill / Swarm Skill 里要有 `SKILL.md`；其余五类可以是含 `manifest.json` 的裸包，或已经带 `plugin.yaml` 的包装包 |
 | `plugin_version` | 如 `1.0.0`。不传则读包内版本 |
 | `plugin_id` | 给已有资产发新版本时填 `asset_id`。第一次发布不传 |
 | `asset_name` | 包名。改名须与包内目录一致 |
@@ -71,7 +71,7 @@ Windows PowerShell 先算出校验和，再写入请求头：
 | zip 打不开 | 上传完整压缩包。空文件、损坏包，或把文件夹改名为 `.zip`，都不能解析 |
 | 包装包版本不一致 | `plugin_version` 必须与 `manifest.json` 的 `version` 相同 |
 
-## 六类包怎么准备
+## 七类包怎么准备
 
 ### Skill
 
@@ -110,7 +110,7 @@ roles:
 
 缺少 `kind`、角色少于 2 个、`id` 重复、`name` 与目录名不一致、YAML 缩进错误，都会被拒绝。
 
-### 插件、连接器、专家、专家团
+### 插件、连接器、专家、专家团、系统插件
 
 上传 zip。`manifest.json` 的 `package_type` 必须与所选类型一致。
 
@@ -120,8 +120,11 @@ roles:
 | 连接器 | `mcp` | 连接器 |
 | 专家 | `agent_template` | 专家 |
 | 专家团 | `agent_group` | 专家团 |
+| 系统插件 | `extension` | 系统插件 |
 
 连接器按接入方式再带文件：本地 MCP 的 `mcp.json` 含 `command`；远程 MCP 的 `mcp.json` 含 `url`；命令行用 `cli.json`。只有 `mcp.json`、没有 `manifest.json` 的旧包不能发。图标用 PNG，写在 `manifest.icon`。
+
+系统插件的内层 `manifest.json` 必须包含 `package.id`、`package.version`、`package.domain`（`agentserver` 或 `gateway`）和 `display.name`、`display.description`。可选 `display.details`、`display.tags`、`display.avatar`、`display.events`。根目录 `assets/preview.png` 作为详情预览图，原始文件不超过 5MB；发布时会缩放到最长边 1600px 内并压缩到 2MB 以内。头像优先使用 `display.avatar` 指向的 PNG，否则使用 `assets/avatar.png`。
 
 专家被识别成插件时，把 `package_type` 改成 `agent_template`。专家团被识别成专家时，改成 `agent_group`。
 
@@ -139,4 +142,4 @@ agentichub publish my-demo-skill \
   --token <token>
 ```
 
-`--type` 还可以是 `swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`。已经打好的 zip 用 `agentichub publish --file out/my-demo-skill.zip`。
+`--type` 还可以是 `swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`、`system-plugin`。已经打好的 zip 用 `agentichub publish --file out/my-demo-skill.zip`。

@@ -27,6 +27,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
     RUNTIME_SKILL,
+    RUNTIME_SYSTEM_PLUGIN,
 )
 
 _WRAP_ALLOWED_ENTRY_TYPES = frozenset(
@@ -36,6 +37,7 @@ _WRAP_ALLOWED_ENTRY_TYPES = frozenset(
         RUNTIME_AGENT_TEMPLATE,
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
+        RUNTIME_SYSTEM_PLUGIN,
     }
 )
 from plugins_market.validation.plugin_yaml import (
@@ -354,7 +356,7 @@ def prepare_publish_zip_content(
                 error="invalid_plugin_structure",
                 message=(
                     "当前不支持对该类型资产自动包装或表单元数据覆盖；"
-                    "请上传标准市场包装包，或 Skill / 四类 Agent 原生包"
+                    "请上传标准市场包装包，或 Skill / 五类 Agent 原生包"
                 ),
                 error_code="SKILLHUB_PUBLISH_LAYOUT_UNRECOGNIZED",
                 error_class="validation",

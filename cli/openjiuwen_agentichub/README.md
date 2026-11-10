@@ -45,7 +45,7 @@ python -m openjiuwen_agentichub.main --help
 # 默认生成 Skill
 agentichub init my-skill --path .
 
-# 六类资产
+# 七类资产
 agentichub init my-swarm --path . --type swarmskill
 agentichub init my-plugin --path . --type agent-plugin
 agentichub init my-connector --path . --type agent-mcp
@@ -57,7 +57,7 @@ agentichub pack ./my-plugin
 agentichub pack ./my-plugin -o ./dist-zips
 ```
 
-`--type` 取 `skill`（默认）、`swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`。Skill / SwarmSkill 以 `SKILL.md` 为入口；后四类生成外层 `plugin.yaml` 和内层 `manifest.json`。
+`--type` 取 `skill`（默认）、`swarmskill`、`agent-plugin`、`agent-mcp`、`agent-template`、`agent-group`、`system-plugin`。Skill / SwarmSkill 以 `SKILL.md` 为入口；后五类生成外层 `plugin.yaml` 和内层 `manifest.json`。
 
 ---
 
@@ -122,7 +122,7 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 |------|------|------|
 | `name` | 是 | 插件名，如 `weather-plugin`（须满足 `^[a-z][a-z0-9-]*$`；`skill` 另有 Agent Skills 风格限制） |
 | `--path` | 否 | 在哪个**父目录**下创建 `name/` 子目录，默认当前目录 `.` |
-| `--type` | 否 | `skill`（默认）\| `swarmskill` \| `agent-plugin` \| `agent-mcp` \| `agent-template` \| `agent-group` |
+| `--type` | 否 | `skill`（默认）\| `swarmskill` \| `agent-plugin` \| `agent-mcp` \| `agent-template` \| `agent-group` \| `system-plugin` |
 | `--force` | 否 | 目标 `name` 目录已存在且非空时仍覆盖初始化 |
 
 ### 6.2 `validate` — 校验插件目录
@@ -176,7 +176,7 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 |------|------|------|
 | `query` | 否 | 搜索关键词；可省略，表示空关键词 |
 | `--market-url` | 条件 | 市场根 URL |
-| `--type` | 否 | `plugin_type` 精确匹配：`skill` / `swarmskill` / `agent-plugin` / `agent-mcp` / `agent-template` / `agent-group` |
+| `--type` | 否 | `plugin_type` 精确匹配：`skill` / `swarmskill` / `agent-plugin` / `agent-mcp` / `agent-template` / `agent-group` / `system-plugin` |
 | `--author` | 否 | 发布者展示名（模糊） |
 | `--asset-id` | 否 | 资产 ID |
 | `--asset-type` | 否 | 资产类型（**精确匹配**；当前列表以 **`plugin`** 为主，其它取值以后端为准，如后续扩展 `workflow` 等） |
@@ -280,7 +280,7 @@ agentichub delete <asset_id> --token <TOKEN> --market-url $BASE
 
 ## 8. 脚手架类型与目录结构
 
-`init --type` 支持六类 Agent 资产。默认 `skill`。
+`init --type` 支持七类 Agent 资产。默认 `skill`。
 
 ### `skill` / `swarmskill`
 
@@ -294,14 +294,14 @@ my-skill/
 
 SwarmSkill 的 `SKILL.md` 含 `kind: swarm-skill` 和至少两个 `roles`。
 
-### `agent-plugin` / `agent-mcp` / `agent-template` / `agent-group`
+### `agent-plugin` / `agent-mcp` / `agent-template` / `agent-group` / `system-plugin`
 
 ```text
 my-plugin/
   plugin.yaml                 # runtime.type = 对应的 agent-* 类型
   README.md                   # 只留在本地，打包时不放进市场 zip
   my-plugin/
-    manifest.json             # package_type = plugin | mcp | agent_template | agent_group
+    manifest.json             # package_type = plugin | mcp | agent_template | agent_group | extension
     README.md
 ```
 
@@ -313,17 +313,18 @@ my-plugin/
 
 ## 9. `plugin.yaml` 与校验摘要（MVP）
 
-说明：Skill / SwarmSkill 可以只有 `SKILL.md`。插件、连接器、专家、专家团使用外层 `plugin.yaml` 加内层 `manifest.json`，两边的名字和版本必须一致。
+说明：Skill / SwarmSkill 可以只有 `SKILL.md`。插件、连接器、专家、专家团、系统插件使用外层 `plugin.yaml` 加内层 `manifest.json`，两边的名字和版本必须一致。
 
 | 字段 / 规则 | 说明 |
 |-------------|------|
-| `name` | 正则 `^[a-z][a-z0-9-]*$` |
+| `name` | 正则 `^[a-z][a-z0-9-]*$`；系统插件允许点号，为 `^[a-z][a-z0-9.-]*$`，不能含 `..` 或以 `.` 结尾 |
 | `version` | 与市场约定一致：**仅** `x.y.z` 三位数字段（如 `1.0.0`），无预发布/构建后缀 |
 | `display_name`、`description` | 非空字符串 |
-| `runtime.type` | `skill` \| `swarmskill` \| `agent-plugin` \| `agent-mcp` \| `agent-template` \| `agent-group` |
+| `runtime.type` | `skill` \| `swarmskill` \| `agent-plugin` \| `agent-mcp` \| `agent-template` \| `agent-group` \| `system-plugin` |
 | `metadata.author`、`metadata.tags` | 必填；`tags` 为非空字符串数组 |
 | `skill` / `swarmskill` | 入口是根目录或唯一子目录里的 `SKILL.md`。`name` 与目录名一致，`description` 非空。SwarmSkill 还要 `kind: swarm-skill` 和至少两个不重复的 `roles[].id` |
 | 插件 / 连接器 / 专家 / 专家团 | 内层 `manifest.package_type` 分别为 `plugin`、`mcp`、`agent_template`、`agent_group`。`manifest.version` 与 `plugin.yaml.version` 相同。插件和连接器用 `manifest.id`，专家和专家团用 `manifest.name`，都要等于 `plugin.yaml.name` |
+| 系统插件 | 内层 `manifest.package_type` 为 `extension`。`package.id` 等于 `plugin.yaml.name`，`package.version` 等于 `plugin.yaml.version`，`package.domain` 为 `agentserver` 或 `gateway`，并包含 `display.name`、`display.description`。可选 `display.details`、`display.tags`、`display.avatar`、`display.events`；可选择 `assets/preview.png` 预览图和 `assets/avatar.png` 默认头像 |
 | 插件 | 根 manifest 不能写 `persona`、`agent_card`、`model`、`subagents`、`memories`、`rubrics` |
 | 连接器 | `integration.type` 为 `stdio-mcp`、`remote-mcp`、`cli` 或 `skill-only`。除 `skill-only` 外，`integration.file` 指向的文件必须在内层目录里。`stdio-mcp` / `remote-mcp` 的 `mcp.json` 必须有非空 `mcpServers`，首个 server 的 `command` 或 `url` 要和 `integration.type` 一致 |
 

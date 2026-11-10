@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Validation for wrapped JiuwenSwarm agent plugins, templates, and groups."""
+"""Validation for wrapped JiuwenSwarm agent assets and system plugins."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_SYSTEM_PLUGIN,
 )
 from plugins_market.validation.content_security import (
     find_dangerous_manifest_mcp_files,
@@ -290,12 +291,19 @@ def validate_agent_asset_layout(
         _invalid(manifest_error, f"内层目录 {asset_name!r} 缺少 manifest.json")
 
     manifest = _read_manifest(zf, manifest_original, counter, error=manifest_error)
-    version = _required_string(manifest, "version", error=manifest_error)
     package_type = _required_string(manifest, "package_type", error=manifest_error)
+    package = manifest.get("package")
+    if runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        if not isinstance(package, dict):
+            _invalid("invalid_manifest_json", "manifest.package 必须为对象")
+        version = _required_string(package, "version", error=manifest_error)
+    else:
+        version = _required_string(manifest, "version", error=manifest_error)
     expected_package_type = {
         RUNTIME_AGENT_PLUGIN: "plugin",
         RUNTIME_AGENT_TEMPLATE: "agent_template",
         RUNTIME_AGENT_GROUP: "agent_group",
+        RUNTIME_SYSTEM_PLUGIN: "extension",
     }.get(runtime_type)
     if expected_package_type is None:
         _invalid("invalid_plugin_config", f"不支持的智能体资产类型：{runtime_type}")
@@ -309,6 +317,10 @@ def validate_agent_asset_layout(
             "agent_plugin_version_mismatch" if runtime_type == RUNTIME_AGENT_PLUGIN else "invalid_manifest_json",
             f"plugin.yaml 与 manifest.json 版本不一致：{outer_version!r} != {version!r}",
         )
+
+    detail_desc = ""
+    tags_value = manifest.get("tags")
+    avatar_value = manifest.get("avatar")
 
     if runtime_type == RUNTIME_AGENT_PLUGIN:
         identity = _required_string(manifest, "id", error=manifest_error)
@@ -379,6 +391,31 @@ def validate_agent_asset_layout(
             localized_manifest_text(manifest.get("display_description")) or group_desc
         )
         asset_type = RUNTIME_AGENT_GROUP
+    elif runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        identity = _required_string(package, "id", error=manifest_error)
+        if identity != asset_name:
+            _invalid(
+                "invalid_manifest_json",
+                f"manifest.package.id {identity!r} 必须与 plugin.yaml.name {asset_name!r} 一致",
+            )
+        domain = package.get("domain") or "agentserver"
+        if domain not in ("agentserver", "gateway"):
+            _invalid(
+                "invalid_manifest_json",
+                "manifest.package.domain 仅支持 agentserver 或 gateway",
+            )
+        display = manifest.get("display")
+        if not isinstance(display, dict):
+            _invalid("invalid_manifest_json", "manifest.display 必须为对象")
+        if not localized_manifest_text(display.get("name")):
+            _invalid("invalid_manifest_json", "manifest.display.name 为必填")
+        if not localized_manifest_text(display.get("description")):
+            _invalid("invalid_manifest_json", "manifest.display.description 为必填")
+        display_name = localized_manifest_text(display.get("name")) or identity
+        short_desc = localized_manifest_text(display.get("description"))
+        tags_value = display.get("tags")
+        avatar_value = display.get("avatar")
+        asset_type = RUNTIME_SYSTEM_PLUGIN
     else:  # defensive guard
         _invalid("invalid_plugin_config", f"不支持的智能体资产类型：{runtime_type}")
 
@@ -393,7 +430,7 @@ def validate_agent_asset_layout(
         _dangerous(f"{hit[0]} 包含危险脚本内容（{hit[1]}）")
 
     icon_bytes = b""
-    avatar = manifest.get("avatar")
+    avatar = avatar_value
     if isinstance(avatar, str) and avatar.strip():
         avatar_path = _safe_relative_path(avatar, "avatar", error=manifest_error)
         avatar_member = f"{payload_prefix}{avatar_path}"
@@ -402,15 +439,20 @@ def validate_agent_asset_layout(
             validate_png_icon_bytes(raw_icon, path=avatar_member)
             icon_bytes = raw_icon
 
+    if not icon_bytes and runtime_type == RUNTIME_SYSTEM_PLUGIN:
+        default_avatar = f"{payload_prefix}assets/avatar.png"
+        if _member_exists(members, default_avatar):
+            icon_bytes = safe_read_zip_member(zf, members[default_avatar], counter)
+            validate_png_icon_bytes(icon_bytes, path=default_avatar)
+
     if not icon_bytes:
         icon_path = f"{outer}/icon.png" if outer else "icon.png"
         if icon_path in members:
             icon_bytes = safe_read_zip_member(zf, members[icon_path], counter)
             validate_png_icon_bytes(icon_bytes, path=icon_path)
 
-    tags = localized_manifest_tags(manifest.get("tags"))
+    tags = localized_manifest_tags(tags_value)
     _validate_market_fields(display_name or asset_name, short_desc, tags)
-    detail_desc = ""
     if _member_exists(members, readme_path):
         readme_raw = safe_read_zip_member(zf, members[readme_path], counter)
         detail_desc = readme_raw.decode("utf-8", errors="replace")

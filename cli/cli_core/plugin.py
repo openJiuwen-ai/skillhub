@@ -44,6 +44,7 @@ PACK_IGNORE_SUFFIXES = (".pyc", ".pyo", ".egg-info")
 SKILL_IMPORT_BUNDLE_MAX_BYTES = 512 * 1024 * 1024
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+SYSTEM_PLUGIN_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9.-]*$")
 
 SUPPORTED_PLUGIN_TYPES = {
     "skill",
@@ -52,18 +53,38 @@ SUPPORTED_PLUGIN_TYPES = {
     "agent-mcp",
     "agent-template",
     "agent-group",
+    "system-plugin",
 }
 SKILL_LIKE_RUNTIME_TYPES = frozenset({"skill", "swarmskill"})
-AGENT_ASSET_RUNTIME_TYPES = frozenset({"agent-plugin", "agent-mcp", "agent-template", "agent-group"})
+AGENT_ASSET_RUNTIME_TYPES = frozenset(
+    {"agent-plugin", "agent-mcp", "agent-template", "agent-group", "system-plugin"}
+)
 LEGACY_RUNTIME_TYPES = frozenset({"tools", "mcp-stdio", "restful-api"})
 _AGENT_MANIFEST_PACKAGE_TYPE = {
     "agent-plugin": "plugin",
     "agent-mcp": "mcp",
     "agent-template": "agent_template",
     "agent-group": "agent_group",
+    "system-plugin": "extension",
 }
 _AGENT_PLUGIN_FORBIDDEN_FIELDS = ("persona", "agent_card", "model", "subagents", "memories", "rubrics")
 _AGENT_MCP_INTEGRATION_TYPES = frozenset({"stdio-mcp", "remote-mcp", "cli", "skill-only"})
+
+
+def _is_valid_system_plugin_name(value: str) -> bool:
+    return (
+        bool(SYSTEM_PLUGIN_NAME_PATTERN.match(value))
+        and ".." not in value
+        and not value.endswith(".")
+    )
+
+
+def _has_localized_text(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(isinstance(item, str) and item.strip() for item in value.values())
+    return False
 
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_NAME_MAX_LEN = 64
@@ -523,11 +544,33 @@ def _init_agent_asset(plugin_name: str, plugin_root: Path, plugin_type: str) -> 
     inner = plugin_root / plugin_name
     inner.mkdir(parents=True, exist_ok=True)
     package_type = _AGENT_MANIFEST_PACKAGE_TYPE[plugin_type]
-    manifest: dict[str, Any] = {
-        "version": "0.0.1",
-        "package_type": package_type,
-        "description": "TODO: describe this asset",
-    }
+    manifest: dict[str, Any] = {"package_type": package_type}
+    if plugin_type == "system-plugin":
+        manifest.update(
+            {
+                "schemaVersion": 1,
+                "package": {
+                    "id": plugin_name,
+                    "version": "0.0.1",
+                    "domain": "agentserver",
+                },
+                "display": {
+                    "name": {"zh": plugin_name, "en": plugin_name},
+                    "description": {
+                        "zh": "TODO: describe this system plugin",
+                        "en": "TODO: describe this system plugin",
+                    },
+                },
+                "extensions": [],
+            }
+        )
+    else:
+        manifest.update(
+            {
+                "version": "0.0.1",
+                "description": "TODO: describe this asset",
+            }
+        )
     if plugin_type == "agent-plugin":
         manifest["id"] = plugin_name
         manifest["name"] = plugin_name
@@ -556,7 +599,7 @@ def _init_agent_asset(plugin_name: str, plugin_root: Path, plugin_type: str) -> 
         persona_dir = inner / "persona"
         persona_dir.mkdir(parents=True, exist_ok=True)
         (persona_dir / "persona.md").write_text("# Persona\n\nTODO: describe this expert.\n", encoding="utf-8")
-    else:
+    elif plugin_type == "agent-group":
         manifest["name"] = plugin_name
         manifest["instruction"] = "TODO: how members collaborate"
         manifest["agents"] = ["leader", "analyst"]
@@ -640,15 +683,44 @@ def _validate_agent_asset_directory(
         errors.append(
             f"manifest.package_type must be {expected_package_type!r}, got {package_type!r}"
         )
-    if isinstance(version, str) and manifest.get("version") != version:
-        errors.append(
-            f"plugin.yaml version {version!r} must equal manifest.version {manifest.get('version')!r}"
-        )
-    if runtime_type in {"agent-plugin", "agent-mcp"}:
-        if manifest.get("id") != name:
-            errors.append(f"manifest.id {manifest.get('id')!r} must equal plugin.yaml name {name!r}")
-    elif manifest.get("name") != name:
-        errors.append(f"manifest.name {manifest.get('name')!r} must equal plugin.yaml name {name!r}")
+    if runtime_type == "system-plugin":
+        package = manifest.get("package")
+        if not isinstance(package, dict):
+            errors.append("manifest.package must be an object")
+        else:
+            if package.get("id") != name:
+                errors.append(
+                    f"manifest.package.id {package.get('id')!r} must equal plugin.yaml name {name!r}"
+                )
+            if isinstance(version, str) and package.get("version") != version:
+                errors.append(
+                    "plugin.yaml version "
+                    f"{version!r} must equal manifest.package.version {package.get('version')!r}"
+                )
+            domain = package.get("domain") or "agentserver"
+            if domain not in ("agentserver", "gateway"):
+                errors.append("manifest.package.domain must be agentserver or gateway")
+        display = manifest.get("display")
+        if not isinstance(display, dict):
+            errors.append("manifest.display must be an object")
+        else:
+            if not _has_localized_text(display.get("name")):
+                errors.append("manifest.display.name is required")
+            if not _has_localized_text(display.get("description")):
+                errors.append("manifest.display.description is required")
+            avatar = display.get("avatar")
+            if avatar is not None and not isinstance(avatar, str):
+                errors.append("manifest.display.avatar must be a string")
+    else:
+        if isinstance(version, str) and manifest.get("version") != version:
+            errors.append(
+                f"plugin.yaml version {version!r} must equal manifest.version {manifest.get('version')!r}"
+            )
+        if runtime_type in {"agent-plugin", "agent-mcp"}:
+            if manifest.get("id") != name:
+                errors.append(f"manifest.id {manifest.get('id')!r} must equal plugin.yaml name {name!r}")
+        elif manifest.get("name") != name:
+            errors.append(f"manifest.name {manifest.get('name')!r} must equal plugin.yaml name {name!r}")
     if runtime_type == "agent-plugin":
         for field in _AGENT_PLUGIN_FORBIDDEN_FIELDS:
             if field in manifest:
@@ -707,6 +779,11 @@ def plugin_init(plugin_name: str, base_path: Path, force: bool = False, plugin_t
         err = _validate_skill_slug(plugin_name, field="skill name")
         if err:
             raise ValueError(err)
+    elif plugin_type == "system-plugin":
+        if not _is_valid_system_plugin_name(plugin_name):
+            raise ValueError(
+                "system plugin name must match ^[a-z][a-z0-9.-]*$ without '..' or trailing '.'"
+            )
     elif not NAME_PATTERN.match(plugin_name):
         raise ValueError("plugin name must match ^[a-z][a-z0-9-]*$")
 
@@ -762,7 +839,7 @@ def plugin_validate(plugin_path: Path) -> ValidationResult:
     elif runtime_type in LEGACY_RUNTIME_TYPES:
         errors.append(
             f"runtime.type {runtime_type!r} is not an Agent asset type; "
-            "use skill, swarmskill, agent-plugin, agent-mcp, agent-template, or agent-group"
+            "use skill, swarmskill, agent-plugin, agent-mcp, agent-template, agent-group, or system-plugin"
         )
     elif not skill_like_diag:
         required_entries.extend(("plugin.yaml", "README.md"))
@@ -1414,6 +1491,7 @@ def _runtime_type(plugin_data: dict[str, Any] | None) -> str | None:
         "agent-mcp": "agent-mcp",
         "agent-template": "agent-template",
         "agent-group": "agent-group",
+        "system-plugin": "system-plugin",
     }
     return canonical_map.get(rt)
 
@@ -1431,6 +1509,11 @@ def _validate_plugin_yaml(
             skill_slug_err = _validate_skill_slug(name, field="plugin.yaml name")
             if skill_slug_err:
                 errors.append(skill_slug_err)
+    elif runtime_type == "system-plugin":
+        if not isinstance(name, str) or not _is_valid_system_plugin_name(name):
+            errors.append(
+                "plugin.yaml name must match ^[a-z][a-z0-9.-]*$ without '..' or trailing '.'"
+            )
     elif not isinstance(name, str) or not NAME_PATTERN.match(name):
         errors.append("plugin.yaml name must match ^[a-z][a-z0-9-]*$")
 
@@ -1471,7 +1554,7 @@ def _default_plugin_yaml(plugin_name: str, plugin_type: str) -> dict[str, Any]:
     return {
         "name": plugin_name,
         "version": "0.0.1",
-        "display_name": plugin_name.replace("-", " ").title(),
+        "display_name": plugin_name if plugin_type == "system-plugin" else plugin_name.replace("-", " ").title(),
         "description": "TODO: describe your plugin",
         "runtime": {
             "type": plugin_type,

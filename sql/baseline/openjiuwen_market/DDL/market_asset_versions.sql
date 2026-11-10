@@ -8,6 +8,7 @@ CREATE TABLE `market_asset_versions` (
   `file_path` varchar(512) DEFAULT NULL,
   `artifact_sha256` varchar(64) DEFAULT NULL,
   `has_icon` tinyint(1) NOT NULL DEFAULT '0',
+  `has_preview` tinyint(1) NOT NULL DEFAULT '0',
   `moderation_status` varchar(32) DEFAULT NULL,
   `moderation_reject_reason` text,
   PRIMARY KEY (`version_id`),

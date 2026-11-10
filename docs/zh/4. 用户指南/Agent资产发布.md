@@ -1,6 +1,6 @@
 # Agent资产发布
 
-市场可以发布六类 Agent 资产：Skill、SwarmSkill、插件、连接器、专家、专家团。包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。
+市场可以发布七类 Agent 资产：Skill、SwarmSkill、插件、连接器、专家、专家团、系统插件。包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。
 
 ## 共同步骤
 

@@ -75,7 +75,9 @@ from .artifacts import (
 
 
 _OBS_PUBLISHER_RE = re.compile(
-    r'^(?:obs|s3)://[^/]+/(?:skills|plugins|agent-plugins|agent-templates|agent-groups|agent-mcps)/([^/]+)/'
+    r'^(?:obs|s3)://[^/]+/'
+    r'(?:skills|plugins|agent-plugins|agent-templates|agent-groups|agent-mcps|system-plugins)'
+    r'/([^/]+)/'
 )
 _SKILLS_TAG_MAPPING_FILENAME = "skills_tag_mapping.jsonl"
 
@@ -786,7 +788,10 @@ class _IndexBuildWorkflow:
             # Strip publisher prefix from name when scanner fell back to dir name
             if "__" in worker_id and str(item.get("name", "")) == worker_id:
                 item["name"] = worker_id.split("__", 1)[1]
-        return build_catalog_records_from_nodes(nodes=load_tree_preset(tree_output_path).get("nodes") or [], scanned_skills=scanned)
+        return build_catalog_records_from_nodes(
+            nodes=load_tree_preset(tree_output_path).get("nodes") or [],
+            scanned_skills=scanned,
+        )
 
 
 class _IncrementalIndexBuildWorkflow(_IndexBuildWorkflow):

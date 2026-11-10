@@ -11,6 +11,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_SYSTEM_PLUGIN,
 )
 
 
@@ -31,6 +32,12 @@ AGENT_RETRIEVAL_GROUPS = (
     AgentRetrievalGroup(RUNTIME_AGENT_TEMPLATE, "agent-templates", "agent-templates-index", "agent-templates-tag"),
     AgentRetrievalGroup(RUNTIME_AGENT_GROUP, "agent-groups", "agent-groups-index", "agent-groups-tag"),
     AgentRetrievalGroup(RUNTIME_AGENT_MCP, "agent-mcps", "agent-mcps-index", "agent-mcps-tag"),
+    AgentRetrievalGroup(
+        RUNTIME_SYSTEM_PLUGIN,
+        "system-plugins",
+        "system-plugins-index",
+        "system-plugins-tag",
+    ),
 )
 
 _AGENT_GROUP_BY_TYPE = {spec.asset_type: spec for spec in AGENT_RETRIEVAL_GROUPS}

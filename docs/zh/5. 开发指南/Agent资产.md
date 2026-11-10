@@ -1,6 +1,6 @@
 # Agent资产
 
-openJiuwen Agentic Hub 的 Agent 资产一共六类：Skill、SwarmSkill、插件、连接器、专家、专家团。发布、列表、详情和下载走同一套 API，用 `plugin_type` 区分。
+openJiuwen Agentic Hub 的 Agent 资产一共七类：Skill、SwarmSkill、插件、连接器、专家、专家团、系统插件。发布、列表、详情和下载走同一套 API，用 `plugin_type` 区分。
 
 ## 类型对照
 
@@ -12,15 +12,16 @@ openJiuwen Agentic Hub 的 Agent 资产一共六类：Skill、SwarmSkill、插�
 | [连接器](#连接器) | `agent-mcp` | `manifest.json`（`package_type: mcp`） | MCP / CLI / Skill-only 集成包 |
 | [专家](#专家) | `agent-template` | `manifest.json`（`package_type: agent_template`） | 完整 Agent 角色包 |
 | [专家团](#专家团) | `agent-group` | `manifest.json`（`package_type: agent_group`） | 含成员的 AgentGroup 包 |
+| [系统插件](#系统插件) | `system-plugin` | `manifest.json`（`package_type: extension`） | JiuwenSwarm 平台扩展包 |
 
-插件、连接器、专家、专家团的 `asset_type` 与 `plugin_type` 同值。对象存储前缀分别为 `agent-plugins/`、`agent-templates/`、`agent-groups/`、`agent-mcps/`。
+插件、连接器、专家、专家团、系统插件的 `asset_type` 与 `plugin_type` 同值。对象存储前缀分别为 `agent-plugins/`、`agent-templates/`、`agent-groups/`、`agent-mcps/`、`system-plugins/`。
 
-不传 `plugin_type` 时，列表默认只有 Skill、SwarmSkill。查插件、连接器、专家、专家团必须显式传入对应 `plugin_type`。Skill / SwarmSkill 的关键词走语义检索；后四类固定走数据库关键词匹配。
+不传 `plugin_type` 时，列表默认只有 Skill、SwarmSkill。查插件、连接器、专家、专家团、系统插件必须显式传入对应 `plugin_type`。Skill / SwarmSkill 的关键词走语义检索；其余五类固定走数据库关键词匹配。
 
 ## 版本与审核
 
 - 版本号为 `x.y.z`，如 `1.0.0`，不含 `v` 前缀。
-- 六类都要审核通过后才对外展示。审查只覆盖 Skill / SwarmSkill，且默认关闭。系统管理员发布可跳过审查和审核。
+- 七类都要审核通过后才对外展示。审查只覆盖 Skill / SwarmSkill，且默认关闭。系统管理员发布可跳过审查和审核。
 - 待审版本不会替换已经对外的版本。
 - 接口：`POST /api/v1/plugins`（Bearer 或 System Token）。响应含 `asset_id`（同 `plugin_id`）、`asset_type`、`plugin_type`。
 
@@ -86,7 +87,7 @@ agentichub init example-swarm --type swarmskill
 agentichub validate example-swarm
 ```
 
-## 插件、连接器、专家、专家团的公共包装
+## 插件、连接器、专家、专家团、系统插件的公共包装
 
 ```text
 <outer>/plugin.yaml          # 市场外层，全包唯一
@@ -96,7 +97,7 @@ agentichub validate example-swarm
 
 - 可上传裸原生包，服务端按表单字段自动包装。
 - 已包装包里，表单 `display_name` / `description` / `tags` 可覆盖外层展示字段。
-- 包装包的 `plugin_version` 必须与 `manifest.json.version` 一致，否则 `400 invalid_version`。
+- 包装包的 `plugin_version` 必须与 `manifest.json.version` 一致（系统插件为 `manifest.package.version`），否则 `400 invalid_version`。
 - 路径相对内层包根，不得含 `..` 或绝对路径。
 - Hub 只做包结构和安全校验。`persona`、`skills[]`、`tools[]` 等声明了但文件缺失时不拒发，也不校验 SKILL frontmatter 或 JSON 内容。
 - 内层 `README.md` 可选；有则作为详情 `detail_desc`。
@@ -199,6 +200,33 @@ MCP、命令行或仅 Skill 的集成包。对象存储前缀 `agent-mcps/`。�
 }
 ```
 
+## 系统插件
+
+JiuwenSwarm 平台扩展包。对象存储前缀 `system-plugins/`，外层 `runtime.type` 为 `system-plugin`，包内 `manifest.json` 的 `package_type` 固定为 `extension`。
+
+**必填：** `package.id`（等于 `plugin.yaml.name`，允许点号）、`package.version`（等于 `plugin.yaml.version`）、`package.domain`（`agentserver` 或 `gateway`）、`display.name`、`display.description`
+
+**可选：** `display.details`、`display.tags`、`display.avatar`、`display.events`、包根 `README.md`、`assets/preview.png`
+
+详情页的生效机制取自 `README.md`；`display.details` 与 `display.events` 进入 `agent_package_profile`。`assets/preview.png` 会提取为版本预览图，通过详情接口的 `preview_url` 返回；原始文件不超过 5 MB，发布时缩放到最长边 1600px 内并压缩到 2 MB 以内。
+
+```json
+{
+  "schemaVersion": 1,
+  "package_type": "extension",
+  "package": { "id": "webui.login-demo", "version": "1.0.0", "domain": "gateway" },
+  "display": {
+    "name": { "zh": "认证与登录", "en": "Auth and sign-in" },
+    "description": { "zh": "登录页面与鉴权", "en": "Login page and auth" },
+    "details": { "zh": "## 功能\n登录页面", "en": "## Features\nLogin page" },
+    "tags": [{ "zh": "登录", "en": "Login" }],
+    "events": [{ "name": "ui.ready", "description": { "zh": "页面挂载", "en": "Page mounted" } }],
+    "avatar": "assets/avatar.png"
+  },
+  "extensions": []
+}
+```
+
 ## 常见校验问题
 
 | 现象 | 处理 |
@@ -206,7 +234,7 @@ MCP、命令行或仅 Skill 的集成包。对象存储前缀 `agent-mcps/`。�
 | 缺少 `SKILL.md` 或 frontmatter | Skill / SwarmSkill 补上，且 `name` 与目录名一致 |
 | 发布根下有多个 `SKILL.md` | 只保留一个技能目录 |
 | SwarmSkill 角色不合法 | `kind: swarm-skill`，至少两个不重复的 `roles[].id` |
-| 插件、连接器、专家、专家团的裸包无法识别 | 补 `manifest.json`，且全包只有一个外层 `plugin.yaml` |
+| 插件、连接器、专家、专家团、系统插件的裸包无法识别 | 补 `manifest.json`，且全包只有一个外层 `plugin.yaml` |
 | 版本不一致 | 表单版本与 `manifest.version` 相同 |
 | 连接器缺少 manifest | 不要只传 `mcp.json` |
 | 插件写了 persona / model | 这些字段属于专家，插件根上禁止 |

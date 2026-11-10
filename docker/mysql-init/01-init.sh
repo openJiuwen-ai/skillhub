@@ -26,6 +26,15 @@ index_exists() {
   [ "${count:-0}" != "0" ]
 }
 
+column_exists() {
+  local table="$1"
+  local column="$2"
+  local count
+  count=$(mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -s "$MYSQL_DATABASE" -e \
+    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='${MYSQL_DATABASE}' AND table_name='${table}' AND column_name='${column}'")
+  [ "${count:-0}" != "0" ]
+}
+
 # ── Baseline：初始建表（按外键依赖排序） ──
 BL="/sql/baseline/openjiuwen_market/DDL"
 run_sql "baseline" "$BL/market_assets.sql"
@@ -74,6 +83,15 @@ fi
 INC5_DDL="/sql/incremental/v0.0.2.B005/openjiuwen_market/DDL"
 run_sql "B005" "$INC5_DDL/market_assets_hot_score.sql"
 run_sql "B005" "$INC5_DDL/plugin_fetch_records_create_time_index.sql"
+
+# ── Incremental v0.0.2.B006：版本预览图标记 has_preview ──
+# baseline 已含该列；全新初始化在此跳过，避免重复加列失败。
+INC6_DDL="/sql/incremental/v0.0.2.B006/openjiuwen_market/DDL"
+if column_exists "market_asset_versions" "has_preview"; then
+  echo "[mysql-init] B006: has_preview already present, skip"
+else
+  run_sql "B006" "$INC6_DDL/market_asset_versions_has_preview.sql"
+fi
 
 if [ "$SKIPPED" -gt 0 ]; then
   echo "[mysql-init] ERROR: $SKIPPED SQL file(s) skipped (not found). DDL may be incomplete."
