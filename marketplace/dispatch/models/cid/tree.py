@@ -9,7 +9,8 @@ from typing import Any, Iterable, List, Tuple
 from orchestration.utils.naming import fuzzy_name_distance, normalize_name_key, to_pascal_case
 from .node_spec import CID, NodeSpec, NodeType
 
-logger = logging.getLogger(__name__)
+# 模块级日志器。命名避开 from_yaml() 的同名注入形参，避免覆盖外部作用域标识符。
+_module_logger = logging.getLogger(__name__)
 
 
 class NodeError(Exception):
@@ -234,8 +235,7 @@ class CIDTree:
             if self.exists(cid):
                 return cid.to_str()
         except ValueError as e:
-            if logger is not None:
-                logger.debug("Direct CID parsing failed for '%s': %s", text, str(e))
+            _module_logger.debug("Direct CID parsing failed for '%s': %s", text, str(e))
 
         segments = [segment.strip() for segment in text.split(".") if segment.strip()]
         if not segments:
