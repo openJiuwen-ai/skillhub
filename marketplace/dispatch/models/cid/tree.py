@@ -9,6 +9,8 @@ from typing import Any, Iterable, List, Tuple
 from orchestration.utils.naming import fuzzy_name_distance, normalize_name_key, to_pascal_case
 from .node_spec import CID, NodeSpec, NodeType
 
+logger = logging.getLogger(__name__)
+
 
 class NodeError(Exception):
     pass
