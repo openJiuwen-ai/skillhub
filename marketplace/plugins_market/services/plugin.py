@@ -2504,6 +2504,9 @@ def _build_raw_zip_from_original(
 
     with tempfile.TemporaryDirectory(prefix="market_raw_zip_extract_") as extract_dir:
         with zipfile.ZipFile(source_zip, "r") as zf:
+            # 与 agent-asset 分支（_build_agent_asset_raw_zip_from_original）保持一致：
+            # 解压前先拒绝路径穿越 / 绝对路径 / 符号链接条目。
+            validate_zip_safety(zf)
             zf.extractall(extract_dir)
 
         package_root = _resolve_package_root_by_first_skill_md(extract_dir)
