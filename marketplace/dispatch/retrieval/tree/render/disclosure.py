@@ -57,7 +57,14 @@ def _build_system_prompt(
 ) -> str:
     resolved_top_k = max(1, int(top_k))
     if not compact_codes_enabled and flat_list_mode and resolved_top_k != 2:
-        return _LEGACY_FLAT_NON_COMPACT_SYSTEM_PROMPT
+        # 该模板在 retrieval_disclosure.yaml 中是不含任何占位符的纯文本，无法用
+        # .format 注入候选块；而 flat 模式的 user 消息只有 "User request:\n"，
+        # 候选列表唯一的来源就是 candidate_block。因此这里追加而非格式化，
+        # 否则模型拿不到任何候选条目，只能凭空输出 id。
+        block = str(candidate_block or "").rstrip()
+        if not block:
+            return LEGACY_FLAT_NON_COMPACT_SYSTEM_PROMPT
+        return f"{LEGACY_FLAT_NON_COMPACT_SYSTEM_PROMPT.rstrip()}\n\n{block}"
     bank = _load_progressive_prompt_bank()
     candidate_region = "<CANDIDATE_LIST>" if flat_list_mode else "<CANDIDATE_TREE>"
     if compact_codes_enabled and flat_list_mode:

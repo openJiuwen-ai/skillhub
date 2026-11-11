@@ -339,8 +339,21 @@ class RefactorMessageCompatibilityTest(unittest.TestCase):
                     # Cache-busting [req:HEX] prefix injected into user content is intentional
                     # (see commit 2c17930 for long-query no-return fix) and varies per call,
                     # so strip it before byte-comparison with the pre-refactor snapshot.
-                    old_normalized = _strip_req_prefix(old_message_bytes)
-                    current_normalized = _strip_req_prefix(current_message_bytes)
+                    old_normalized, _ = _normalize_candidate_block(
+                        _strip_req_prefix(old_message_bytes)
+                    )
+                    current_normalized, current_system = _normalize_candidate_block(
+                        _strip_req_prefix(current_message_bytes)
+                    )
+
+                    # 候选列表是本次修复的目标（2026-11-11 恢复 shared 模板的
+                    # {candidate_block}），两侧都已剥离，故这里单独断言当前实现
+                    # 确实把它传给了模型，避免"剥离"变成"放行"。
+                    self.assertIn(
+                        _CANDIDATE_BLOCK_HEADER,
+                        current_system,
+                        f"scenario={scenario['name']} 的 system prompt 未注入候选列表",
+                    )
 
                     messages_equal = current_normalized == old_normalized
                     _log_message_compatibility_report(
@@ -401,6 +414,43 @@ def _strip_req_prefix(message_bytes: bytes) -> bytes:
     the pre-refactor snapshot, so we normalize it out on both sides before comparison.
     """
     return _REQ_PREFIX_RE.sub(b"", message_bytes)
+
+
+_CANDIDATE_BLOCK_HEADER = "# 候选列表"
+_NEXT_SECTION_SEPARATOR = "\n\n# "
+
+
+def _normalize_candidate_block(message_bytes: bytes) -> tuple[bytes, str]:
+    """Remove the candidate block, then return comparable bytes plus system text.
+
+    ``progressive_system_prompt.shared`` lost its ``{candidate_block}`` placeholder
+    until 2026-11-11, so every combination with top_k != 2 ran without a candidate
+    list. After the fix the system prompt necessarily carries a block the
+    pre-refactor snapshot does not have, and the blank lines the placeholder left
+    behind differ as well. The block itself is scenario data (tree text / JSON
+    options) rather than evidence about refactor behaviour, so it is stripped from
+    both sides before the byte comparison; whether it is actually injected is
+    asserted separately through the returned system text.
+    """
+    calls = json.loads(message_bytes.decode("utf-8"))
+    system_parts = []
+    for call in calls:
+        for message in call:
+            content = message.get("content")
+            if not isinstance(content, str):
+                continue
+            if message.get("role") == "system":
+                system_parts.append(content)
+            start = content.find(_CANDIDATE_BLOCK_HEADER)
+            if start >= 0:
+                offset = start + len(_CANDIDATE_BLOCK_HEADER)
+                end = content.find(_NEXT_SECTION_SEPARATOR, offset)
+                content = content[:start] + ("" if end < 0 else content[end:])
+            while "\n\n\n" in content:
+                content = content.replace("\n\n\n", "\n\n")
+            message["content"] = content.rstrip()
+    flat = json.dumps(calls, ensure_ascii=False, separators=(",", ":"))
+    return flat.encode("utf-8"), "\n".join(system_parts)
 
 
 def _capture_message_bytes(dispatch_root: Path, *, scenario: dict[str, object]) -> bytes:
