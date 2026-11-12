@@ -998,63 +998,13 @@ def publish(
             },
         )
 
-    # 写入校验和/大小到对象 metadata，避免下载时读全量对象重复计算
-    upload_result = storage.upload_bytes(
-        content,
-        zip_key,
-        metadata={"sha256": computed, "size": str(content_size)},
-    )
-    if not upload_result.get("success"):
-        raise PublishError(
-            code=500,
-            error="storage_error",
-            message=upload_result.get("error", "插件包上传失败"),
-        )
-
-    if existing_version:
-        _invalidate_force_overwrite_raw_artifact(
-            storage,
-            publisher_id=user_id,
-            asset_id=asset_id,
-            version=version,
-            name=name,
-            plugin_type=plugin_type,
-        )
-
-    if icon_bytes:
-        icon_key = f"{version_dir}icon.png"
-        r = storage.upload_bytes(icon_bytes, icon_key)
-        if not r.get("success"):
-            raise PublishError(
-                code=500,
-                error="storage_error",
-                message=r.get("error", "插件图标上传失败"),
-            )
-
-    if preview_bytes:
-        preview_key = f"{version_dir}preview.png"
-        r = storage.upload_bytes(preview_bytes, preview_key)
-        if not r.get("success"):
-            raise PublishError(
-                code=500,
-                error="storage_error",
-                message=r.get("error", "插件预览图上传失败"),
-            )
-
-    if detail_desc is not None:
-        readme_key = f"{version_dir}readme.md"
-        r = storage.upload_bytes(detail_desc.encode("utf-8"), readme_key)
-        if not r.get("success"):
-            raise PublishError(
-                code=500,
-                error="storage_error",
-                message=r.get("error", "插件 README 上传失败"),
-            )
-
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-
-    # Validate skill count for new skill assets (system admin is exempt).
-    if not existing_asset and is_skill_like_plugin_type(rt) and not is_system_admin_publisher:
+    # 先校验新 Skill 资产的发布配额（系统管理员豁免），
+    # 避免上传后才超限导致对象残留桶中。
+    if (
+        not existing_asset
+        and is_skill_like_plugin_type(rt)
+        and not is_system_admin_publisher
+    ):
         max_skills = settings.max_skills_per_user
         if max_skills > 0:
             skill_count = asset_repo.count_skills_by_publisher(user_id)
@@ -1062,8 +1012,84 @@ def publish(
                 raise PublishError(
                     code=409,
                     error="skill_limit_exceeded",
-                    message=f"您已发布 {skill_count} 个 Skill，达到发布上限（最多 {max_skills} 个）",
+                    message=(
+                        f"您已发布 {skill_count} 个 Skill，"
+                        f"达到发布上限（最多 {max_skills} 个）"
+                    ),
                 )
+
+    # 写入校验和/大小到对象 metadata，避免下载时读全量对象重复计算
+    # 上传过程中任一环节失败，需回滚已成功写入的对象，避免桶中残留孤儿文件。
+    uploaded_keys: list[str] = []
+    try:
+        upload_result = storage.upload_bytes(
+            content,
+            zip_key,
+            metadata={"sha256": computed, "size": str(content_size)},
+        )
+        if not upload_result.get("success"):
+            raise PublishError(
+                code=500,
+                error="storage_error",
+                message=upload_result.get("error", "插件包上传失败"),
+            )
+        uploaded_keys.append(zip_key)
+
+        if existing_version:
+            _invalidate_force_overwrite_raw_artifact(
+                storage,
+                publisher_id=user_id,
+                asset_id=asset_id,
+                version=version,
+                name=name,
+                plugin_type=plugin_type,
+            )
+
+        if icon_bytes:
+            icon_key = f"{version_dir}icon.png"
+            r = storage.upload_bytes(icon_bytes, icon_key)
+            if not r.get("success"):
+                raise PublishError(
+                    code=500,
+                    error="storage_error",
+                    message=r.get("error", "插件图标上传失败"),
+                )
+            uploaded_keys.append(icon_key)
+
+        if preview_bytes:
+            preview_key = f"{version_dir}preview.png"
+            r = storage.upload_bytes(preview_bytes, preview_key)
+            if not r.get("success"):
+                raise PublishError(
+                    code=500,
+                    error="storage_error",
+                    message=r.get("error", "插件预览图上传失败"),
+                )
+            uploaded_keys.append(preview_key)
+
+        if detail_desc is not None:
+            readme_key = f"{version_dir}readme.md"
+            r = storage.upload_bytes(detail_desc.encode("utf-8"), readme_key)
+            if not r.get("success"):
+                raise PublishError(
+                    code=500,
+                    error="storage_error",
+                    message=r.get("error", "插件 README 上传失败"),
+                )
+            uploaded_keys.append(readme_key)
+    except PublishError:
+        for key in uploaded_keys:
+            try:
+                storage.delete_object(key)
+            except Exception:
+                logger.warning(
+                    "publish upload rollback failed for key=%s",
+                    key,
+                    exc_info=True,
+                )
+        raise
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     try:
         if not existing_asset:
