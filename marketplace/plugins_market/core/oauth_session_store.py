@@ -20,6 +20,19 @@ logger = get_logger(__name__)
 # 无限堆积 state/pending 条目耗尽内存（CWE-770）。达到上限时按 FIFO 淘汰最旧条目。
 _MEMORY_STORE_MAX_ENTRIES = 10000
 
+# Lua 脚本：原子地取出并删除一个 key。
+# Redis GETDEL（>=6.2）才是原生原子命令；旧版本不支持时用 EVAL 回退。
+# Redis 执行 Lua 脚本时阻塞其它命令，天然消除 pipeline(GET+DEL) 的 TOCTOU 竞态：
+# 并发兑换同一会话令牌时，两个请求各自执行脚本，但 Redis 串行化脚本执行，
+# 先到者拿到值并删除，后到者 GET 到 nil 直接返回 None，一次性语义成立。
+_GETDEL_LUA = """
+local v = redis.call('GET', KEYS[1])
+if v ~= false then
+    redis.call('DEL', KEYS[1])
+end
+return v
+"""
+
 
 class OAuthStrStore(Protocol):
     def get(self, key: str) -> str | None:
@@ -137,16 +150,20 @@ class _RedisOAuthStore:
         self._r.delete(key)
 
     def get_del(self, key: str) -> str | None:
-        # 优先用 Redis 原生 GETDEL（Redis >= 6.2）原子取出并删除；
-        # 旧版本不支持时回退到 pipeline(GET+DEL)，单连接下两条命令顺序执行，
-        # 同一 key 的并发兑换最多只有一个能拿到非空值（DEL 幂等）。
+        # 优先用 Redis 原生 GETDEL（>=6.2），原子且高效；
+        # 旧版本（<6.2）服务器回退到 Lua 脚本——Redis 执行脚本时阻塞其它命令，
+        # 天然避免 pipeline(GET+DEL) 两个独立命令之间的 TOCTOU 竞态。
+        # 仅在 GETDEL 明确不可用（unknown command 或方法不存在）时才回退，
+        # 网络/超时等真实错误直接向上抛出，不再静默走到回退里掩盖问题。
         try:
             v = self._r.getdel(key)
-        except Exception:
-            pipe = self._r.pipeline()
-            pipe.get(key)
-            pipe.delete(key)
-            v = pipe.execute()[0]
+        except Exception as exc:
+            exc_name = type(exc).__name__
+            # ResponseError（服务端 unknown command） / AttributeError（客户端库过老）
+            # 之外一律向上抛——这些是网络/认证/协议级错误，Lua 也救不了。
+            if exc_name not in ("AttributeError", "ResponseError"):
+                raise
+            v = self._r.eval(_GETDEL_LUA, 1, key)
         return v if isinstance(v, str) else None
 
 
