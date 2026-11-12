@@ -230,7 +230,9 @@ def _validate_skill_slug(value: str, *, field: str = "name") -> str | None:
 
 def _parse_skill_frontmatter(skill_md: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
-        text = skill_md.read_text(encoding="utf-8")
+        text = skill_md.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as e:
+        return None, f"SKILL.md must be valid UTF-8: {e}"
     except OSError as e:
         return None, f"cannot read SKILL.md: {e}"
     if not text.lstrip().startswith("---"):
