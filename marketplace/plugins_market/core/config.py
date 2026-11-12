@@ -215,6 +215,32 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_AGENTOS_AUTH_USER_API_URL", "AGENTOS_AUTH_USER_API_URL"),
     )
 
+    # Keycloak / OIDC. Use the realm issuer URL (not the admin console URL).
+    keycloak_oauth_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MARKET_KEYCLOAK_OAUTH_ENABLED", "KEYCLOAK_OAUTH_ENABLED"),
+    )
+    keycloak_issuer_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_KEYCLOAK_ISSUER_URL", "KEYCLOAK_ISSUER_URL"),
+    )
+    keycloak_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_KEYCLOAK_CLIENT_ID", "KEYCLOAK_CLIENT_ID"),
+    )
+    keycloak_client_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_KEYCLOAK_CLIENT_SECRET", "KEYCLOAK_CLIENT_SECRET"),
+    )
+    keycloak_redirect_uri: str = Field(
+        default="",
+        validation_alias=AliasChoices("MARKET_KEYCLOAK_REDIRECT_URI", "KEYCLOAK_REDIRECT_URI"),
+    )
+    keycloak_oauth_scope: str = Field(
+        default="openid profile email",
+        validation_alias=AliasChoices("MARKET_KEYCLOAK_OAUTH_SCOPE", "KEYCLOAK_OAUTH_SCOPE"),
+    )
+
     # 发布页「下载模板」zip：桶内对象 Key（私有桶）；为空则 GET /plugins/publish-template 返回 503
     # 仅读取环境变量 MARKET_PLUGIN_TEMPLATE_OBJECT_KEY（与类上 env_prefix 拼接字段名）
     plugin_template_object_key: str = Field(default="")

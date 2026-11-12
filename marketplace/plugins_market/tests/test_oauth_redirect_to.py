@@ -6,13 +6,19 @@ from __future__ import annotations
 
 import json
 import unittest
-from urllib.parse import parse_qsl, urlsplit
+from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 from plugins_market.routers.oauth_provider import (
+    OAuthProvider,
     _append_query_params,
     _load_state_record,
     _login_redirect_target,
+    _pending_key,
+    _state_key,
     _validate_loopback_redirect,
+    oauth_callback,
+    oauth_start,
 )
 
 
@@ -102,6 +108,72 @@ class StateRecordTests(unittest.TestCase):
         target = _login_redirect_target({"redirect_to": "https://evil.com/cb"})
         self.assertTrue(target.endswith("/login"))
 
+
+class KeycloakPkceRoundtripTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verifier_is_bound_to_state_and_used_by_callback(self) -> None:
+        class MemoryStore:
+            def __init__(self) -> None:
+                self.values: dict[str, str] = {}
+
+            def set_ex(self, key: str, value: str, _ttl: int) -> None:
+                self.values[key] = value
+
+            def get(self, key: str) -> str | None:
+                return self.values.get(key)
+
+            def get_del(self, key: str) -> str | None:
+                return self.values.pop(key, None)
+
+            def delete(self, key: str) -> None:
+                self.values.pop(key, None)
+
+        class FakeKeycloakAdapter:
+            async def authorization_url(self, state: str, code_verifier: str | None = None) -> str:
+                return f"https://iam.example/authorize?state={state}&verifier={code_verifier}"
+
+            async def logout_config(self) -> dict[str, str]:
+                return {
+                    "end_session_endpoint": "https://iam.example/logout",
+                    "client_id": "marketplace",
+                    "post_logout_redirect_uri": "https://hub.example/login?logged_out=1",
+                }
+
+        verifier = "test-pkce-verifier"
+        store = MemoryStore()
+        adapter = FakeKeycloakAdapter()
+        with (
+            patch("plugins_market.routers.oauth_provider.get_oauth_str_store", return_value=store),
+            patch("plugins_market.routers.oauth_provider._assert_oauth_ready"),
+            patch("plugins_market.routers.oauth_provider.create_pkce_verifier", return_value=verifier),
+            patch("plugins_market.routers.oauth_provider.get_auth_adapter", return_value=adapter),
+            patch(
+                "plugins_market.routers.oauth_provider._exchange_code_for_token_json",
+                new=AsyncMock(return_value={
+                    "access_token": "access-token",
+                    "id_token": "id-token-hint",
+                    "token_type": "Bearer",
+                }),
+            ) as exchange,
+            patch(
+                "plugins_market.routers.oauth_provider.fetch_oauth_user_profile",
+                new=AsyncMock(return_value={"id": "subject-1", "login": "user-1", "name": "User"}),
+            ),
+        ):
+            start_response = await oauth_start(OAuthProvider.keycloak)
+            start_query = parse_qs(urlsplit(start_response.headers["location"]).query)
+            state = start_query["state"][0]
+            state_record = json.loads(store.get(_state_key(OAuthProvider.keycloak, state)))
+            self.assertEqual(state_record["code_verifier"], verifier)
+
+            callback_response = await oauth_callback(OAuthProvider.keycloak, code="auth-code", state=state)
+            exchange.assert_awaited_once()
+            self.assertEqual(exchange.await_args.args[3], verifier)
+
+            callback_query = parse_qs(urlsplit(callback_response.headers["location"]).query)
+            pending_id = callback_query["oauth_session"][0]
+            pending = json.loads(store.get(_pending_key(OAuthProvider.keycloak, pending_id)))
+            self.assertEqual(pending["logout"]["id_token_hint"], "id-token-hint")
+            self.assertEqual(pending["logout"]["end_session_endpoint"], "https://iam.example/logout")
 
 if __name__ == "__main__":
     unittest.main()

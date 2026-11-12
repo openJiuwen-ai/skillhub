@@ -38,6 +38,7 @@ async def get_site_config():
         "gitcode_oauth_enabled": settings.gitcode_oauth_enabled,
         "github_oauth_enabled": settings.github_oauth_enabled,
         "agentos_oauth_enabled": settings.agentos_oauth_enabled,
+        "keycloak_oauth_enabled": settings.keycloak_oauth_enabled,
         "rec_list_top_k": settings.rec_list_top_k,
         "hot_list_top_k": settings.hot_list_top_k,
     }

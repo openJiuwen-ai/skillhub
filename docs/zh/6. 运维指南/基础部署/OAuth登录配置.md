@@ -1,6 +1,6 @@
 # OAuth 登录配置
 
-openJiuwen Agentic Hub Web 登录支持 GitCode、GitHub 和 AgentOS OAuth。如需使用 Web 登录，至少启用一种；同时启用时，登录页会显示三个入口。浏览公开内容无需配置 OAuth。
+openJiuwen Agentic Hub Web 登录支持 GitCode、GitHub、AgentOS OAuth 和符合 OIDC 标准的 IAM（如 Keycloak）。如需使用 Web 登录，至少启用一种；同时启用时，登录页会显示对应入口。浏览公开内容无需配置 OAuth。
 
 ## 确定访问地址
 
@@ -25,6 +25,7 @@ Windows 用户须先使用管理员权限编辑 `C:\Windows\System32\drivers\etc
 GitCode 回调：http://skillhub.local:9002/api/v1/auth/oauth/gitcode/callback
 GitHub 回调：http://skillhub.local:9002/api/v1/auth/oauth/github/callback
 AgentOS 回调：http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
+Keycloak 回调：http://skillhub.local:9002/api/v1/auth/oauth/keycloak/callback
 ```
 
 应用主页、回调地址、浏览器访问地址和 `MARKET_OAUTH_FRONTEND_ORIGIN` 必须使用同一域名。不要混用 `localhost`、`127.0.0.1` 和 `skillhub.local`。
@@ -100,6 +101,16 @@ MARKET_AGENTOS_OAUTH_TOKEN_URL=http://agentos.local:8090/api/v1/oauth2/token
 MARKET_AGENTOS_AUTH_USER_API_URL=http://agentos.local:8090/api/v1/oauth2/userinfo
 MARKET_OAUTH_FRONTEND_ORIGIN=http://skillhub.local:9002
 ```
+
+## Keycloak OIDC
+
+Keycloak 登出会结束身份提供方的浏览器 SSO 会话。除配置登录回调外，还需在对应 OIDC client 的 **Valid post logout redirect URIs** 中登记以下地址（生产环境使用 HTTPS）：
+
+```text
+{MARKET_OAUTH_FRONTEND_ORIGIN}/login?logged_out=1
+```
+
+应用会从 OIDC discovery 读取 `end_session_endpoint`，使用授权响应中的 ID Token 发起 RP-Initiated Logout，并在完成后回到上述地址。Keycloak 登录要求返回 ID Token 和安全有效的登出端点；若缺少任一项，登录将失败而不会降级为仅本地登录。SkillHub 不保存 refresh token。
 
 ## 配置审核管理员
 

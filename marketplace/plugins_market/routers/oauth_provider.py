@@ -21,8 +21,10 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from plugins_market.core.auth import normalize_oauth_provider_header
+from plugins_market.core.auth_adapters import create_pkce_verifier, get_auth_adapter
 from plugins_market.core.config import settings
 from plugins_market.core.errors import BusinessError
+from plugins_market.core.logging import get_logger
 from plugins_market.core.oauth_session_store import get_oauth_str_store
 from plugins_market.core.oauth_user_profile import fetch_oauth_user_profile
 from plugins_market.core.operation_log import (
@@ -35,7 +37,6 @@ from plugins_market.core.operation_log import (
 )
 from plugins_market.core.review_admins import is_market_moderation_username
 from plugins_market.schemas.common import ResponseModel
-from plugins_market.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -46,6 +47,7 @@ class OAuthProvider(str, Enum):
     gitcode = "gitcode"
     github = "github"
     agentos = "agentos"
+    keycloak = "keycloak"
 
 
 class OAuthSessionBody(BaseModel):
@@ -154,6 +156,8 @@ def _redirect_error(
 
 
 def _provider_label(provider: OAuthProvider) -> str:
+    if provider == OAuthProvider.keycloak:
+        return "Keycloak"
     if provider == OAuthProvider.agentos:
         return "AgentOS"
     if provider == OAuthProvider.github:
@@ -191,6 +195,27 @@ def _oauth_log_fields(
 
 def _assert_oauth_ready(provider: OAuthProvider) -> None:
     label = _provider_label(provider)
+    if provider == OAuthProvider.keycloak:
+        if not settings.keycloak_oauth_enabled:
+            raise BusinessError(
+                code=status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
+                error="oauth_disabled",
+                message="Keycloak OAuth 未启用",
+                error_code="SKILLHUB_OAUTH_DISABLED",
+                error_class="auth",
+            )
+        adapter = get_auth_adapter(provider.value)
+        if adapter is None or not adapter.enabled():
+            raise BusinessError(
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                error="oauth_not_configured",
+                message="Keycloak OIDC 未正确配置",
+                error_code="SKILLHUB_OAUTH_NOT_CONFIGURED",
+                error_class="upstream",
+            )
+        return
     if provider == OAuthProvider.agentos:
         if not settings.agentos_oauth_enabled:
             raise BusinessError(
@@ -328,54 +353,19 @@ def _oauth_redirect_error(
     return _redirect_from_publish_error(exc, provider=provider, redirect_to=redirect_to)
 
 
-async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAuthProvider, code: str) -> dict:
-    if provider == OAuthProvider.agentos:
-        logger.info(
-            "oauth token exchange request",
-            url=settings.agentos_oauth_token_url,
-            client_id=settings.agentos_oauth_client_id,
-            redirect_uri=settings.agentos_oauth_redirect_uri,
-            code_len=len(code),
-        )
-        token_res = await client.post(
-            settings.agentos_oauth_token_url,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": settings.agentos_oauth_client_id,
-                "client_secret": settings.agentos_oauth_client_secret,
-                "redirect_uri": settings.agentos_oauth_redirect_uri,
-            },
-        )
-        # 注意：响应头可能含 Set-Cookie 等敏感信息，响应正文可能含 access_token 等敏感字段，均不打印
-        logger.info(
-            "oauth token exchange response",
-            status=token_res.status_code,
-        )
-    elif provider == OAuthProvider.gitcode:
-        token_res = await client.post(
-            settings.gitcode_oauth_token_url,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": settings.gitcode_oauth_client_id,
-                "client_secret": settings.gitcode_oauth_client_secret,
-                "redirect_uri": settings.gitcode_oauth_redirect_uri,
-            },
-        )
-    else:
-        token_res = await client.post(
-            settings.github_oauth_token_url,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": settings.github_oauth_client_id,
-                "client_secret": settings.github_oauth_client_secret,
-                "redirect_uri": settings.github_oauth_redirect_uri,
-            },
-            headers={"Accept": "application/json"},
-        )
-    if token_res.status_code != 200:
+async def _exchange_code_for_token_json(
+    client: httpx.AsyncClient,
+    provider: OAuthProvider,
+    code: str,
+    code_verifier: str | None = None,
+) -> dict:
+    adapter = get_auth_adapter(provider.value)
+    if adapter is None:
+        raise ValueError(f"No auth adapter registered for {provider.value}")
+    try:
+        return await adapter.exchange_code(client, code, code_verifier)
+    except httpx.HTTPStatusError as exc:
+        upstream_status = exc.response.status_code
         logger.warning(
             "oauth token exchange failed",
             **_oauth_log_fields(
@@ -384,7 +374,7 @@ async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAu
                 result="failure",
                 error_code="SKILLHUB_OAUTH_TOKEN_EXCHANGE_FAILED",
                 error_class="upstream",
-                upstream_status=token_res.status_code,
+                upstream_status=upstream_status,
             ),
         )
         raise BusinessError(
@@ -394,9 +384,19 @@ async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAu
             message="换取访问令牌失败，请稍后重试",
             error_code="SKILLHUB_OAUTH_TOKEN_EXCHANGE_FAILED",
             error_class="upstream",
-            meta=_safe_oauth_meta(provider, upstream_status=token_res.status_code),
-        )
-    return token_res.json()
+            meta=_safe_oauth_meta(provider, upstream_status=upstream_status),
+        ) from exc
+    except (TypeError, ValueError):
+        raise BusinessError(
+            code=502,
+            status_code=502,
+            error="oauth_token_exchange_failed",
+            message="换取访问令牌失败，请稍后重试",
+            error_code="SKILLHUB_OAUTH_TOKEN_EXCHANGE_FAILED",
+            error_class="upstream",
+            meta=_safe_oauth_meta(provider),
+        ) from None
+    raise AssertionError("unreachable")
 
 
 @router.get("/oauth/{provider}/start")
@@ -411,6 +411,7 @@ async def oauth_start(provider: OAuthProvider, redirect_to: str | None = None):
     with operation_context(operation_type="oauth_start"):
         bind_operation_actor(actor_type="anonymous")
         bind_operation_resource(resource_type="oauth_provider", resource_id=provider.value)
+        label = _provider_label(provider)
         _assert_oauth_ready(provider)
 
         validated_redirect_to = _validate_loopback_redirect(redirect_to)
@@ -428,41 +429,34 @@ async def oauth_start(provider: OAuthProvider, redirect_to: str | None = None):
         store = get_oauth_str_store()
         # state 记录携带 redirect_to：回调时从服务端取出，绝不在 /callback 上
         # 作为参数接收（信任决策只在 /start 一处做）
+        code_verifier = create_pkce_verifier() if provider == OAuthProvider.keycloak else None
         store.set_ex(
             _state_key(provider, state),
-            json.dumps({"redirect_to": validated_redirect_to}, ensure_ascii=False),
+            json.dumps(
+                {"redirect_to": validated_redirect_to, "code_verifier": code_verifier},
+                ensure_ascii=False,
+            ),
             600,
         )
-
-        if provider == OAuthProvider.agentos:
-            params = {
-                "client_id": settings.agentos_oauth_client_id,
-                "redirect_uri": settings.agentos_oauth_redirect_uri,
-                "response_type": "code",
-                "state": state,
-            }
-            authorize_url = settings.agentos_oauth_authorize_url
-        elif provider == OAuthProvider.gitcode:
-            params = {
-                "client_id": settings.gitcode_oauth_client_id,
-                "redirect_uri": settings.gitcode_oauth_redirect_uri,
-                "response_type": "code",
-                "scope": settings.gitcode_oauth_scope,
-                "state": state,
-            }
-            authorize_url = settings.gitcode_oauth_authorize_url
-        else:
-            params = {
-                "client_id": settings.github_oauth_client_id,
-                "redirect_uri": settings.github_oauth_redirect_uri,
-                "response_type": "code",
-                "scope": settings.github_oauth_scope,
-                "state": state,
-            }
-            authorize_url = settings.github_oauth_authorize_url
-
+        adapter = get_auth_adapter(provider.value)
+        if adapter is None:
+            raise ValueError(f"No auth adapter registered for {provider.value}")
+        try:
+            url = await adapter.authorization_url(state, code_verifier)
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "oauth discovery failed",
+                **_oauth_log_fields(provider, stage="discovery", result="failure", error_class="upstream"),
+            )
+            raise BusinessError(
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                error="oauth_not_configured",
+                message=f"无法读取 {label} OIDC 配置",
+                error_code="SKILLHUB_OAUTH_NOT_CONFIGURED",
+                error_class="upstream",
+            ) from exc
         logger.info("oauthstart", **complete_operation_result(result="success", provider=provider.value))
-        url = f"{authorize_url}?{urlencode(params)}"
         return RedirectResponse(url=url, status_code=302)
 
 
@@ -535,12 +529,26 @@ async def oauth_callback(
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                token_json = await _exchange_code_for_token_json(client, provider, code)
+                token_json = await _exchange_code_for_token_json(
+                    client,
+                    provider,
+                    code,
+                    state_record.get("code_verifier") if isinstance(state_record, dict) else None,
+                )
                 access_token = token_json.get("access_token")
                 if not access_token:
                     return _oauth_redirect_error(
                         f"{label} 未返回 access_token",
                         "SKILLHUB_OAUTH_ACCESS_TOKEN_MISSING",
+                        "upstream",
+                        provider=provider,
+                        redirect_to=redirect_to,
+                    )
+                id_token = token_json.get("id_token")
+                if provider == OAuthProvider.keycloak and (not isinstance(id_token, str) or not id_token):
+                    return _oauth_redirect_error(
+                        f"{label} 未返回 ID Token",
+                        "SKILLHUB_OAUTH_ID_TOKEN_MISSING",
                         "upstream",
                         provider=provider,
                         redirect_to=redirect_to,
@@ -602,6 +610,21 @@ async def oauth_callback(
                         "avatar_url": (avatar or None) if avatar else None,
                     },
                 }
+                if provider == OAuthProvider.keycloak:
+                    adapter = get_auth_adapter(provider.value)
+                    logout_config = await adapter.logout_config() if adapter is not None else None
+                    if not logout_config:
+                        return _oauth_redirect_error(
+                            f"{label} 未提供有效的 OIDC 登出端点",
+                            "SKILLHUB_OAUTH_LOGOUT_NOT_CONFIGURED",
+                            "upstream",
+                            provider=provider,
+                            redirect_to=redirect_to,
+                        )
+                    result["logout"] = {
+                        **logout_config,
+                        "id_token_hint": id_token,
+                    }
 
                 pending = secrets.token_urlsafe(24)
                 store.set_ex(
@@ -803,6 +826,6 @@ async def auth_me(
                 "name": name,
                 "login": login,
                 "avatar_url": profile.get("avatar_url") or profile.get("avatar"),
-                "is_market_moderation_admin": is_market_moderation_username(login),
+                "is_market_moderation_admin": is_market_moderation_username(login, prov),
             },
         )
