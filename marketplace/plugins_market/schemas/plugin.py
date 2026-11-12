@@ -501,6 +501,113 @@ class SkillModerationAuditListResponse(BaseModel):
     items: list[SkillModerationAuditListItem]
 
 
+class SkillModerationBatchItem(BaseModel):
+    """批量审核单条：必须显式给出待审版本，不回退 latest_version。"""
+
+    asset_id: str = Field(..., description="资产 ID")
+    version: str = Field(..., description="要审核的版本号")
+
+    @field_validator("asset_id", "version", mode="before")
+    @classmethod
+    def _strip_required(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip()
+        if not v:
+            raise ValueError("必须为资产与版本提供非空值")
+        return v
+
+
+class SkillModerationBatchRequest(BaseModel):
+    """POST /plugins/moderation/batch 请求体。"""
+
+    action: Literal["approve", "reject"]
+    reason: Optional[str] = Field(None, description="action=reject 时必填，本批共用一条")
+    items: list[SkillModerationBatchItem] = Field(..., min_length=1, max_length=50)
+
+
+class SkillModerationBatchSucceededItem(BaseModel):
+    """批量审核成功项。"""
+
+    asset_id: str
+    version: str
+    moderation_status: str
+    publish_result: Optional[str] = None
+
+
+class SkillModerationBatchFailedItem(BaseModel):
+    """批量审核失败项。"""
+
+    asset_id: str
+    version: str
+    error: Optional[str] = Field(None, description="错误码")
+    message: str = Field(..., description="失败原因")
+
+
+class SkillModerationBatchResult(BaseModel):
+    """POST /plugins/moderation/batch 响应 data。"""
+
+    succeeded: list[SkillModerationBatchSucceededItem]
+    failed: list[SkillModerationBatchFailedItem]
+
+
+class AssetVersionBatchDeleteItem(BaseModel):
+    """批量删除单条：只删给出的版本，不接受 version=all。"""
+
+    asset_id: str = Field(..., description="资产 ID")
+    version: str = Field(..., description="要删除的版本号")
+
+    @field_validator("asset_id", mode="before")
+    @classmethod
+    def _strip_asset_id(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip()
+        if not v:
+            raise ValueError("必须为资产提供非空值")
+        return v
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _reject_all_and_strip(cls, v: object) -> str:
+        if not isinstance(v, str):
+            raise ValueError("版本号必须为字符串")
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("必须为版本提供非空值")
+        if stripped.lower() == "all":
+            raise ValueError("批量删除不接受 version=all")
+        return stripped
+
+
+class AssetVersionBatchDeleteRequest(BaseModel):
+    """POST /plugins/versions/batch-delete 请求体。"""
+
+    items: list[AssetVersionBatchDeleteItem] = Field(..., min_length=1, max_length=50)
+
+
+class AssetVersionBatchDeleteSucceededItem(BaseModel):
+    """批量删除成功项。"""
+
+    asset_id: str
+    version: str
+    asset_deleted: bool = Field(..., description="删除后该资产是否已整行删除")
+
+
+class AssetVersionBatchDeleteFailedItem(BaseModel):
+    """批量删除失败项。"""
+
+    asset_id: str
+    version: str
+    error: Optional[str] = Field(None, description="错误码")
+    message: str = Field(..., description="失败原因")
+
+
+class AssetVersionBatchDeleteResult(BaseModel):
+    """POST /plugins/versions/batch-delete 响应 data。"""
+
+    succeeded: list[AssetVersionBatchDeleteSucceededItem]
+    failed: list[AssetVersionBatchDeleteFailedItem]
+
+
 class PluginListItem(BaseModel):
     """列表项，不包含 status。"""
 

@@ -83,6 +83,8 @@ from plugins_market.validation.constants import (
 from plugins_market.imports.skill_import_service import skill_import_from_bundle
 from plugins_market.schemas.common import ResponseModel
 from plugins_market.schemas.plugin import (
+    AssetVersionBatchDeleteRequest,
+    AssetVersionBatchDeleteResult,
     AssetVersionDeleteData,
     AssetImportResponse,
     CategoryTotalsData,
@@ -101,6 +103,8 @@ from plugins_market.schemas.plugin import (
     PluginVersionDetail,
     SkillImportBundle,
     SkillImportResponse,
+    SkillModerationBatchRequest,
+    SkillModerationBatchResult,
     SkillModerationRequest,
     SkillModerationResult,
     SkillModerationAuditListResponse,
@@ -111,12 +115,14 @@ from plugins_market.repositories import MarketAssetRepository
 from plugins_market.services import (
     PublishError,
     delete_plugin_version_service,
+    delete_plugin_versions_batch_service,
     get_plugin_version_detail_service,
     get_version_file_list_service,
     list_my_skill_moderation_audits_service,
     list_plugins_service,
     get_download_info,
     moderate_skill_asset_service,
+    moderate_skill_assets_batch_service,
     publish as plugin_publish,
 )
 from plugins_market.services.git_skill_sync import (
@@ -1647,6 +1653,96 @@ async def delete_plugin_version(
             },
         )
 
+        return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
+
+
+@plugin_router.post(
+    "/moderation/batch",
+    response_model=ResponseModel[SkillModerationBatchResult],
+)
+async def moderate_skills_batch(
+    body: SkillModerationBatchRequest,
+    auth: AuthContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage_client),
+):
+    """批量通过/驳回待审版本：仅审核管理员，单批 1–50 条，逐条独立成功或失败。"""
+    with operation_context(operation_type="skill_moderation_batch"):
+        bind_operation_actor(
+            actor_id=auth.acting_user_id,
+            actor_name=auth.acting_user_name,
+            actor_type="user",
+        )
+        _log_operation_started(
+            "skill moderation batch",
+            action=body.action,
+            item_count=len(body.items),
+        )
+        try:
+            data = moderate_skill_assets_batch_service(
+                action=body.action,
+                reason=body.reason,
+                items=body.items,
+                auth=auth,
+                db=db,
+                storage=storage,
+            )
+        except (PublishError, HTTPException) as exc:
+            _raise_with_operation_failure_log(
+                "skill moderation batch",
+                exc,
+                action=body.action,
+                item_count=len(body.items),
+            )
+        _log_operation_completed(
+            "skill moderation batch",
+            result="success" if not data.failed else "partial",
+            succeeded=len(data.succeeded),
+            failed=len(data.failed),
+        )
+        return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
+
+
+@plugin_router.post(
+    "/versions/batch-delete",
+    response_model=ResponseModel[AssetVersionBatchDeleteResult],
+)
+async def delete_plugin_versions_batch(
+    body: AssetVersionBatchDeleteRequest,
+    auth: AuthContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+    storage: Any = Depends(get_storage_client),
+):
+    """批量删除待审/审查中版本：仅审核管理员，单批 1–50 条，逐条独立成功或失败。"""
+    with operation_context(operation_type="delete_asset_version_batch"):
+        bind_operation_actor(
+            actor_id=auth.acting_user_id,
+            actor_name=auth.acting_user_name,
+            actor_type="user",
+        )
+        _log_operation_started(
+            "delete asset version batch",
+            item_count=len(body.items),
+        )
+        try:
+            data = delete_plugin_versions_batch_service(
+                items=body.items,
+                auth=auth,
+                db=db,
+                storage=storage,
+            )
+        except (PublishError, HTTPException) as exc:
+            _raise_with_operation_failure_log(
+                "delete asset version batch",
+                exc,
+                item_count=len(body.items),
+            )
+        _log_operation_completed(
+            "delete asset version batch",
+            result="success" if not data.failed else "partial",
+            succeeded=len(data.succeeded),
+            failed=len(data.failed),
+        )
         return ResponseModel(code=status.HTTP_200_OK, message="ok", data=data)
 
 

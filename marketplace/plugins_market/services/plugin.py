@@ -30,7 +30,7 @@ from plugins_market.core.audit import (
     audit_log,
     list_skill_moderation_audit_logs_for_operator,
 )
-from plugins_market.core.audit_events import Action, ResourceType, Result
+from plugins_market.core.audit_events import Action, EventType, ResourceType, Result
 from plugins_market.core.context import _BJ_TZ, set_audit_hint
 from plugins_market.core.errors import BusinessError, PublishError, http_error_payload
 from plugins_market.core.moderation import (
@@ -72,6 +72,10 @@ from plugins_market.repositories import (
 from plugins_market.repositories.market_assets_repository import parse_tag_filter
 from plugins_market.schemas.plugin import (
     AgentPackageProfile,
+    AssetVersionBatchDeleteFailedItem,
+    AssetVersionBatchDeleteItem,
+    AssetVersionBatchDeleteResult,
+    AssetVersionBatchDeleteSucceededItem,
     AssetVersionDeleteData,
     PluginDownloadData,
     PluginListItem,
@@ -82,6 +86,10 @@ from plugins_market.schemas.plugin import (
     PluginVersionDetail,
     SkillModerationAuditListItem,
     SkillModerationAuditListResponse,
+    SkillModerationBatchFailedItem,
+    SkillModerationBatchItem,
+    SkillModerationBatchResult,
+    SkillModerationBatchSucceededItem,
     SkillModerationResult,
 )
 from plugins_market.services.site_notifications import (
@@ -1787,6 +1795,14 @@ def list_plugins_service(
             return _empty_plugin_list_response(query)
 
     retrieval_allowed = use_retrieval_search and _should_use_retrieval_search(plugin_type)
+    # 审核待办（管理员 + moderation_status=PENDING/REJECTED）关闭公开检索索引，只走 DB LIKE：
+    # 待审资产通常不在检索索引里，走索引未命中会直接空页，不再退回 SQL，
+    # 导致搜索结果漏项。
+    moderation_queue_scoped = viewer.is_market_moderation_admin and (
+        (query.moderation_status or "").strip().upper() in (MODERATION_PENDING, MODERATION_REJECTED)
+    )
+    if moderation_queue_scoped:
+        retrieval_allowed = False
     if keyword and plugin_type and retrieval_allowed:
         item_ids = retrieval_search(
             get_index_manager(),
@@ -3021,24 +3037,34 @@ def moderate_skill_asset_service(
         detail_cn = f"审核通过{asset_label}「{dn}」({sn}) v{vstr}"
     else:
         detail_cn = f"驳回{asset_label}「{dn}」({sn}) v{vstr}，原因：{rr_audit or '—'}"
-    audit_log(
-        event_type=EVENT_SKILL_MODERATION,
-        action=act_upper,
-        operator_id=auth.acting_user_id,
-        operator_name=auth.acting_user_name,
-        resource_type=ResourceType.SKILL,
-        resource_id=asset_id,
-        resource_version=vstr,
-        result=Result.SUCCESS,
-        detail=detail_cn,
-        ip_address=auth.ip_address,
-        user_agent=auth.user_agent,
-        extra={
-            "skill_name": sn,
-            "skill_display_name": (getattr(asset, "display_name", None) or "").strip() or None,
-            "reject_reason": rr_audit,
-        },
-    )
+    # 审计用独立会话，在业务已 commit 之后才写；写失败不应把「已生效的审核」
+    # 抛回调用方（否则批量层会把成功项误报为失败），与通知一样降级为告警。
+    try:
+        audit_log(
+            event_type=EVENT_SKILL_MODERATION,
+            action=act_upper,
+            operator_id=auth.acting_user_id,
+            operator_name=auth.acting_user_name,
+            resource_type=ResourceType.SKILL,
+            resource_id=asset_id,
+            resource_version=vstr,
+            result=Result.SUCCESS,
+            detail=detail_cn,
+            ip_address=auth.ip_address,
+            user_agent=auth.user_agent,
+            extra={
+                "skill_name": sn,
+                "skill_display_name": (getattr(asset, "display_name", None) or "").strip() or None,
+                "reject_reason": rr_audit,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "write moderation audit log failed after commit",
+            asset_id=asset_id,
+            error_message=str(exc),
+            exc_info=True,
+        )
     if act in ("approve", "reject") and publisher_id_for_notify:
         try:
             if act == "approve":
@@ -3048,6 +3074,261 @@ def moderate_skill_asset_service(
         except Exception as exc:  # noqa: BLE001
             logger.warning("notify publisher review finished failed: %s", exc)
     return _skill_moderation_result_from_version(asset_id=asset.asset_id, version_row=vrow)
+
+
+def _batch_failure_from_exception(exc: Exception) -> tuple[str | None, str]:
+    """从逐条异常提取 (error, message)，供批量接口的失败记录。"""
+    if isinstance(exc, PublishError):
+        return exc.error or None, exc.message or "操作失败"
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            return (
+                str(detail.get("error") or '') or None,
+                str(detail.get("message") or "操作失败"),
+            )
+        return None, str(detail or "操作失败")
+    return None, str(exc) or "操作失败"
+
+
+def moderate_skill_assets_batch_service(
+    *,
+    action: str,
+    reason: str | None,
+    items: list[SkillModerationBatchItem],
+    auth: AuthContext,
+    db: Session,
+    storage: S3StorageClient,
+) -> SkillModerationBatchResult:
+    """批量审核：逐条复用 moderate_skill_asset_service，独立提交、独立审计、独立通知。
+
+    一条失败不影响其余条（逐条 db.rollback）。权限与缺原因在整批开始前校验：
+    非审核管理员返回 403；action=reject 缺原因整批不发出（422）。
+    """
+    if not auth.is_market_moderation_admin:
+        raise _http_exception(status.HTTP_403_FORBIDDEN, "Insufficient permissions")
+    act = (action or "").strip().lower()
+    if act not in ("approve", "reject"):
+        raise BusinessError(
+            code=400,
+            error="invalid_action",
+            message="action 必须为 approve 或 reject",
+            error_code="SKILLHUB_REVIEW_ACTION_INVALID",
+            error_class="validation",
+        )
+    if act == "reject" and not (reason or "").strip():
+        raise BusinessError(
+            code=422,
+            error="reason_required",
+            message="审核不通过时必须填写原因",
+            error_code="SKILLHUB_REVIEW_REASON_REQUIRED",
+            error_class="validation",
+        )
+    succeeded: list[SkillModerationBatchSucceededItem] = []
+    failed: list[SkillModerationBatchFailedItem] = []
+    for item in items:
+        try:
+            result = moderate_skill_asset_service(
+                asset_id=item.asset_id,
+                action=act,
+                reason=reason,
+                version=item.version,
+                auth=auth,
+                db=db,
+                storage=storage,
+            )
+            succeeded.append(
+                SkillModerationBatchSucceededItem(
+                    asset_id=item.asset_id,
+                    version=(result.version or "").strip() or item.version,
+                    moderation_status=result.moderation_status,
+                    publish_result=result.publish_result,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("batch moderation rollback failed")
+            err, msg = _batch_failure_from_exception(exc)
+            failed.append(
+                SkillModerationBatchFailedItem(
+                    asset_id=item.asset_id,
+                    version=item.version,
+                    error=err,
+                    message=msg,
+                )
+            )
+    return SkillModerationBatchResult(succeeded=succeeded, failed=failed)
+
+
+def _batch_delete_audit_resource_type(plugin_type: str | None) -> str:
+    """批量删除审计 resource_type：与单版本删除口径一致。"""
+    if is_skill_like_plugin_type(plugin_type):
+        return ResourceType.SKILL
+    return {
+        RUNTIME_AGENT_PLUGIN: ResourceType.AGENT_PLUGIN,
+        RUNTIME_AGENT_TEMPLATE: ResourceType.AGENT_TEMPLATE,
+        RUNTIME_AGENT_GROUP: ResourceType.AGENT_GROUP,
+        RUNTIME_AGENT_MCP: ResourceType.AGENT_MCP,
+    }.get((plugin_type or "").strip().lower(), ResourceType.PLUGIN)
+
+
+def _delete_pending_version_for_batch(
+    *,
+    asset_id: str,
+    version: str,
+    db: Session,
+    storage: S3StorageClient,
+) -> tuple[bool, str | None, str | None, str | None]:
+    """审核管理员批量删除的单条实现：仅删待审/审查中版本。
+
+    返回 (asset_deleted, skill_name, skill_display_name, plugin_type)，
+    供调用方写删除审计。存储失败抛错由调用方回滚本条事务。
+    """
+    asset_repo = MarketAssetRepository(db)
+    version_repo = MarketAssetVersionRepository(db)
+    skill_review_repo = MarketSkillReviewRepository(db)
+    grant_repo = MarketGroupSkillGrantRepository(db)
+
+    asset = asset_repo.get_by_asset_id(asset_id)
+    if not asset:
+        raise _http_exception(status.HTTP_404_NOT_FOUND, "Asset not found")
+    vstr = _normalize_version(version)
+    version_row = version_repo.get_version(asset_id=asset_id, version=vstr)
+    if not version_row:
+        raise _http_exception(status.HTTP_404_NOT_FOUND, "Version not found")
+
+    pr = (getattr(version_row, "publish_result", None) or "").strip()
+    ms = (getattr(version_row, "moderation_status", None) or "").strip().upper()
+    deletable = pr in (PUBLISH_RESULT_PENDING_MODERATION, PUBLISH_RESULT_REVIEWING) or (
+        not pr and ms == MODERATION_PENDING
+    )
+    if not deletable:
+        raise BusinessError(
+            code=409,
+            error="version_not_deletable",
+            message="该版本已通过审核，不能删除；仅待审或审查中的版本可删除。",
+            error_code="SKILLHUB_PLUGIN_VERSION_NOT_DELETABLE",
+            error_class="conflict",
+        )
+
+    saved_name = (asset.name or "").strip() or None
+    saved_display_name = (asset.display_name or "").strip() or None
+    saved_plugin_type = asset.plugin_type
+
+    prefix = _version_prefix_from_file_path(storage, version_row.file_path)
+    skill_review_repo.delete_by_version_id(version_row.version_id)
+    version_repo.delete_version(asset_id, vstr)
+
+    asset_deleted = False
+    if version_repo.count_versions(asset_id) == 0:
+        grant_repo.delete_by_asset(asset_id)
+        asset_repo.delete_asset(asset_id)
+        asset_deleted = True
+    else:
+        remaining = version_repo.list_versions(asset_id)
+        if remaining:
+            new_latest = remaining[0].version
+            fresh_asset = asset_repo.get_by_asset_id(asset_id)
+            if fresh_asset:
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                fresh_asset.latest_version = new_latest
+                fresh_asset.update_time = now_ms
+                db.add(fresh_asset)
+                _apply_skill_asset_aggregate_from_versions(db, asset_id)
+
+    if prefix:
+        dr = storage.delete_prefix(prefix)
+        if not dr.get("success"):
+            raise _http_exception(
+                status.HTTP_502_BAD_GATEWAY,
+                "Object storage delete failed",
+                details={"prefix": prefix, "errors": dr.get("errors", [])},
+            )
+
+    return asset_deleted, saved_name, saved_display_name, saved_plugin_type
+
+
+def delete_plugin_versions_batch_service(
+    *,
+    items: list[AssetVersionBatchDeleteItem],
+    auth: AuthContext,
+    db: Session,
+    storage: S3StorageClient,
+) -> AssetVersionBatchDeleteResult:
+    """批量删除待审/审查中版本：仅审核管理员。
+
+    逐条独立成功或失败，每条写一条删除审计。
+    """
+    if not auth.is_market_moderation_admin:
+        raise _http_exception(status.HTTP_403_FORBIDDEN, "Insufficient permissions")
+    succeeded: list[AssetVersionBatchDeleteSucceededItem] = []
+    failed: list[AssetVersionBatchDeleteFailedItem] = []
+    for item in items:
+        try:
+            asset_deleted, skill_name, skill_display_name, plugin_type = _delete_pending_version_for_batch(
+                asset_id=item.asset_id,
+                version=item.version,
+                db=db,
+                storage=storage,
+            )
+            db.commit()
+            succeeded.append(
+                AssetVersionBatchDeleteSucceededItem(
+                    asset_id=item.asset_id,
+                    version=item.version,
+                    asset_deleted=asset_deleted,
+                )
+            )
+            # 每条写一条删除审计（独立审计会话，失败不阻断删除结果）
+            try:
+                resource_type = _batch_delete_audit_resource_type(plugin_type)
+                event_type = (
+                    EventType.SKILL_MANAGE
+                    if is_skill_like_plugin_type(plugin_type)
+                    else EventType.PLUGIN_MANAGE
+                )
+                audit_log(
+                    event_type=event_type,
+                    action=Action.DELETE,
+                    operator_id=auth.acting_user_id,
+                    operator_name=auth.acting_user_name,
+                    resource_type=resource_type,
+                    resource_id=item.asset_id,
+                    resource_version=item.version,
+                    result=Result.SUCCESS,
+                    detail=f"删除{resource_type} {item.asset_id} 版本 {item.version}",
+                    ip_address=auth.ip_address,
+                    user_agent=auth.user_agent,
+                    extra={
+                        "asset_deleted": asset_deleted,
+                        "skill_name": skill_name,
+                        "skill_display_name": skill_display_name,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "batch delete audit_log suppressed",
+                    asset_id=item.asset_id,
+                    error_message=str(exc),
+                    exc_info=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("batch delete rollback failed")
+            err, msg = _batch_failure_from_exception(exc)
+            failed.append(
+                AssetVersionBatchDeleteFailedItem(
+                    asset_id=item.asset_id,
+                    version=item.version,
+                    error=err,
+                    message=msg,
+                )
+            )
+    return AssetVersionBatchDeleteResult(succeeded=succeeded, failed=failed)
 
 
 def _audit_created_at_ms(created_at) -> int:
