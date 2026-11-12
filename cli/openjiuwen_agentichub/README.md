@@ -131,6 +131,8 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 |------|------|------|
 | `path` | 是 | 资产根目录。Skill / SwarmSkill 看 `SKILL.md`；插件、连接器、专家、专家团看外层 `plugin.yaml` 与内层 `<name>/manifest.json` |
 
+Skill / SwarmSkill 的 `SKILL.md` 支持 UTF-8 和带 BOM 的 UTF-8。其他编码会报告校验错误，请先转换为 UTF-8 后重试。
+
 ### 6.3 `pack` — 打包为 zip
 
 | 参数 | 必填 | 说明 |
