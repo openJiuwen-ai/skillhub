@@ -27,6 +27,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from common.security.security_utils import SecurityUtils
@@ -108,6 +109,7 @@ from plugins_market.schemas.plugin import (
     VersionFilesData,
 )
 from plugins_market.repositories import MarketAssetRepository
+from plugins_market.models.market_assets import MarketAssetDB
 from plugins_market.services import (
     PublishError,
     delete_plugin_version_service,
@@ -138,6 +140,133 @@ from plugins_market.core.publish_result import (
 plugin_router = APIRouter(prefix="/plugins", tags=["plugins"])
 artifact_router = APIRouter(prefix="/artifacts", tags=["plugins"])
 logger = get_logger(__name__)
+
+
+@plugin_router.get(
+    path="/{id}/download",
+    response_class=RedirectResponse,
+    status_code=status.HTTP_302_FOUND,
+    summary="Direct skill package download (302 redirect to S3)",
+    description="Get an S3 presigned URL by skill asset_id or name and return a 302 Found redirect",
+)
+async def download_skill_redirect(
+    request: Request,
+    artifact_id: str = Path(..., alias="id", description="Skill asset_id (e.g. skill-xxx) or name (e.g. orc)"),
+    version: Optional[str] = Query(
+        default=None,
+        description="Version (e.g. 1.0.0); defaults to the latest approved public version when omitted",
+    ),
+    is_cli_download: bool = Query(default=False, description="CLI download: true downloads the original zip; false downloads raw.zip"),
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage_client),
+    viewer: ViewerContext = Depends(resolve_viewer_context),
+) -> RedirectResponse:
+    fetch_user_id: Optional[str] = get_user_id_from_context()
+
+    # Match by asset_id first; fall back to skill name for compatibility.
+    asset_repo = MarketAssetRepository(db)
+    asset = asset_repo.get_by_asset_id(artifact_id)
+    if not asset:
+        asset = (
+            db.query(MarketAssetDB)
+            .filter(
+                MarketAssetDB.name == artifact_id,
+                MarketAssetDB.status != "OFFLINE",
+            )
+            .order_by(MarketAssetDB.install_count.desc(), MarketAssetDB.create_time.desc())
+            .first()
+        )
+
+    target_asset_id = asset.asset_id if asset else artifact_id
+    counted_user_id = get_user_id_or_none()
+    _ip = client_ip_from_scope(request.scope, trust_forwarded=settings.rate_limit_trust_forwarded)
+    _ua = request.headers.get("user-agent", "")
+    if counted_user_id:
+        source_fp = f"u:{counted_user_id}"
+    else:
+        source_fp = "ip:" + hashlib.sha256(f"{_ip}|{_ua}".encode()).hexdigest()[:16]
+    utc_today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    gate_key = f"dlcnt:{target_asset_id}:{source_fp}:{utc_today}"
+    counted_today = cache_set_nx(gate_key, 86400 * 8)
+
+    with operation_context(operation_type="download_skill_redirect"):
+        bind_operation_actor(actor_id=fetch_user_id, actor_type="viewer")
+        bind_operation_resource(resource_type="artifact", resource_id=target_asset_id, resource_version=version)
+        try:
+            result = get_download_info(
+                asset_id=target_asset_id,
+                version=version,
+                db=db,
+                storage=storage,
+                fetch_user_id=fetch_user_id,
+                viewer=viewer,
+                is_cli_download=is_cli_download,
+                counted=counted_today,
+            )
+        except (PublishError, HTTPException) as exc:
+            if counted_today:
+                cache_delete(gate_key)
+            _raise_with_operation_failure_log(
+                "skill download redirect",
+                exc,
+                asset_id=target_asset_id,
+                version=version,
+                is_cli_download=is_cli_download,
+            )
+
+        download_resource_type = _asset_audit_resource_type(result.plugin_type)
+        bind_operation_resource(
+            resource_type=download_resource_type,
+            resource_id=target_asset_id,
+            resource_version=result.version,
+        )
+        _log_operation_completed(
+            "skill download redirect",
+            result="success",
+            asset_id=target_asset_id,
+            version=result.version,
+            is_cli_download=is_cli_download,
+        )
+
+    try:
+        audit_log(
+            event_type=EventType.SKILL_USE,
+            action=Action.DOWNLOAD,
+            operator_id=fetch_user_id or "anonymous",
+            operator_name=get_user_name(),
+            resource_type=download_resource_type,
+            resource_id=result.asset_id,
+            resource_version=result.version,
+            result=Result.SUCCESS,
+            detail=f"Direct download of {result.name} v{result.version}",
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            extra={
+                "asset_type": result.asset_type,
+                "plugin_type": result.plugin_type,
+                "skill_name": result.name,
+                "skill_display_name": result.display_name,
+                "file_size": int(result.file_size),
+                "checksum_sha256": result.checksum_sha256,
+                "is_cli_download": bool(is_cli_download),
+                "download_mode": "302_redirect",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit_log DOWNLOAD suppressed exception", error_message=str(exc), exc_info=True)
+
+    filename = f"{result.name}_{result.version}.zip"
+
+    return RedirectResponse(
+        url=result.download_url,
+        status_code=status.HTTP_302_FOUND,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Skill-Name": result.name,
+            "X-Skill-Version": result.version,
+            "X-Checksum-Sha256": result.checksum_sha256,
+        },
+    )
 
 
 def _asset_audit_resource_type(plugin_type: str | None) -> str:
