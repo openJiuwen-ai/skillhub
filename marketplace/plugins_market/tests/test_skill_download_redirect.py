@@ -9,12 +9,33 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from plugins_market.core.viewer_context import ANONYMOUS_VIEWER
+from plugins_market.core.viewer_context import ANONYMOUS_VIEWER, ViewerContext
 from plugins_market.core.http_error_logging import register_exception_handlers
 from plugins_market.models.base import Base
+from plugins_market.models.market_assets import MarketAssetDB, MarketAssetVersionDB
 from plugins_market.repositories import PluginFetchRecordRepository
 from plugins_market.routers import plugin
-from test_download_public_latest import _skill_with_pending_new_version
+from plugins_market.services import plugin as service
+
+
+def _skill_with_pending_new_version(asset_id="skill-public-then-pending", publisher_id="owner"):
+    asset = MarketAssetDB(
+        asset_id=asset_id, asset_type="plugin", name="demo-skill", display_name="demo-skill",
+        publisher_id=publisher_id, publisher_name=publisher_id, status="PUBLISHED", plugin_type="skill",
+        latest_version="2.0.0", public_latest_version="1.0.0", moderation_status="APPROVED",
+        publish_result="pending_moderation", visibility="public", install_count=0, create_time=1, update_time=2,
+    )
+    versions = [
+        MarketAssetVersionDB(
+            version_id=f"{asset_id}-{version}", asset_id=asset_id, version=version,
+            create_time=1, moderation_status=moderation, publish_result=result, status="ACTIVE",
+        )
+        for version, moderation, result in (
+            ("1.0.0", "APPROVED", "publish_success"),
+            ("2.0.0", "PENDING", "pending_moderation"),
+        )
+    ]
+    return asset, *versions
 
 
 @pytest.fixture
@@ -36,14 +57,22 @@ def endpoint(monkeypatch):
     monkeypatch.setattr(plugin, "get_user_id_from_context", lambda: None)
     monkeypatch.setattr(plugin, "get_user_id_or_none", lambda: None)
     monkeypatch.setattr(PluginFetchRecordRepository, "create_fetch_record", Mock())
-    from plugins_market.services import plugin as service
     monkeypatch.setattr(service, "_ensure_non_cli_raw_artifact", Mock(return_value=("raw.zip", 4, "abcd")))
     app = FastAPI()
     register_exception_handlers(app, logger=plugin.logger)
     app.include_router(plugin.router, prefix="/api/v1")
-    app.dependency_overrides[plugin.get_db] = lambda: db
-    app.dependency_overrides[plugin.get_storage_client] = lambda: storage
-    app.dependency_overrides[plugin.resolve_viewer_context] = lambda: ANONYMOUS_VIEWER
+    def override_db():
+        return db
+
+    def override_storage():
+        return storage
+
+    def override_viewer():
+        return ANONYMOUS_VIEWER
+
+    app.dependency_overrides[plugin.get_db] = override_db
+    app.dependency_overrides[plugin.get_storage_client] = override_storage
+    app.dependency_overrides[plugin.resolve_viewer_context] = override_viewer
     with TestClient(app, follow_redirects=False) as client:
         yield client, storage, gate, release, audit
     db.close()
@@ -92,3 +121,56 @@ def test_repeated_request_still_downloads_without_releasing_previous_gate(endpoi
     response = client.get("/api/v1/plugins/demo-skill/download?version=2.0.0")
     assert response.status_code == 404, response.text
     release.assert_not_called()
+
+
+@pytest.mark.parametrize("excluded", ["private", "pending", "offline", "agent-plugin"])
+def test_name_lookup_skips_ineligible_higher_ranked_assets(endpoint, excluded):
+    client, storage, gate, release, audit = endpoint
+    db = client.app.dependency_overrides[plugin.get_db]()
+    asset, approved, pending = _skill_with_pending_new_version("other-asset", "other-owner")
+    asset.install_count = 100
+    if excluded == "private":
+        asset.visibility = "private"
+    elif excluded == "pending":
+        asset.moderation_status = "PENDING"
+        asset.public_latest_version = None
+        approved.moderation_status = "PENDING"
+        approved.publish_result = "pending_moderation"
+    elif excluded == "offline":
+        asset.status = "OFFLINE"
+    else:
+        asset.plugin_type = "agent-plugin"
+    db.add_all([asset, approved, pending])
+    db.commit()
+    response = client.get("/api/v1/plugins/demo-skill/download")
+    assert response.status_code == 302, response.text
+    assert audit.call_args.kwargs["resource_id"] == "skill-public-then-pending"
+
+
+def test_name_lookup_accepts_legacy_null_status(endpoint):
+    client, storage, gate, release, audit = endpoint
+    db = client.app.dependency_overrides[plugin.get_db]()
+    asset = db.get(MarketAssetDB, "skill-public-then-pending")
+    asset.status = None
+    db.commit()
+    response = client.get("/api/v1/plugins/demo-skill/download")
+    assert response.status_code == 302, response.text
+
+
+def test_private_name_not_exposed_and_owner_can_download(endpoint):
+    client, storage, gate, release, audit = endpoint
+    db = client.app.dependency_overrides[plugin.get_db]()
+    asset = db.get(MarketAssetDB, "skill-public-then-pending")
+    asset.visibility = "private"
+    db.commit()
+    response = client.get("/api/v1/plugins/demo-skill/download")
+    assert response.status_code == 404
+    assert asset.asset_id not in response.text
+
+    def owner_viewer():
+        return ViewerContext(user_id="owner", user_login="owner", is_system_admin=False)
+
+    client.app.dependency_overrides[plugin.resolve_viewer_context] = owner_viewer
+    response = client.get("/api/v1/plugins/demo-skill/download?version=2.0.0")
+    assert response.status_code == 302, response.text
+    assert response.headers["x-skill-version"] == "2.0.0"

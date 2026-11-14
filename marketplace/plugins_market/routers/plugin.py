@@ -28,6 +28,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import RedirectResponse
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from common.security.security_utils import SecurityUtils
@@ -110,6 +111,7 @@ from plugins_market.schemas.plugin import (
 )
 from plugins_market.repositories import MarketAssetRepository
 from plugins_market.models.market_assets import MarketAssetDB
+from plugins_market.repositories.market_assets_repository import skill_moderation_list_clause
 from plugins_market.services import (
     PublishError,
     delete_plugin_version_service,
@@ -156,7 +158,10 @@ async def download_skill_redirect(
         default=None,
         description="Version (e.g. 1.0.0); defaults to the latest approved public version when omitted",
     ),
-    is_cli_download: bool = Query(default=False, description="CLI download: true downloads the original zip; false downloads raw.zip"),
+    is_cli_download: bool = Query(
+        default=False,
+        description="CLI download: true downloads the original zip; false downloads raw.zip",
+    ),
     db: Session = Depends(get_db),
     storage=Depends(get_storage_client),
     viewer: ViewerContext = Depends(resolve_viewer_context),
@@ -167,15 +172,17 @@ async def download_skill_redirect(
     asset_repo = MarketAssetRepository(db)
     asset = asset_repo.get_by_asset_id(artifact_id)
     if not asset:
-        asset = (
-            db.query(MarketAssetDB)
-            .filter(
-                MarketAssetDB.name == artifact_id,
-                MarketAssetDB.status != "OFFLINE",
-            )
-            .order_by(MarketAssetDB.install_count.desc(), MarketAssetDB.create_time.desc())
-            .first()
+        query = db.query(MarketAssetDB).filter(
+            MarketAssetDB.name == artifact_id,
+            or_(MarketAssetDB.status.is_(None), MarketAssetDB.status != "OFFLINE"),
+            func.lower(MarketAssetDB.plugin_type).in_(("skill", "swarmskill", "teamskills")),
         )
+        visibility_clause = skill_moderation_list_clause(
+            viewer, publisher_scoped=True, moderation_queue_scoped=True
+        )
+        if visibility_clause is not None:
+            query = query.filter(visibility_clause)
+        asset = query.order_by(MarketAssetDB.install_count.desc(), MarketAssetDB.create_time.desc()).first()
 
     target_asset_id = asset.asset_id if asset else artifact_id
     counted_user_id = get_user_id_or_none()
