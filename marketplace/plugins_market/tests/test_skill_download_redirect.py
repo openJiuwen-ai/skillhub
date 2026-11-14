@@ -25,16 +25,16 @@ def _skill_with_pending_new_version(asset_id="skill-public-then-pending", publis
         latest_version="2.0.0", public_latest_version="1.0.0", moderation_status="APPROVED",
         publish_result="pending_moderation", visibility="public", install_count=0, create_time=1, update_time=2,
     )
-    versions = [
-        MarketAssetVersionDB(
+    versions = []
+    for version, moderation, result in (
+        ("1.0.0", "APPROVED", "publish_success"),
+        ("2.0.0", "PENDING", "pending_moderation"),
+    ):
+        version_row = MarketAssetVersionDB(
             version_id=f"{asset_id}-{version}", asset_id=asset_id, version=version,
             create_time=1, moderation_status=moderation, publish_result=result, status="ACTIVE",
         )
-        for version, moderation, result in (
-            ("1.0.0", "APPROVED", "publish_success"),
-            ("2.0.0", "PENDING", "pending_moderation"),
-        )
-    ]
+        versions.append(version_row)
     return asset, *versions
 
 
@@ -61,6 +61,7 @@ def endpoint(monkeypatch):
     app = FastAPI()
     register_exception_handlers(app, logger=plugin.logger)
     app.include_router(plugin.router, prefix="/api/v1")
+
     def override_db():
         return db
 
