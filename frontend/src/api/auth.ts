@@ -1,18 +1,22 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
 import axios from 'axios'
+import { sha256 } from '@noble/hashes/sha2'
 import { API_CONFIG } from './config'
-import type { OAuthProvider, OAuthUser } from '@/auth/gitcodeStorage'
+import type { OAuthLogoutInfo, OAuthProvider, OAuthUser } from '@/auth/gitcodeStorage'
 
 /** 避免 StrictMode 下重复兑换；统一支持 gitcode / github */
 export const OAUTH_PENDING_KEY = '__marketplace_oauth_pending'
 export const OAUTH_ACTIVE_PROVIDER_KEY = '__marketplace_oauth_active_provider'
+
+const KEYCLOAK_VERIFIER_KEY = '__marketplace_keycloak_verifier'
 
 export type OAuthSessionData = {
   provider: OAuthProvider
   access_token: string
   token_type?: string
   user: OAuthUser
+  logout?: OAuthLogoutInfo
 }
 
 type OAuthPendingPayload = {
@@ -27,7 +31,7 @@ export function stringifyOAuthPending(payload: OAuthPendingPayload): string {
 export function parseOAuthPending(raw: string): OAuthPendingPayload | null {
   try {
     const d = JSON.parse(raw) as OAuthPendingPayload
-    if (!d || (d.provider !== 'gitcode' && d.provider !== 'github' && d.provider !== 'agentos') || !d.session) {
+    if (!d || (d.provider !== 'gitcode' && d.provider !== 'github' && d.provider !== 'agentos' && d.provider !== 'keycloak') || !d.session) {
       return null
     }
     return d
@@ -36,17 +40,33 @@ export function parseOAuthPending(raw: string): OAuthPendingPayload | null {
   }
 }
 
+function base64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 export function getOAuthStartUrl(provider: OAuthProvider): string {
   const base = (API_CONFIG.BASE_URL || '/api/v1').replace(/\/$/, '')
-  return `${base}/auth/oauth/${provider}/start`
+  const url = `${base}/auth/oauth/${provider}/start`
+  if (provider !== 'keycloak') return url
+  const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)))
+  const challenge = base64url(sha256(new TextEncoder().encode(verifier)))
+  sessionStorage.setItem(KEYCLOAK_VERIFIER_KEY, verifier)
+  return `${url}?browser_challenge=${challenge}`
 }
 
 export async function exchangeOAuthSession(provider: OAuthProvider, sessionId: string): Promise<OAuthSessionData> {
   const base = (API_CONFIG.BASE_URL || '/api/v1').replace(/\/$/, '')
   const url = `${base}/auth/oauth/${provider}/session`
+  const body: { session: string; browser_verifier?: string } = { session: sessionId }
+  if (provider === 'keycloak') {
+    const verifier = sessionStorage.getItem(KEYCLOAK_VERIFIER_KEY)
+    sessionStorage.removeItem(KEYCLOAK_VERIFIER_KEY)
+    if (!verifier) throw new Error('Please restart Keycloak login in this tab.')
+    body.browser_verifier = verifier
+  }
   const { data } = await axios.post<{ code: number; message: string; data: OAuthSessionData }>(
     url,
-    { session: sessionId },
+    body,
     {
       timeout: API_CONFIG.TIMEOUT,
       headers: API_CONFIG.HEADERS,

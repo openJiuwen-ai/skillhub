@@ -50,6 +50,11 @@ async def _fetch_agentos_profile(access_token: str) -> dict[str, Any] | None:
 
 
 async def fetch_oauth_user_profile(provider: str, access_token: str) -> dict[str, Any] | None:
+    if provider == "keycloak":
+        from plugins_market.core.auth_adapters import get_auth_adapter
+
+        adapter = get_auth_adapter(provider)
+        return await adapter.fetch_user_profile(access_token) if adapter is not None else None
     if provider == "agentos":
         return await _fetch_agentos_profile(access_token)
     if provider == "github":

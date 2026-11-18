@@ -67,6 +67,7 @@ def _viewer_from_auth(auth: AuthContext) -> ViewerContext:
         user_id=auth.acting_user_id,
         user_login=auth.acting_user_name,
         is_system_admin=auth.is_admin,
+        user_provider=auth.acting_user_provider,
     )
 
 

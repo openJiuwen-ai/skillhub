@@ -85,7 +85,8 @@ def _inbox_keys_for_context(auth: AuthContext) -> List[str]:
     if uid:
         keys.append(inbox_key_for_user_id(uid))
     name = (auth.acting_user_name or "").strip()
-    if name:
+    # The login-keyed inbox is for the legacy review-admin username list.
+    if name and auth.acting_user_provider != "keycloak":
         lg = inbox_key_for_login(name)
         if lg and lg not in keys:
             keys.append(lg)

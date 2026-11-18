@@ -1,10 +1,20 @@
 # OAuth 登录配置
 
-openJiuwen Agentic Hub Web 登录支持 GitCode、GitHub 和 AgentOS OAuth。如需使用 Web 登录，至少启用一种；同时启用时，登录页会显示三个入口。浏览公开内容无需配置 OAuth。
+openJiuwen Agentic Hub Web 登录支持 GitCode、GitHub、AgentOS OAuth 和符合 OIDC 标准的 IAM（如 Keycloak）。如需使用 Web 登录，至少启用一种；同时启用时，登录页会显示对应入口。浏览公开内容无需配置 OAuth。
 
 ## 确定访问地址
 
-配置 OAuth 前，先确定用户实际访问 frontend 的地址。本地开发统一使用：
+使用仓库根目录的 `.env.example` 进行本机开发时，前端和 API 分别使用以下地址。把启用渠道的完整回调地址登记到对应的 OAuth 应用。
+
+| 配置项 | 本机开发默认值 |
+|---|---|
+| `MARKET_OAUTH_FRONTEND_ORIGIN` | `http://127.0.0.1:9002` |
+| 各渠道的 `*_REDIRECT_URI` | `http://127.0.0.1:8100/api/v1/auth/oauth/<provider>/callback`，将 `<provider>` 替换为 `gitcode`、`github`、`agentos` 或 `keycloak` |
+| Keycloak 客户端的 Valid post logout redirect URIs | `http://127.0.0.1:9002/login?logged_out=1` |
+
+**对外部署时**，将前端地址和每个已启用渠道的回调地址替换为用户浏览器可访问的真实 HTTPS 地址，保留部署路径前缀，并在身份提供方重新登记完整 URI。启用 Keycloak 时还需填写实际 realm 的 HTTPS issuer 和客户端配置，同步登记真实前端的登出回跳地址。Keycloak 默认关闭。
+
+如果使用本地域名并通过前端代理转发 API，下文以这个地址为例：
 
 ```text
 http://skillhub.local:9002
@@ -25,6 +35,7 @@ Windows 用户须先使用管理员权限编辑 `C:\Windows\System32\drivers\etc
 GitCode 回调：http://skillhub.local:9002/api/v1/auth/oauth/gitcode/callback
 GitHub 回调：http://skillhub.local:9002/api/v1/auth/oauth/github/callback
 AgentOS 回调：http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
+Keycloak 回调：http://skillhub.local:9002/api/v1/auth/oauth/keycloak/callback
 ```
 
 应用主页、回调地址、浏览器访问地址和 `MARKET_OAUTH_FRONTEND_ORIGIN` 必须使用同一域名。不要混用 `localhost`、`127.0.0.1` 和 `skillhub.local`。
@@ -100,6 +111,18 @@ MARKET_AGENTOS_OAUTH_TOKEN_URL=http://agentos.local:8090/api/v1/oauth2/token
 MARKET_AGENTOS_AUTH_USER_API_URL=http://agentos.local:8090/api/v1/oauth2/userinfo
 MARKET_OAUTH_FRONTEND_ORIGIN=http://skillhub.local:9002
 ```
+
+## Keycloak OIDC
+
+Keycloak 登录使用为此客户端签发的 JWT 访问令牌。SkillHub 通过 UserInfo 验证令牌，并核对签发方、客户端和用户标识。Keycloak 用户的内部 ID 由 realm issuer 和 subject 共同确定。更换 issuer 会产生新的用户 ID；从曾直接使用 subject 的试验版本升级时，需要先迁移测试数据中的资源归属。
+
+Keycloak 登出会结束身份提供方的浏览器 SSO 会话。除配置登录回调外，还需在对应 OIDC client 的 **Valid post logout redirect URIs** 中登记以下地址（生产环境使用 HTTPS）：
+
+```text
+{MARKET_OAUTH_FRONTEND_ORIGIN}/login?logged_out=1
+```
+
+应用会从 OIDC discovery 读取 `end_session_endpoint`，使用授权响应中的 ID Token 发起 RP-Initiated Logout，并在完成后回到上述地址。Keycloak 登录要求返回 ID Token 和安全有效的登出端点；若缺少任一项，登录将失败而不会降级为仅本地登录。SkillHub 不保存 refresh token。
 
 ## 配置审核管理员
 
