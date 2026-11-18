@@ -140,6 +140,8 @@ export OPENJIUWEN_USER_TOKEN="<你的 Token>"
 
 打包前会先执行与 `validate` 相同的校验。Skill / SwarmSkill 打入技能目录；插件、连接器、专家、专家团打入外层 `plugin.yaml` 和内层目录。
 
+输出目录位于插件根目录内部时，该输出目录及其内容不会被打入 zip。使用 `-o .` 输出到插件根目录时，仅排除本次生成的 zip 和对应的 `.sha256` 文件，保留其他源文件（包括作为素材的 zip）。
+
 ### 6.4 `publish` — 上传市场
 
 | 参数 | 必填 | 说明 |
