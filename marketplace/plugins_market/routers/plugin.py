@@ -27,6 +27,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from common.security.security_utils import SecurityUtils
@@ -69,7 +70,7 @@ from plugins_market.core.operation_log import (
     operation_log_fields,
 )
 from plugins_market.core.rate_limit import client_ip_from_scope
-from plugins_market.core.s3_storage_client import get_storage_client
+from plugins_market.core.s3_storage_client import S3StorageClient, get_storage_client
 from plugins_market.repositories.git_source_repository import GitSourceRepository
 from plugins_market.validation.constants import (
     MAX_FILE_SIZE,
@@ -1379,6 +1380,32 @@ async def get_artifact_download(
     storage=Depends(get_storage_client),
     viewer: ViewerContext = Depends(resolve_viewer_context),
 ):
+    result = _prepare_artifact_download(
+        request=request,
+        artifact_id=artifact_id,
+        version=version,
+        is_cli_download=is_cli_download,
+        db=db,
+        storage=storage,
+        viewer=viewer,
+    )
+    return ResponseModel(
+        code=status.HTTP_200_OK,
+        message="ok",
+        data=result,
+    )
+
+
+def _prepare_artifact_download(
+    *,
+    request: Request,
+    artifact_id: str,
+    version: str | None,
+    is_cli_download: bool,
+    db: Session,
+    storage: S3StorageClient,
+    viewer: ViewerContext,
+) -> PluginDownloadData:
     fetch_user_id: Optional[str] = get_user_id_from_context()
 
     # 计量去重闸门：同一来源（登录按 user_id，匿名按 IP+UA）同一天同一资产只计一次量，
@@ -1475,10 +1502,50 @@ async def get_artifact_download(
             exc_info=True,
         )
 
-    return ResponseModel(
-        code=status.HTTP_200_OK,
-        message="ok",
-        data=result,
+    return result
+
+
+@plugin_router.get(
+    path="/{id}/download",
+    response_class=RedirectResponse,
+    status_code=status.HTTP_302_FOUND,
+    summary="Direct skill package download (302 redirect to S3)",
+    description="Get an S3 presigned URL by skill asset_id and return a 302 Found redirect",
+)
+async def download_skill_redirect(
+    request: Request,
+    artifact_id: str = Path(..., alias="id", description="Skill asset_id (e.g. skill-xxx)"),
+    version: Optional[str] = Query(
+        default=None,
+        description="Version (e.g. 1.0.0); defaults to the latest approved public version when omitted",
+    ),
+    is_cli_download: bool = Query(
+        default=False,
+        description="CLI download: true downloads the original zip; false downloads raw.zip",
+    ),
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage_client),
+    viewer: ViewerContext = Depends(resolve_viewer_context),
+) -> RedirectResponse:
+    result = _prepare_artifact_download(
+        request=request,
+        artifact_id=artifact_id,
+        version=version,
+        is_cli_download=is_cli_download,
+        db=db,
+        storage=storage,
+        viewer=viewer,
+    )
+    filename = f"{result.name}_{result.version}.zip"
+    return RedirectResponse(
+        url=result.download_url,
+        status_code=status.HTTP_302_FOUND,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Skill-Name": result.name,
+            "X-Skill-Version": result.version,
+            "X-Checksum-Sha256": result.checksum_sha256,
+        },
     )
 
 
