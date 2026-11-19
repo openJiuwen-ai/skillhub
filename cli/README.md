@@ -9,9 +9,10 @@
 
 ## 开发安装
 
+在仓库根目录执行：
+
 ```bash
-cd skillhub/cli/openjiuwen_agentichub
-pip install -e .
+python -m pip install -e ./cli/openjiuwen_agentichub
 ```
 
 安装后执行：
@@ -20,7 +21,7 @@ pip install -e .
 
 ## 测试
 
-在 `skillhub/cli/openjiuwen_agentichub` 下执行：
+从仓库根目录进入 `cli/openjiuwen_agentichub` 后执行：
 
 ```bash
 pytest
@@ -28,10 +29,10 @@ pytest
 
 ## 构建 wheel
 
-在 `skillhub/cli/` 下执行：
+在仓库根目录执行：
 
 ```bash
-pip wheel ./openjiuwen_agentichub
+python -m pip wheel ./cli/openjiuwen_agentichub
 ```
 
 可按需追加 `--no-deps`、`-w dist` 等参数。

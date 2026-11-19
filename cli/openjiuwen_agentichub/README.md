@@ -18,20 +18,18 @@
 
 ## 2. 安装
 
-在克隆后的仓库中进入 **`skillhub/cli/openjiuwen_agentichub`** 目录执行：
+在克隆后的仓库根目录执行：
 
 ```bash
-cd skillhub/cli/openjiuwen_agentichub
-pip install -e .
+python -m pip install -e ./cli/openjiuwen_agentichub
 ```
 
 - **`-e`（可编辑）**：修改源码后立即生效，适合开发与联调。
 - 安装成功后，终端中应可使用命令 **`agentichub`**。建议执行 **`agentichub -h`** 确认子命令列表。
 
-若安装成功但提示 **`agentichub` 不是内部或外部命令**（常见于 Windows 用户级安装路径未加入 PATH），可使用模块方式调用（效果相同；模块路径仍为包名 `openjiuwen_agentichub`）：
+若安装成功但提示 **`agentichub` 不是内部或外部命令**（常见于 Windows 用户级安装路径未加入 PATH），可使用模块方式调用（效果相同；继续使用刚才安装 CLI 的 Python 环境）：
 
 ```bash
-cd skillhub/cli/openjiuwen_agentichub
 python -m openjiuwen_agentichub.main --help
 ```
 
