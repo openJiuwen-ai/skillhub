@@ -41,6 +41,19 @@ VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 GIT_COMMIT_VERSION_PATTERN = re.compile(r"^[0-9a-f]{7}$")
 MARKET_VERSION_MAX_LEN = 32
 
+# App version: 数字开头，最多三个点号，可选 -/+ 后缀。
+# 与 jiuwenswarm normalize_app_version 保持一致。
+APP_VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]{1,16})?$")
+APP_VERSION_MAX_LEN = 32
+
+
+def is_valid_app_version(version: str) -> bool:
+    """应用版本规则：`1`、`1.2`、`1.2.3`、`1.2.3.4`、`1.2.3-beta.1` 均合法。"""
+    v = (version or "").strip()
+    if not v or len(v) > APP_VERSION_MAX_LEN:
+        return False
+    return bool(APP_VERSION_PATTERN.fullmatch(v))
+
 
 def commit_full_sha_to_version(full_sha: str) -> str:
     """Git 同步专用：从完整 commit SHA 生成库表 7 位版本号（API/CLI 不接受更长 hex）。"""
@@ -87,6 +100,7 @@ RUNTIME_AGENT_TEMPLATE = "agent-template"
 RUNTIME_AGENT_GROUP = "agent-group"
 RUNTIME_AGENT_MCP = "agent-mcp"
 RUNTIME_SYSTEM_PLUGIN = "system-plugin"
+RUNTIME_APP = "app"
 SUPPORTED_RUNTIME_TYPES = {
     RUNTIME_SKILL,
     RUNTIME_TOOLS,
@@ -97,6 +111,7 @@ SUPPORTED_RUNTIME_TYPES = {
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_MCP,
     RUNTIME_SYSTEM_PLUGIN,
+    RUNTIME_APP,
 }
 WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
     {
@@ -105,6 +120,7 @@ WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
         RUNTIME_SYSTEM_PLUGIN,
+        RUNTIME_APP,
     }
 )
 
@@ -112,10 +128,27 @@ WRAPPED_AGENT_RUNTIME_TYPES = frozenset(
 # File / zip size limits
 # ---------------------------------------------------------------------------
 
+# Upload body limit is a product decision: 512 MiB including multipart
+# overhead, for every asset type. Do not raise it for apps.
 MAX_FILE_SIZE = 512 * 1024 * 1024  # 512 MB – raw zip upload limit
 MAX_ZIP_ENTRIES = 1000  # max number of entries in a zip
 MAX_DECOMPRESSED_TOTAL = 512 * 1024 * 1024  # 512 MB – cumulative decompressed bytes
 MAX_COMPRESSION_RATIO = 50  # pre-check only; real guard is byte counter
+
+# App distribution package: source files (sum of ZIP entry file_size) stay at
+# 512 MB, the same accounting as the upload body limit. MAX_APP_ZIP_BYTES is a
+# DOWNLOAD-ONLY upper bound for artifacts that may be incompressible; it must
+# not be used as an upload budget because the publish body stays at
+# MAX_FILE_SIZE.
+MAX_APP_SOURCE_SIZE = 512 * 1024 * 1024
+MAX_APP_ZIP_BYTES = 600 * 1024 * 1024
+MAX_APP_SINGLE_FILE_SIZE = 64 * 1024 * 1024
+MAX_APP_PACKAGE_NAME = 64
+# Bounded reads used by app validation (HTML head meta / script scanning).
+APP_HTML_HEAD_SCAN_BYTES = 64 * 1024
+APP_SCRIPT_SCAN_BYTES = 64 * 1024
+# 首期应用能力声明白名单；新增权限需显式评审后加入。
+APP_ALLOWED_PERMISSIONS = frozenset({"ai"})
 
 ZIP_STREAM_READ_CHUNK_BYTES = 64 * 1024  # streaming zip reads, uploads, bundle I/O (64 KiB)
 

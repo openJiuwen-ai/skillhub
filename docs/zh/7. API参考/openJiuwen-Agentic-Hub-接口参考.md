@@ -269,7 +269,7 @@ X-OAuth-Provider: gitcode
 
 ### `GET /plugins`
 
-返回 Agent 资产分页列表。未指定 `asset_type` / `plugin_type` 时仅返回 Skill / SwarmSkill；查插件、连接器、专家、专家团、系统插件须显式传入对应类型。`search_keyword` 对 Skill / SwarmSkill 走语义检索，对 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`、`system-plugin` 固定走数据库关键词匹配。未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 或未启用推荐时，`order_by=recommend` 按 `install_count` 查表。`order_by=hot_score` 按火爆值排序；前端「热门」在无搜索、无标签时另传 `top_k`（取 `GET /site/config` 的 `hot_list_top_k`），`total` 同步封顶。市场前端侧边栏精选数量不调用推荐参数，用已上架数与 `rec_list_top_k` 的较小值。可选 Bearer 或 X-System-Token 用于发布者/管理员个性化字段；无效凭证或同时提供两种凭证时按匿名访问。列表项含 `publisher_official`（发布者 ID 为系统管理员时为 true，名称字段仍为原名）和 `hot_score`。
+返回 Agent 资产分页列表。未指定 `asset_type` / `plugin_type` 时仅返回 Skill / SwarmSkill；查插件、连接器、专家、专家团、系统插件、应用须显式传入对应类型。`search_keyword` 对 Skill / SwarmSkill 走语义检索，对 `agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`、`system-plugin`、`app` 固定走数据库关键词匹配。未传关键词且 `order_by=recommend`、**不带** `category_id`、并已启用推荐时走「推荐精选」个性化排序（一次最多 `MARKET_REC_LIST_TOP_K` 条，再按 `page` 切片；`total` 为过滤 `OFFLINE` 后的条数）。带 `category_id` 或未启用推荐时，`order_by=recommend` 按 `install_count` 查表。`order_by=hot_score` 按火爆值排序；前端「热门」在无搜索、无标签时另传 `top_k`（取 `GET /site/config` 的 `hot_list_top_k`），`total` 同步封顶。市场前端侧边栏精选数量不调用推荐参数，用已上架数与 `rec_list_top_k` 的较小值。可选 Bearer 或 X-System-Token 用于发布者/管理员个性化字段；无效凭证或同时提供两种凭证时按匿名访问。列表项含 `publisher_official`（发布者 ID 为系统管理员时为 true，名称字段仍为原名）和 `hot_score`。
 
 **Query 参数**
 
@@ -283,7 +283,7 @@ X-OAuth-Provider: gitcode
 | `category_id` | string | — | 分类 ID（精确匹配；与 `order_by=recommend` 同时出现时回退下载量排序） |
 | `plugin_type` | string | — | `skill`、`swarmskill`、`agent-plugin`、`agent-template`、`agent-group`、`agent-mcp`、`system-plugin`；可逗号多值。不传且不带 `plugin_type_exclude`/`asset_type` 时默认 `skill,swarmskill` |
 | `plugin_type_exclude` | string | — | 排除某类型 |
-| `asset_type` | string | — | 资产大类过滤；取值为 `plugin` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` / `system-plugin`（Agent 资产与 `plugin_type` 同值） |
+| `asset_type` | string | — | 资产大类过滤；取值为 `plugin` / `agent-plugin` / `agent-template` / `agent-group` / `agent-mcp` / `system-plugin` / `app`（Agent 资产与应用均与 `plugin_type` 同值） |
 | `search_keyword` | string | — | 关键词。Skill / SwarmSkill 走语义检索；插件、连接器、专家、专家团、系统插件走数据库关键词匹配 |
 | `moderation_status` | string | — | `PENDING` \| `APPROVED` \| `REJECTED` |
 | `tags` | string | - | 按标签过滤，逗号分隔（如 `python,cli`）；标签内不能含逗号（发布校验同口径）。长度上限 512 字符（超出 422），超过 20 个标签静默截断 |
@@ -419,10 +419,10 @@ curl "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/versions/1.0.0
 
 | Query | 默认 | 说明 |
 |-------|------|------|
-| `version` | 最新对外版本 | 如 `1.0.0` |
+| `version` | 最新对外版本 | 如 `1.0.0`；应用支持 `1.2`、`1.2.3-beta.1` 等应用版本 |
 | `is_cli_download` | `false` | `true` 时返回 CLI 原始 zip |
 
-`is_cli_download=false` 时返回 `*.raw.zip`：Skill / SwarmSkill 为首个 `SKILL.md` 所在目录的内容；插件、连接器、专家、专家团、系统插件为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。
+`is_cli_download=false` 时返回 `*.raw.zip`：Skill / SwarmSkill 为首个 `SKILL.md` 所在目录的内容；插件、连接器、专家、专家团、系统插件为剥离市场外层包装后的原生内层包（详见「Agent 资产」一节）。**应用（`plugin_type=app`）始终返回原始市场包装 zip，不生成 `raw.zip`，与 `is_cli_download` 取值无关。**
 
 响应 `data` 关键字段：`download_url`、`version`、`checksum_sha256`、`file_size`、`name`、`asset_type`、`plugin_type`。
 
@@ -586,7 +586,7 @@ curl -X DELETE "https://agentichub.openjiuwen.com/api/v1/plugins/{asset_id}/vers
 
 ## Agent 资产
 
-Agent 资产共七类，都走 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}`。Skill、SwarmSkill 以 `SKILL.md` 为入口，包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。下面是插件、连接器、专家、专家团、系统插件多出来的包装和画像字段。
+Agent 资产共七类，都走 `POST /plugins`、`GET /plugins`、`GET /artifacts/{id}`。另有一类 **应用**（`plugin_type` / `asset_type` = `app`）共用相同的发布、列表、详情与下载入口，包结构为外层 `plugin.yaml` + 同名内层 HTML 应用目录。Skill、SwarmSkill 以 `SKILL.md` 为入口，包格式见 [Agent资产](../5.%20开发指南/Agent资产.md)。下面是插件、连接器、专家、专家团、系统插件多出来的包装和画像字段，应用字段见本节末尾。
 
 | 资产 | `plugin_type` | 内层入口 |
 |------|---------------|----------|
@@ -600,7 +600,18 @@ Agent 资产共七类，都走 `POST /plugins`、`GET /plugins`、`GET /artifact
 
 **检索：** 这些类型须显式传 `plugin_type`；默认列表只有 Skill、SwarmSkill。`search_keyword` 走 DB 关键词匹配。
 
-**下载：** `is_cli_download=false` 返回 `raw.zip`（仅内层原生包，根目录为 `manifest.json`）；`true` 返回完整市场包装。
+**下载：** `is_cli_download=false` 返回 `raw.zip`（仅内层原生包，根目录为 `manifest.json`）；`true` 返回完整市场包装。应用（`app`）不适用该区分，始终返回原始市场包装 zip。
+
+应用版本详情额外返回应用分发字段：
+
+| 字段 | 说明 |
+|------|------|
+| `file_size` | 原始 zip 字节数，上限 600 MB |
+| `source_size` | zip 内非目录条目声明大小之和，上限 512 MB |
+| `requires_project` | 是否声明运行期需要项目上下文 |
+| `permissions` | 能力白名单，首期仅 `ai` |
+| `has_server_script` | 是否包含 `scripts/app_server.py` |
+| `checksum_sha256` | 原包 SHA-256；浏览详情即可获得，不触发下载计量 |
 
 版本详情里的 `agent_package_profile` 来自内层 `manifest.json`，只读：
 

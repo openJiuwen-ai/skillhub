@@ -102,6 +102,7 @@ const AGENT_ASSET_RESOURCE_TYPES = new Set([
   'agent-group',
   'agent-mcp',
   'system-plugin',
+  'app',
 ])
 const MARKET_ASSET_RESOURCE_TYPES = new Set(['skill', 'swarmskill', 'plugin'])
 
@@ -232,6 +233,7 @@ const OBJECT_TYPE_LABEL: Record<string, string> = {
   'agent-group': '专家团',
   'agent-mcp': '连接器',
   'system-plugin': '系统插件',
+  app: '应用',
   audit_log: '日志',
   git_source: 'Git 源',
   skill_bundle: 'Skill 包',

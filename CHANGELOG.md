@@ -7,6 +7,7 @@
 
 ### Added
 
+- 新增应用资产类型 **应用**（`plugin_type` / `runtime.type` / `asset_type` = `app`；对象存储 `apps/`）。应用以“外层 `plugin.yaml` + 同名内层 HTML 应用目录”的 zip 分发，内层入口固定 `index.html`，支持可选 `metadata.app.requires_project` / `permissions`。纳入现有版本、审核、列表、详情与 artifact 下载链路；app 始终下载原包且不生成 `raw.zip`。发布 HTTP 请求体上限 512 MiB（含 multipart 开销），应用源文件总量上限 512 MiB，制品下载校验上限 600 MiB；内容扫描仅覆盖 `scripts/` 有界前缀，避免前端 bundle 误杀。CLI 支持 `init/validate/pack/publish --type app`，Web 支持类型选择、发布、浏览、审核与下载
 - 第四类 Agent 资产 **专家团**（`plugin_type` / `runtime.type` = `agent-group`，内层 `package_type` = `agent_group`；对象存储 `agent-groups/`）
 - **火爆值**（`hot_score`）：近 7 天下载、累计下载、浏览、点赞与收藏、评分加权后定时回写；市场「热门」按该分排序，条数上限 `MARKET_HOT_LIST_TOP_K`（`GET /site/config` 的 `hot_list_top_k`）。与推荐开关无关
 - 列表与详情返回 `publisher_official`：发布者 ID 为系统管理员账号时，前端显示官方徽标；`publisher_name` 仍为原名

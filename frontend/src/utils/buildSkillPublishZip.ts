@@ -2,6 +2,7 @@
 
 import JSZip from 'jszip'
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
+import type { MarketTabPluginType } from '@/utils/pluginType'
 
 /** 与 marketplace `plugins_market.validation.constants` 对齐 */
 const SKILL_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -39,7 +40,8 @@ export type BuildSkillPublishZipInput = {
   skillDirectoryFiles: File[]
 }
 
-/** 与表单校验、publish API 使用同一套规范化逻辑（去首尾空白；须为 x.y.z，不接受 v 前缀）。 */
+/** Skill/SwarmSkill 文件夹发布专用（去首尾空白；须为 x.y.z，不接受 v 前缀）。
+ *  应用（app）版本以 zip 内 plugin.yaml 原文为准，使用 `@/utils/appVersion`，不要走这里。 */
 export function normalizeSemver(raw: string): string {
   const s = raw.trim()
   if (!SEMVER_PATTERN.test(s)) {
@@ -138,15 +140,11 @@ type SkillFrontmatter = {
 }
 
 export type PublishPluginType = 'skill' | 'swarmskill'
-export type DetectedPublishPluginType =
-  | PublishPluginType
-  | 'agent-plugin'
-  | 'agent-template'
-  | 'agent-group'
-  | 'agent-mcp'
-  | 'system-plugin'
-  | 'unknown'
+/** 发布表单可识别的资产类型；app 仅支持 zip 发布，不出现在文件夹探测结果中。 */
+export type DetectedPublishPluginType = MarketTabPluginType | 'unknown'
 
+/** 文件夹探测只识别 SKILL.md 的 kind（skill / team-skill / swarm-skill）。
+ *  app 只能以 zip 发布，由 `inspectAgentPublishZip` 识别。 */
 export function mapSkillFrontmatterKindToPluginType(kind: string | null | undefined): DetectedPublishPluginType {
   const normalized = kind?.trim().toLowerCase() ?? ''
   if (!normalized) return 'skill'

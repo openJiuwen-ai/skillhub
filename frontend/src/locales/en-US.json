@@ -45,7 +45,8 @@
       "agent-template": "Expert",
       "agent-group": "Expert Team",
       "agent-mcp": "Connector",
-      "system-plugin": "System Plugin"
+      "system-plugin": "System Plugin",
+      "app": "App"
     },
     "pluginSubTypeAria": "Switch plugin sub-category",
     "pluginSubTypeLabel": {
@@ -103,7 +104,8 @@
       "agent-template": "No matching Expert",
       "agent-group": "No matching Expert Team",
       "agent-mcp": "No matching Connector",
-      "system-plugin": "No matching System Plugin"
+      "system-plugin": "No matching System Plugin",
+      "app": "No matching App"
     },
     "pinnedBadge": "Pinned",
     "pinnedBadgeAria": "Pinned for visibility",
@@ -655,6 +657,7 @@
     "typeAgentGroup": "Expert Team",
     "typeAgentMcp": "Connector",
     "typeSystemPlugin": "System Plugin",
+    "typeApp": "App",
     "typeUnknown": "Unknown",
     "fieldPluginIdAgent": "Link asset",
     "fieldPluginIdAgentPlugin": "Link plugin",
@@ -679,6 +682,17 @@
     "fieldMetadataLockedHintAgentGroup": "This Expert Team is already published. Package name and display name are fixed.",
     "fieldMetadataLockedHintAgentMcp": "This Connector is already published. Package name and display name are fixed.",
     "fieldMetadataLockedHintSystemPlugin": "This System Plugin is already published. Package name and display name are fixed.",
+    "fieldPkgNameApp": "App package name",
+    "fieldPkgNameAppHelp": "Must equal plugin.yaml.name: lowercase letter first, then lowercase letters, digits, or hyphens.",
+    "namePlaceholderApp": "e.g. gomoku",
+    "fieldVersionAppHelp": "From plugin.yaml in the ZIP. Use 1 to 4 numeric segments and an optional - or + suffix, up to 32 characters, e.g. 1.2.3-beta.1.",
+    "fieldDisplayNameAppHelp": "Must equal plugin.yaml display_name; repack the package to change it.",
+    "fieldAppZipHelp": "Upload a market-wrapped package (plugin.yaml plus one same-named app directory); the server never generates plugin.yaml. Source files max 512 MB, ZIP transfer max 600 MB.",
+    "fieldPluginIdApp": "Link app",
+    "fieldPluginIdHelpApp": "Choose “New app” for first publish, or pick an existing app to add a version.",
+    "pluginIdNewOptionApp": "New app (first publish)",
+    "fieldMetadataLockedHintApp": "This app is already published. Package name and display name are fixed.",
+    "appErrorInvalidVersion": "In plugin.yaml, use 1 to 4 numeric segments and an optional - or + suffix, up to 32 characters. Then rebuild and upload the ZIP.",
     "publishAgent": "Publish {{typeLabel}}",
     "publishWithType": "Publish {{typeLabel}}",
     "fieldAgentZip": "{{typeLabel}} package (zip)",

@@ -77,7 +77,7 @@ class AuditLog(Base):
 
     resource_type = Column(String(30), nullable=False)
     resource_id = Column(String(100), nullable=True, index=True)
-    resource_version = Column(String(30), nullable=True)
+    resource_version = Column(String(32), nullable=True)
 
     result = Column(String(20), nullable=False)
     duration_ms = Column(Integer, nullable=False)

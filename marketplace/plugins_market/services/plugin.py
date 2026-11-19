@@ -93,17 +93,21 @@ from plugins_market.core.config import settings
 from plugins_market.retrieval.index_manager import get_index_manager
 from plugins_market.retrieval.search import retrieval_search  # noqa: F401  (被测试 monkeypatch)
 from plugins_market.validation import extract_plugin_metadata
+from plugins_market.validation._pipeline import peek_plugin_runtime_type
 from plugins_market.validation.constants import (
     MARKET_ASSET_SHORT_DESC_MAX_LEN,
     MARKET_VERSION_MAX_LEN,
+    MAX_APP_ZIP_BYTES,
     MAX_FILE_SIZE,
     RUNTIME_SKILL,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_APP,
     RUNTIME_SYSTEM_PLUGIN,
     VERSION_PATTERN,
+    is_valid_app_version,
     is_valid_market_version,
 )
 from plugins_market.validation.icon_png_optimize import optimize_png_icon_bytes
@@ -212,6 +216,9 @@ def _should_use_retrieval_search(plugin_type: str | None) -> bool:
         for item in (plugin_type or "").split(",")
         if item.strip()
     }
+    # App packages are not indexed in the capability tree; keep DB keyword search.
+    if RUNTIME_APP in requested:
+        return False
     return bool(requested) and (
         requested.isdisjoint(AGENT_ASSET_PLUGIN_TYPES) or len(requested) == 1
     )
@@ -342,8 +349,21 @@ def _normalize_version(version: str) -> str:
     return normalize_market_version_for_storage(version)
 
 
-def _validate_version(version: str) -> None:
-    """Ensure version is semver x.y.z or Git commit hex (git sync without SKILL version)."""
+def _validate_version(version: str, runtime_type: str | None = None) -> None:
+    """Ensure version follows the asset type's rule."""
+    if (runtime_type or "").strip().lower() == RUNTIME_APP:
+        if not is_valid_app_version(version):
+            raise PublishError(
+                code=400,
+                error="invalid_version",
+                message=(
+                    "应用版本号格式错误：须以数字开头，最多三个点号，可选 -/+ 后缀，"
+                    f"且长度不得超过 {MARKET_VERSION_MAX_LEN} 个字符"
+                ),
+                error_code="SKILLHUB_PLUGIN_VERSION_INVALID",
+                error_class="validation",
+            )
+        return
     if len((version or "").strip()) > MARKET_VERSION_MAX_LEN or not is_valid_market_version(version):
         raise PublishError(
             code=400,
@@ -370,6 +390,8 @@ def _storage_root(asset_type: str | None, plugin_type: str | None = None) -> str
         return "agent-mcps"
     if normalized_asset_type == RUNTIME_SYSTEM_PLUGIN:
         return "system-plugins"
+    if normalized_asset_type == RUNTIME_APP:
+        return "apps"
     return "skills" if is_skill_like_plugin_type(plugin_type) else "plugins"
 
 
@@ -418,6 +440,38 @@ def _publish_idempotent_same_artifact(
     if not stored:
         return False
     return stored.lower() == computed_sha256.lower()
+
+
+def _validate_app_publish_overrides(
+    meta: dict[str, Any],
+    overrides: Any,
+) -> None:
+    """App metadata is package-authoritative; matching form values are allowed."""
+    mismatches: list[str] = []
+    if overrides.asset_name and overrides.asset_name != (meta.get("name") or "").strip():
+        mismatches.append("name")
+    if overrides.version and overrides.version != (meta.get("version") or "").strip():
+        mismatches.append("version")
+    if overrides.display_name and overrides.display_name != (meta.get("display_name") or "").strip():
+        mismatches.append("display_name")
+    if overrides.description and overrides.description != (meta.get("short_desc") or "").strip():
+        mismatches.append("description")
+    if overrides.tags is not None:
+        wanted = sorted(str(tag).strip().casefold() for tag in overrides.tags)
+        actual = sorted(str(tag).strip().casefold() for tag in meta.get("tags") or [])
+        if wanted != actual:
+            mismatches.append("tags")
+    if mismatches:
+        raise PublishError(
+            code=400,
+            error="invalid_plugin_config",
+            message=(
+                "应用市场包元数据以包内 plugin.yaml 为准，表单字段 "
+                f"{', '.join(mismatches)} 与包内不一致；请重新打包后再发布"
+            ),
+            error_code="SKILLHUB_PLUGIN_CONFIG_INVALID",
+            error_class="validation",
+        )
 
 
 def _validate_asset_name_immutable_for_skill(
@@ -672,7 +726,14 @@ def publish(
         raise PublishError(
             code=413,
             error="file_too_large",
-            message="文件大小超过限制（最大512MB）",
+            message=f"文件大小超过限制（最大 {MAX_FILE_SIZE // (1024 * 1024)} MB）",
+        )
+
+    if len(content) < 2 or content[:2] != b"PK":
+        raise PublishError(
+            code=400,
+            error="invalid_file_format",
+            message="仅支持 .zip 格式的插件包文件",
         )
 
     computed = _compute_checksum(content)
@@ -683,12 +744,7 @@ def publish(
             message="文件校验和不匹配，文件可能在传输过程中损坏",
         )
 
-    if len(content) < 2 or content[:2] != b"PK":
-        raise PublishError(
-            code=400,
-            error="invalid_file_format",
-            message="仅支持 .zip 格式的插件包文件",
-        )
+    is_app_publish = peek_plugin_runtime_type(content) == RUNTIME_APP
 
     from plugins_market.imports.publish_wrap import (
         PublishMetadataOverrides,
@@ -702,26 +758,32 @@ def publish(
         description=(description or "").strip() or None,
         tags=tags,
     )
-    try:
-        content = prepare_publish_zip_content(
-            content,
-            filename=filename,
-            overrides=publish_overrides,
-            default_author=(publisher_name_override or user_id or "").strip() or "unknown",
-        )
-    except ValueError as exc:
-        raise PublishError(
-            code=400,
-            error="invalid_plugin_structure",
-            message=str(exc) or "资产包结构不合法",
-            error_code="SKILLHUB_PUBLISH_WRAP_FAILED",
-            error_class="validation",
-        ) from exc
+    if not is_app_publish:
+        try:
+            content = prepare_publish_zip_content(
+                content,
+                filename=filename,
+                overrides=publish_overrides,
+                default_author=(publisher_name_override or user_id or "").strip() or "unknown",
+            )
+        except ValueError as exc:
+            raise PublishError(
+                code=400,
+                error="invalid_plugin_structure",
+                message=str(exc) or "资产包结构不合法",
+                error_code="SKILLHUB_PUBLISH_WRAP_FAILED",
+                error_class="validation",
+            ) from exc
 
     # Transport validation above covers the uploaded bytes. Version identity and
     # download checksums must cover the final artifact after metadata wrapping.
     computed = _compute_checksum(content)
     meta = extract_plugin_metadata(content)
+    # Bare app uploads are wrapped above, so the final package type (not the raw
+    # upload probe) decides app metadata and override validation.
+    is_app_asset = (meta.get("plugin_type") or "").strip().lower() == RUNTIME_APP
+    if is_app_asset:
+        _validate_app_publish_overrides(meta, publish_overrides)
     content_size = len(content)
     name = (meta["name"] or "").strip()
     display_name = (meta.get("display_name") or "").strip()
@@ -750,7 +812,7 @@ def publish(
     else:
         version = _normalize_version(plugin_version)
 
-    _validate_version(version)
+    _validate_version(version, meta.get("plugin_type"))
 
     short_desc = meta.get("short_desc")
     if isinstance(short_desc, str) and len(short_desc) > MARKET_ASSET_SHORT_DESC_MAX_LEN:
@@ -780,13 +842,14 @@ def publish(
             error_class="validation",
         )
     # 开关：开启后拒绝 tools / mcp-stdio / restful-api 等非 moderated 类型；
-    # 放行 Skill / SwarmSkill / 五类 Agent（审核或系统身份免审由 _moderation_for_publish 处理）。
+    # 放行审核类型与应用（审核或系统身份免审由 _moderation_for_publish 处理）。
     if settings.block_nonskill_plugin_publish and not is_moderated_market_asset_type(rt):
         raise PublishError(
             code=403,
             error="plugin_type_publish_disabled",
             message=(
-                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / agent-mcp / system-plugin；"
+                "当前仅支持发布 Skill / SwarmSkill / agent-plugin / agent-template / agent-group / "
+                "agent-mcp / system-plugin / app；"
                 "tools / mcp-stdio / restful-api 类型发布已关闭"
             ),
         )
@@ -999,10 +1062,25 @@ def publish(
         )
 
     # 写入校验和/大小到对象 metadata，避免下载时读全量对象重复计算
+    upload_metadata = {"sha256": computed, "size": str(content_size)}
+    if is_app_asset:
+        # Compact app profile so detail/download responses never read the package.
+        upload_metadata.update(
+            {
+                "app-source-size": str(int(meta.get("source_size") or 0)),
+                "app-requires-project": (
+                    "true" if meta.get("requires_project") else "false"
+                ),
+                "app-permissions": ",".join(meta.get("permissions") or []),
+                "app-has-server-script": (
+                    "true" if meta.get("has_server_script") else "false"
+                ),
+            }
+        )
     upload_result = storage.upload_bytes(
         content,
         zip_key,
-        metadata={"sha256": computed, "size": str(content_size)},
+        metadata=upload_metadata,
     )
     if not upload_result.get("success"):
         raise PublishError(
@@ -2065,6 +2143,7 @@ def get_plugin_version_detail_service(
         storage,
         asset.plugin_type,
     )
+    app_meta = _load_app_package_metadata(asset, version_row, storage) or {}
 
     return PluginVersionDetail(
         asset_id=asset.asset_id,
@@ -2111,6 +2190,12 @@ def get_plugin_version_detail_service(
         declared_skill_version=getattr(asset, "declared_skill_version", None),
         git_version_display_as_commit=_git_version_display_as_commit(asset, version_row.version),
         agent_package_profile=agent_package_profile,
+        file_size=app_meta.get("file_size"),
+        source_size=app_meta.get("source_size"),
+        requires_project=app_meta.get("requires_project"),
+        permissions=app_meta.get("permissions"),
+        has_server_script=app_meta.get("has_server_script"),
+        checksum_sha256=app_meta.get("checksum_sha256"),
     )
 
 
@@ -2854,7 +2939,7 @@ def moderate_skill_asset_service(
             error="not_skill",
             message=(
                 "仅支持对 Skill / SwarmSkill / agent-plugin / agent-template / "
-                "agent-group / agent-mcp / system-plugin 类型资源进行审核"
+                "agent-group / agent-mcp / system-plugin / app 类型资源进行审核"
             ),
             error_code="SKILLHUB_PLUGIN_NOT_SKILL",
             error_class="validation",
@@ -3162,12 +3247,26 @@ def get_download_info(
 
     version = (version or "").strip() or None
     if version is not None:
-        if not is_valid_market_version(version):
+        is_app_version_request = (
+            (asset.plugin_type or "").strip().lower() == RUNTIME_APP
+        )
+        if not (
+            is_valid_app_version(version)
+            if is_app_version_request
+            else is_valid_market_version(version)
+        ):
             raise PublishError(
                 code=400,
                 error="invalid_version",
                 data={"version": version},
-                message=("version 参数格式错误：应为 x.y.z（如 1.0.0），不接受 v 前缀；" "或 commit 7 位小写 hex"),
+                message=(
+                    "version 参数格式错误：应为应用版本（数字开头，最多三个点号，可选后缀）"
+                    if is_app_version_request
+                    else (
+                        "version 参数格式错误：应为 x.y.z（如 1.0.0），不接受 v 前缀；"
+                        "或 commit 7 位小写 hex"
+                    )
+                ),
                 error_code="SKILLHUB_PLUGIN_VERSION_INVALID",
                 error_class="validation",
             )
@@ -3243,10 +3342,11 @@ def get_download_info(
     checksum_sha256 = ""
 
     plugin_type_norm = (asset.plugin_type or "").strip().lower()
-    if not is_cli_download and (
-        is_skill_like_plugin_type(plugin_type_norm)
-        or _is_wrapped_agent_asset_type(plugin_type_norm)
-    ):
+    is_app_asset = plugin_type_norm == RUNTIME_APP
+    uses_raw_artifact = is_skill_like_plugin_type(
+        plugin_type_norm
+    ) or _is_wrapped_agent_asset_type(plugin_type_norm)
+    if uses_raw_artifact and not is_cli_download and not is_app_asset:
         raw_key = _build_raw_artifact_key(
             publisher_id=asset.publisher_id,
             asset_id=asset.asset_id,
@@ -3288,6 +3388,18 @@ def get_download_info(
 
     if size is None or not checksum_sha256:
         size, checksum_sha256 = _extract_size_and_checksum_from_head(head)
+
+    if is_app_asset and size is not None and int(size) > MAX_APP_ZIP_BYTES:
+        raise PublishError(
+            code=413,
+            error="file_too_large",
+            message=(
+                "应用制品超过下载上限"
+                f"（最大 {MAX_APP_ZIP_BYTES // (1024 * 1024)} MB），请重新发布该版本"
+            ),
+            error_code="SKILLHUB_PLUGIN_FILE_TOO_LARGE",
+            error_class="validation",
+        )
 
     if size is None or not checksum_sha256:
         raise PublishError(
@@ -3500,6 +3612,55 @@ def _load_agent_package_profile_for_version(
     except Exception:
         pass
     return profile
+
+
+def _load_app_package_metadata(
+    asset: MarketAssetDB,
+    version_row: MarketAssetVersionDB,
+    storage: S3StorageClient,
+) -> dict[str, Any] | None:
+    """Read app capability metadata from the stored object's HEAD response.
+
+    Publish records these compact fields next to ``sha256``/``size`` so the
+    detail page never has to read a multi-hundred-MB package.
+    """
+    if (asset.plugin_type or "").strip().lower() != RUNTIME_APP:
+        return None
+    key = _build_artifact_key(
+        publisher_id=asset.publisher_id,
+        asset_id=asset.asset_id,
+        version=version_row.version,
+        name=asset.name,
+        plugin_type=asset.plugin_type,
+    )
+    head = storage.head_object(key)
+    if not head.get("success"):
+        return None
+    metadata = head.get("metadata") or {}
+    size, checksum = _extract_size_and_checksum_from_head(head)
+
+    raw_source = str(metadata.get("app-source-size") or "").strip()
+    try:
+        source_size = int(raw_source) if raw_source else None
+    except ValueError:
+        source_size = None
+
+    def _flag(name: str) -> bool:
+        return str(metadata.get(name) or "").strip().lower() in {"true", "1", "yes"}
+
+    permissions = [
+        part.strip()
+        for part in str(metadata.get("app-permissions") or "").split(",")
+        if part.strip()
+    ]
+    return {
+        "file_size": size,
+        "source_size": source_size,
+        "requires_project": _flag("app-requires-project"),
+        "permissions": permissions,
+        "has_server_script": _flag("app-has-server-script"),
+        "checksum_sha256": checksum or (version_row.artifact_sha256 or "").strip().lower(),
+    }
 
 
 def get_version_file_list_service(

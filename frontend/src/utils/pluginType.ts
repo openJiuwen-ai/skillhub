@@ -10,6 +10,7 @@ export const AGENT_ASSET_PLUGIN_TYPES = [
   'agent-template',
   'agent-group',
   'system-plugin',
+  'app',
 ] as const
 export const AGENT_ASSET_QUERY_VALUE = AGENT_ASSET_PLUGIN_TYPES.join(',')
 

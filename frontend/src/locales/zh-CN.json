@@ -45,7 +45,8 @@
       "agent-template": "专家",
       "agent-group": "专家团",
       "agent-mcp": "连接器",
-      "system-plugin": "系统插件"
+      "system-plugin": "系统插件",
+      "app": "应用"
     },
     "pluginSubTypeAria": "切换插件子分类",
     "pluginSubTypeLabel": {
@@ -103,7 +104,8 @@
       "agent-template": "未找到匹配的专家",
       "agent-group": "未找到匹配的专家团",
       "agent-mcp": "未找到匹配的连接器",
-      "system-plugin": "未找到匹配的系统插件"
+      "system-plugin": "未找到匹配的系统插件",
+      "app": "未找到匹配的应用"
     },
     "pinnedBadge": "置顶",
     "pinnedBadgeAria": "置顶展示",
@@ -654,6 +656,7 @@
     "typeAgentGroup": "专家团",
     "typeAgentMcp": "连接器",
     "typeSystemPlugin": "系统插件",
+    "typeApp": "应用",
     "typeUnknown": "未识别",
     "fieldPluginIdAgent": "关联资产",
     "fieldPluginIdAgentPlugin": "关联插件",
@@ -678,6 +681,17 @@
     "fieldMetadataLockedHintAgentGroup": "已选择已发布的专家团：包名与显示名与线上一致，不可修改。",
     "fieldMetadataLockedHintAgentMcp": "已选择已发布的连接器：包名与显示名与线上一致，不可修改。",
     "fieldMetadataLockedHintSystemPlugin": "已选择已发布的系统插件：包名与显示名与线上一致，不可修改。",
+    "fieldPkgNameApp": "应用包名",
+    "fieldPkgNameAppHelp": "与包内 plugin.yaml.name 一致：小写字母开头，仅含小写字母、数字和连字符。",
+    "namePlaceholderApp": "例如 gomoku",
+    "fieldVersionAppHelp": "来自包内 plugin.yaml。使用 1 至 4 段数字，可加 - 或 + 后缀，总长最多 32 字符，如 1.2.3-beta.1。",
+    "fieldDisplayNameAppHelp": "与包内 plugin.yaml display_name 一致；修改请重新打包。",
+    "fieldAppZipHelp": "上传标准市场包装包（plugin.yaml + 同名内层应用目录），服务端不会自动补 plugin.yaml。源文件上限 512MB，zip 传输上限 600MB。",
+    "fieldPluginIdApp": "关联应用",
+    "fieldPluginIdHelpApp": "选「新应用」即首次发布；在列表中选某项则为该应用发布新版本。",
+    "pluginIdNewOptionApp": "新应用（首次发布）",
+    "fieldMetadataLockedHintApp": "已选择已发布的应用：包名与显示名与线上一致，不可修改。",
+    "appErrorInvalidVersion": "请在包内 plugin.yaml 使用 1 至 4 段数字，可加 - 或 + 后缀，总长最多 32 字符，再重新打包上传。",
     "publishAgent": "发布{{typeLabel}}",
     "publishWithType": "发布{{typeLabel}}",
     "fieldAgentZip": "{{typeLabel}}包（zip）",

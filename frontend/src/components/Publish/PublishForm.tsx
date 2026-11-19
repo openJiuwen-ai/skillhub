@@ -12,11 +12,11 @@ import { sha256HexOfFile } from '@/utils/sha256File'
 import {
   buildSkillPublishZip,
   detectPublishPluginType,
-  normalizeSemver,
   parseSkillMdFrontmatter,
   type DetectedPublishPluginType,
 } from '@/utils/buildSkillPublishZip'
 import { inspectAgentPublishZip } from '@/utils/detectAgentPublishZip'
+import { isValidAppVersion, normalizeAppVersion } from '@/utils/appVersion'
 import { isJszipCorruptMessage } from '@/utils/publishZip'
 import { formatSkillVersionLabel } from '@/utils/formatSkillVersionLabel'
 import { isAgentAssetPluginType, MARKET_TAB_PLUGIN_TYPES } from '@/utils/pluginType'
@@ -113,9 +113,13 @@ function validateSkillName(value: string, type: PublishDrawerType): string | nul
   return null
 }
 
-function validatePluginVersion(value: string): string | null {
+function validatePluginVersion(value: string, type?: PublishDrawerType): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
+  if (type === 'app') {
+    if (!isValidAppVersion(trimmed)) return 'publish.appErrorInvalidVersion'
+    return null
+  }
   if (!VERSION_PATTERN.test(trimmed)) return 'publish.skillErrorInvalidVersion'
   return null
 }
@@ -693,6 +697,10 @@ export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: Publish
       setTypeMismatchError(info.pluginType !== selectedType ? t('publish.typeMismatchError') : '')
       setSkillPkgName(info.name)
       setPluginVersion(info.version)
+      if (selectedType === 'app') {
+        const versionErrorKey = validatePluginVersion(info.version, selectedType)
+        if (versionErrorKey) setFieldErrors({ pluginVersion: t(versionErrorKey) })
+      }
       setSkillDisplayName(info.displayName || info.name)
       setSkillDescription(info.description)
       setSkillTagsInput(info.tags.join(', '))
@@ -712,14 +720,15 @@ export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: Publish
       scrollToFirstError()
       return
     }
-    const versionErrorKey = validatePluginVersion(pluginVersion)
+    const versionErrorKey = validatePluginVersion(pluginVersion, selectedType)
     if (versionErrorKey) {
       setFieldErrors(prev => ({ ...prev, pluginVersion: t(versionErrorKey) }))
       scrollToFirstError()
       return
     }
 
-    const pluginVersionNormalized = normalizeSemver(pluginVersion.trim())
+    // App 版本以 zip 内 plugin.yaml 原文为准，跳过 semver 归一化。
+    const pluginVersionNormalized = selectedType === 'app' ? normalizeAppVersion(pluginVersion) : pluginVersion.trim()
     setUploading(true)
     setGeneralError('')
     setFieldErrors({})
@@ -1023,10 +1032,11 @@ export function PublishForm({ type, onCancel, onSuccess, onTypeChange }: Publish
               onChange={e => {
                 const val = e.target.value
                 setPluginVersion(val)
-                const errKey = validatePluginVersion(val)
+                const errKey = validatePluginVersion(val, selectedType)
                 setFieldErrors(prev => fieldErrorMerge(prev, 'pluginVersion', errKey ? t(errKey) : null))
               }}
               placeholder="1.0.0"
+              readOnly={selectedType === 'app'}
               required
               aria-invalid={Boolean(fieldErrors.pluginVersion)}
             />

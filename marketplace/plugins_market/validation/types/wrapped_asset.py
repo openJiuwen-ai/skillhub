@@ -48,6 +48,8 @@ def validate_wrapped_outer_layout(
     has_payload_file = False
 
     for normalized, original in members.items():
+        if original.replace("\\", "/").endswith("/") and normalized in {outer, payload_prefix.rstrip("/")}:
+            continue
         if not normalized.startswith(outer_prefix):
             _invalid(f"市场包包含外层目录之外的条目：{original}")
 

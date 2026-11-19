@@ -15,6 +15,7 @@ import yaml.nodes
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.base import raise_invalid_config, require_string_field
 from plugins_market.validation.constants import (
+    APP_VERSION_MAX_LEN,
     DISPLAY_NAME_MAX_LEN,
     MARKET_VERSION_MAX_LEN,
     MAX_YAML_BYTES,
@@ -26,6 +27,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_APP,
     RUNTIME_SKILL,
     RUNTIME_SYSTEM_PLUGIN,
     SKILL_NAME_MAX_LEN,
@@ -35,6 +37,7 @@ from plugins_market.validation.constants import (
     YAML_MAX_DEPTH,
     YAML_MAX_NODES,
     YAML_MAX_SCALAR_LEN,
+    is_valid_app_version,
     is_valid_market_version,
     is_valid_system_plugin_name,
 )
@@ -239,7 +242,19 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
             raise_invalid_config(
                 f"plugin.yaml 中 version 长度不得超过 {MARKET_VERSION_MAX_LEN} 个字符"
             )
-        if not is_valid_market_version(version):
+        runtime_raw = data.get("runtime")
+        runtime_type_hint = (
+            str(runtime_raw.get("type")).strip().lower()
+            if isinstance(runtime_raw, dict) and runtime_raw.get("type")
+            else ""
+        )
+        if runtime_type_hint == RUNTIME_APP:
+            if not is_valid_app_version(version):
+                raise_invalid_config(
+                    "应用 version 必须以数字开头，最多三个点号，可选 -/+ 后缀，"
+                    f"且长度不得超过 {APP_VERSION_MAX_LEN} 个字符"
+                )
+        elif not is_valid_market_version(version):
             raise_invalid_config(
                 "plugin.yaml 中 version 必须符合 x.y.z 语义化版本格式，或为 7 位小写十六进制 Git commit"
             )
@@ -350,6 +365,7 @@ def validate_plugin_yaml_public(data: dict[str, Any]) -> PluginYamlPublicFields:
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
         RUNTIME_SYSTEM_PLUGIN,
+        RUNTIME_APP,
     ):
         _validate_compatibility_python(data)
 

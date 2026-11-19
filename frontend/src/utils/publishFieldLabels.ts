@@ -12,6 +12,7 @@ const PUBLISH_TYPE_LABEL_KEYS: Record<string, string> = {
   'agent-group': 'publish.typeAgentGroup',
   'agent-mcp': 'publish.typeAgentMcp',
   'system-plugin': 'publish.typeSystemPlugin',
+  app: 'publish.typeApp',
 }
 
 export function resolvePublishTypeLabel(type: string, t: TFunction): string {
@@ -88,6 +89,30 @@ function agentPluginLinkKeys(type: PublishDrawerType): {
 }
 
 export function resolvePublishFormFieldLabels(type: PublishDrawerType, t: TFunction): PublishFormFieldLabels {
+  if (type === 'app') {
+    const typeLabel = resolvePublishTypeLabel(type, t)
+    return {
+      pkgName: t('publish.fieldPkgNameApp'),
+      pkgNameHelp: t('publish.fieldPkgNameAppHelp'),
+      pkgNamePlaceholder: t('publish.namePlaceholderApp'),
+      versionHelp: t('publish.fieldVersionAppHelp'),
+      displayName: t('publish.fieldDisplayName'),
+      displayNameHelp: t('publish.fieldDisplayNameAppHelp'),
+      description: t('publish.fieldDescription'),
+      descriptionHelp: t('publish.fieldDescriptionAgentHelp'),
+      descriptionPlaceholder: t('publish.fieldDescriptionAgentPlaceholder'),
+      tags: t('publish.fieldTags'),
+      tagsHelp: t('publish.fieldTagsAgentHelp'),
+      folder: t('publish.fieldAgentZip', { typeLabel }),
+      folderHelp: t('publish.fieldAppZipHelp'),
+      icon: t('publish.fieldSkillIcon'),
+      iconHelp: t('publish.fieldSkillIconHelp'),
+      metadataLockedHint: t('publish.fieldMetadataLockedHintApp'),
+      pluginLinkLabel: t('publish.fieldPluginIdApp'),
+      pluginLinkHint: t('publish.fieldPluginIdHelpApp'),
+      pluginNewOptionLabel: t('publish.pluginIdNewOptionApp'),
+    }
+  }
   if (isAgentAssetPluginType(type)) {
     const linkKeys = agentPluginLinkKeys(type)
     const typeLabel = resolvePublishTypeLabel(type, t)

@@ -18,6 +18,13 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $request_scheme;
+
+        location ~ ^/hub/api/v1/plugins/?$ {
+            client_max_body_size 512M;
+            rewrite ^/hub(/api.*)$ $1 break;
+            set $backend_endpoint http://${BACKEND_URL}:${BACKEND_PORT};
+            proxy_pass $backend_endpoint;
+        }
     }
     location = / {
         return 302 /hub;
@@ -41,6 +48,12 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $request_scheme;
+
+        location ~ ^/api/v1/plugins/?$ {
+            client_max_body_size 512M;
+            set $backend_endpoint http://${BACKEND_URL}:${BACKEND_PORT};
+            proxy_pass $backend_endpoint;
+        }
     }
     location /health {
         access_log off;

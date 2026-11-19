@@ -54,12 +54,25 @@ SUPPORTED_PLUGIN_TYPES = {
     "agent-template",
     "agent-group",
     "system-plugin",
+    "app",
 }
 SKILL_LIKE_RUNTIME_TYPES = frozenset({"skill", "swarmskill"})
+APP_RUNTIME_TYPES = frozenset({"app"})
 AGENT_ASSET_RUNTIME_TYPES = frozenset(
     {"agent-plugin", "agent-mcp", "agent-template", "agent-group", "system-plugin"}
 )
 LEGACY_RUNTIME_TYPES = frozenset({"tools", "mcp-stdio", "restful-api"})
+APP_VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]{1,16})?$")
+APP_ALLOWED_PERMISSIONS = frozenset({"ai"})
+# 市场在安装时生成、或运行时产生的文件，不应进入应用分发包。
+APP_GENERATED_SCRIPTS = frozenset({"start.ps1", "start.sh", "stop.ps1", "stop.sh"})
+
+
+def _is_valid_app_version(value: str) -> bool:
+    v = (value or "").strip()
+    return bool(v) and len(v) <= 32 and bool(APP_VERSION_PATTERN.fullmatch(v))
+
+
 _AGENT_MANIFEST_PACKAGE_TYPE = {
     "agent-plugin": "plugin",
     "agent-mcp": "mcp",
@@ -620,6 +633,53 @@ def _init_agent_asset(plugin_name: str, plugin_root: Path, plugin_type: str) -> 
     return plugin_root
 
 
+def _init_plugin_app(plugin_name: str, plugin_root: Path) -> Path:
+    """Scaffold a wrapped application package: outer plugin.yaml + inner HTML entry."""
+    plugin_root.mkdir(parents=True, exist_ok=True)
+    plugin_yaml = _default_plugin_yaml(plugin_name, "app")
+    plugin_yaml["version"] = "1.0.0"
+    plugin_yaml["metadata"]["app"] = {
+        "requires_project": False,
+        "permissions": [],
+    }
+    (plugin_root / "plugin.yaml").write_text(
+        yaml.safe_dump(plugin_yaml, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    inner = plugin_root / plugin_name
+    (inner / "assets").mkdir(parents=True, exist_ok=True)
+    (inner / "index.html").write_text(
+        "<!doctype html>\n"
+        "<html lang=\"zh-CN\">\n"
+        "<head>\n"
+        "  <meta charset=\"utf-8\" />\n"
+        "  <title>__APP_TITLE__</title>\n"
+        "  <meta name=\"application-name\" content=\"__APP_TITLE__\" />\n"
+        "  <meta name=\"description\" content=\"TODO: describe this application\" />\n"
+        "  <meta name=\"application-version\" content=\"1.0.0\" />\n"
+        "  <link rel=\"icon\" href=\"assets/app-icon.svg\" />\n"
+        "</head>\n"
+        "<body>\n"
+        "  <main id=\"app\"></main>\n"
+        "  <script type=\"module\" src=\"assets/app.js\"></script>\n"
+        "</body>\n"
+        "</html>\n".replace("__APP_TITLE__", plugin_name),
+        encoding="utf-8",
+    )
+    (inner / "assets" / "app.js").write_text(
+        "document.getElementById('app').textContent = 'Hello from "
+        + plugin_name
+        + "';\n",
+        encoding="utf-8",
+    )
+    (inner / "README.md").write_text(
+        f"# {plugin_name}\n\nTODO: describe this application.\n",
+        encoding="utf-8",
+    )
+    return plugin_root
+
+
 def _validate_mcp_json_shape(path: Path, integration_type: str, errors: list[str]) -> None:
     """Match marketplace agent-mcp: mcpServers object, first server matches integration.type."""
     data = _load_json(path, errors)
@@ -771,6 +831,68 @@ def _validate_agent_asset_directory(
                         errors.append(f"manifest.agents[{index}] must be a name without path separators")
 
 
+def _validate_app_directory(
+    root: Path,
+    plugin_data: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    """Validate the wrapped application layout (no manifest.json contract)."""
+    data = plugin_data or {}
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return
+    if len(name) > 64:
+        errors.append("app name must not exceed 64 characters")
+    inner = root / name
+    entry = inner / "index.html"
+    if not entry.is_file():
+        errors.append(f"missing required entry: {name}/index.html")
+        return
+
+    metadata = data.get("metadata")
+    app_meta = metadata.get("app") if isinstance(metadata, dict) else None
+    if app_meta is not None:
+        if not isinstance(app_meta, dict):
+            errors.append("plugin.yaml metadata.app must be an object")
+        else:
+            requires_project = app_meta.get("requires_project", False)
+            if not isinstance(requires_project, bool):
+                errors.append("metadata.app.requires_project must be a boolean")
+            permissions = app_meta.get("permissions", [])
+            if not isinstance(permissions, list):
+                errors.append("metadata.app.permissions must be an array")
+            else:
+                for index, item in enumerate(permissions):
+                    if not isinstance(item, str) or not item.strip():
+                        errors.append(
+                            f"metadata.app.permissions[{index}] must be a non-empty string"
+                        )
+                    elif item.strip().lower() not in APP_ALLOWED_PERMISSIONS:
+                        errors.append(
+                            f"unsupported metadata.app.permissions[{index}]: {item!r} "
+                            f"(allowed: {', '.join(sorted(APP_ALLOWED_PERMISSIONS))})"
+                        )
+
+    declared_version = data.get("version")
+    if isinstance(declared_version, str) and declared_version.strip():
+        head = ""
+        try:
+            with entry.open(encoding="utf-8", errors="replace") as source:
+                head = source.read(65536)
+        except OSError:
+            pass
+        match = re.search(
+            r'<meta\s+name=["\']application-version["\']\s+content=["\']([^"\']*)["\']',
+            head,
+            re.IGNORECASE,
+        )
+        if match and match.group(1).strip() and match.group(1).strip() != declared_version.strip():
+            errors.append(
+                "index.html application-version "
+                f"({match.group(1).strip()!r}) must equal plugin.yaml version ({declared_version.strip()!r})"
+            )
+
+
 def plugin_init(plugin_name: str, base_path: Path, force: bool = False, plugin_type: str = "skill") -> Path:
     if plugin_type not in SUPPORTED_PLUGIN_TYPES:
         supported = ", ".join(sorted(SUPPORTED_PLUGIN_TYPES))
@@ -795,6 +917,8 @@ def plugin_init(plugin_name: str, base_path: Path, force: bool = False, plugin_t
         return _init_plugin_skill(plugin_name, plugin_root)
     if plugin_type == "swarmskill":
         return _init_plugin_swarmskill(plugin_name, plugin_root)
+    if plugin_type in APP_RUNTIME_TYPES:
+        return _init_plugin_app(plugin_name, plugin_root)
     if plugin_type in AGENT_ASSET_RUNTIME_TYPES:
         return _init_agent_asset(plugin_name, plugin_root, plugin_type)
     supported = ", ".join(sorted(SUPPORTED_PLUGIN_TYPES))
@@ -836,6 +960,10 @@ def plugin_validate(plugin_path: Path) -> ValidationResult:
         if not plugin_yaml_path.exists():
             errors.append("missing required entry: plugin.yaml")
         _validate_agent_asset_directory(root, plugin_data, runtime_type, errors)
+    elif runtime_type in APP_RUNTIME_TYPES:
+        if not plugin_yaml_path.exists():
+            errors.append("missing required entry: plugin.yaml")
+        _validate_app_directory(root, plugin_data, errors)
     elif runtime_type in LEGACY_RUNTIME_TYPES:
         errors.append(
             f"runtime.type {runtime_type!r} is not an Agent asset type; "
@@ -957,6 +1085,8 @@ def plugin_pack(plugin_path: Path, output_dir: Path | None = None) -> Path:
 
     if runtime_type in SKILL_LIKE_RUNTIME_TYPES:
         _pack_plugin_skill(root, name, prefix, zip_path)
+    elif runtime_type in APP_RUNTIME_TYPES:
+        _pack_plugin_app(root, name, prefix, zip_path)
     else:
         _pack_plugin_directory(root, prefix, zip_path)
 
@@ -989,6 +1119,53 @@ def _pack_plugin_skill(root: Path, name: str, prefix: str, zip_path: Path) -> No
         n_files = plugin_zip_write_directory_tree(zf, skill_dir, arcname_prefix=arc_prefix)
         if n_files == 0:
             raise ValueError(f"no files packed under skill directory: {skill_dir}")
+
+
+def _pack_plugin_app(root: Path, name: str, prefix: str, zip_path: Path) -> None:
+    """Pack a wrapped app: outer plugin.yaml/icon.png + inner application directory.
+
+    Generated start/stop scripts, logs, local secrets and the default user data
+    directory never enter the distribution package; market scripts are created
+    at install time by Swarm.
+    """
+    base = root.resolve()
+    inner_prefix = f"{name}/"
+    data_prefix = f"{name}/data/"
+    ignored_dirs = PACK_IGNORE_DIR_NAMES - {"dist", "out"}
+    written = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(base.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                path.resolve().relative_to(base)
+            except ValueError:
+                continue
+            rel = path.relative_to(base).as_posix()
+            if not rel.startswith(inner_prefix) and rel not in {"plugin.yaml", "icon.png"}:
+                continue
+            if path in (zip_path, zip_path.with_suffix(".zip.sha256")):
+                continue
+            parts = rel.split("/")
+            if any(p in ignored_dirs or p.endswith(".egg-info") for p in parts):
+                continue
+            if path.suffix in PACK_IGNORE_SUFFIXES or path.name == ".DS_Store":
+                continue
+            if rel == "README.md":
+                continue
+            if rel.startswith(data_prefix):
+                continue
+            if path.name in {"app.log", ".workswarm-app-release"} or (
+                path.parent == base / name / "scripts" and path.name.casefold() in APP_GENERATED_SCRIPTS
+            ):
+                continue
+            if path.name == ".env" or path.name.startswith(".env."):
+                continue
+            if rel == f"{inner_prefix}index.html" or rel.startswith(inner_prefix):
+                written += 1
+            zf.write(path, f"{prefix}/{rel}")
+    if written == 0:
+        raise ValueError(f"no application files packed under {base / name}")
 
 
 def _pack_plugin_directory(root: Path, prefix: str, zip_path: Path) -> None:
@@ -1382,7 +1559,7 @@ def plugin_install(
             force=force,
         )
 
-        if runtime_type in AGENT_ASSET_RUNTIME_TYPES:
+        if runtime_type in AGENT_ASSET_RUNTIME_TYPES or runtime_type in APP_RUNTIME_TYPES:
             logger.info("installed %s at %s", runtime_type, bundle_dest)
         else:
             raise ValueError(f"unexpected runtime type after bundle copy: {runtime_type}")
@@ -1492,6 +1669,7 @@ def _runtime_type(plugin_data: dict[str, Any] | None) -> str | None:
         "agent-template": "agent-template",
         "agent-group": "agent-group",
         "system-plugin": "system-plugin",
+        "app": "app",
     }
     return canonical_map.get(rt)
 
@@ -1518,7 +1696,13 @@ def _validate_plugin_yaml(
         errors.append("plugin.yaml name must match ^[a-z][a-z0-9-]*$")
 
     version = plugin_data.get("version")
-    if not isinstance(version, str) or not is_valid_marketplace_version(version):
+    if runtime_type in APP_RUNTIME_TYPES:
+        if not isinstance(version, str) or not _is_valid_app_version(version):
+            errors.append(
+                "plugin.yaml version must start with digits, use at most three dots "
+                "and an optional -/+ suffix (max 32 characters)"
+            )
+    elif not isinstance(version, str) or not is_valid_marketplace_version(version):
         errors.append(
             "plugin.yaml version must be x.y.z (e.g. 1.2.3) or a git commit (7 lowercase hex digits)"
         )

@@ -8,7 +8,7 @@ CREATE TABLE `audit_logs` (
   `operator_name` varchar(100) DEFAULT NULL,
   `resource_type` varchar(30) NOT NULL,
   `resource_id` varchar(100) DEFAULT NULL,
-  `resource_version` varchar(30) DEFAULT NULL,
+  `resource_version` varchar(32) DEFAULT NULL COMMENT '资源版本；与市场/应用版本上限 32 字符对齐',
   `result` varchar(20) NOT NULL,
   `duration_ms` int NOT NULL,
   `detail` text,

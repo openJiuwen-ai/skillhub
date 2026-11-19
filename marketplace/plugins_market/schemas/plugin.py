@@ -181,9 +181,16 @@ class PluginVersionDeleteData(BaseModel):
 
 
 class AssetVersionDeleteData(PluginVersionDeleteData):
-    """Delete response for agent assets, retaining their exact asset type."""
+    """Delete response for wrapped agent assets and apps, retaining their exact asset type."""
 
-    asset_type: Literal["agent-plugin", "agent-template", "agent-group", "agent-mcp", "system-plugin"]
+    asset_type: Literal[
+        "agent-plugin",
+        "agent-template",
+        "agent-group",
+        "agent-mcp",
+        "system-plugin",
+        "app",
+    ]
 
 
 class PluginTemplatePresignData(BaseModel):
@@ -303,6 +310,21 @@ class PluginVersionDetail(BaseModel):
     agent_package_profile: Optional[AgentPackageProfile] = Field(
         None,
         description="agent-plugin / agent-template / agent-group / agent-mcp / system-plugin 内层 manifest 只读摘要",
+    )
+    # App distribution metadata (only present for plugin_type=app).
+    file_size: Optional[int] = Field(None, description="应用原包 zip 字节数")
+    source_size: Optional[int] = Field(
+        None, description="应用源文件总字节数（zip 内非目录条目声明大小之和）"
+    )
+    requires_project: Optional[bool] = Field(
+        None, description="应用是否声明运行期需要项目上下文"
+    )
+    permissions: Optional[List[str]] = Field(None, description="应用声明的能力白名单")
+    has_server_script: Optional[bool] = Field(
+        None, description="应用包是否包含 scripts/app_server.py"
+    )
+    checksum_sha256: Optional[str] = Field(
+        None, description="应用原包 SHA-256（浏览详情不触发下载计量）"
     )
 
 
