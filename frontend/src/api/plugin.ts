@@ -21,6 +21,8 @@ export interface MarketplacePluginListRequest {
   search_keyword?: string
   /** 与后端 `publisher_id` 一致：筛选指定发布者的插件 */
   publisher_id?: string
+  /** 与后端 `publisher_name` 一致：按发布者登录名子串筛选（不区分大小写） */
+  publisher_name?: string
   /** 与后端 `asset_id` 一致 */
   asset_id?: string
   /** 资产主类型；五类 Agent 资产与 plugin_type 同值，用于检索与存储分组 */
@@ -364,6 +366,131 @@ export async function postSkillModeration(
   }
 }
 
+// ----- 批量审核 / 批量删除（个人中心「待审核」） -----
+
+export interface SkillModerationBatchItemInput {
+  asset_id: string
+  version: string
+}
+
+export interface SkillModerationBatchSucceededItem {
+  asset_id: string
+  version: string
+  moderation_status: string
+  publish_result?: string | null
+}
+
+export interface SkillModerationBatchFailedItem {
+  asset_id: string
+  version: string
+  error?: string | null
+  message: string
+}
+
+export interface SkillModerationBatchResultData {
+  succeeded: SkillModerationBatchSucceededItem[]
+  failed: SkillModerationBatchFailedItem[]
+}
+
+export interface SkillModerationBatchResponse {
+  code: number
+  message: string
+  data: SkillModerationBatchResultData
+}
+
+/** POST /api/v1/plugins/moderation/batch — 批量通过/驳回待审版本（逐条独立成功/失败） */
+export async function postSkillModerationBatch(
+  body: { action: 'approve' | 'reject'; reason?: string; items: SkillModerationBatchItemInput[] },
+): Promise<SkillModerationBatchResultData> {
+  const client = getApiClient()
+  try {
+    const { data } = await client.post<SkillModerationBatchResponse>(
+      API_ENDPOINTS.PLUGINS.moderationBatch,
+      body,
+    )
+    if (data.code !== 200 || !data.data) {
+      throw new MarketplaceApiError(data.message || '批量审核失败', data.code)
+    }
+    const result = data.data
+    if (!Array.isArray(result.succeeded) || !Array.isArray(result.failed)) {
+      throw new MarketplaceApiError('批量审核响应无效')
+    }
+    return result
+  } catch (e) {
+    if (e instanceof MarketplaceApiError) throw e
+    if (axios.isAxiosError(e)) {
+      const detail = (e.response?.data as { detail?: { message?: string; error?: string } })?.detail
+      throw new MarketplaceApiError(
+        (detail && typeof detail === 'object' && detail.message) || apiErrorMessage(e, '批量审核失败'),
+        e.response?.status,
+        detail && typeof detail === 'object' ? (detail.error as string | undefined) : undefined,
+      )
+    }
+    throw new Error(apiErrorMessage(e, '批量审核失败'))
+  }
+}
+
+export interface AssetVersionBatchDeleteItemInput {
+  asset_id: string
+  version: string
+}
+
+export interface AssetVersionBatchDeleteSucceededItem {
+  asset_id: string
+  version: string
+  asset_deleted: boolean
+}
+
+export interface AssetVersionBatchDeleteFailedItem {
+  asset_id: string
+  version: string
+  error?: string | null
+  message: string
+}
+
+export interface AssetVersionBatchDeleteResultData {
+  succeeded: AssetVersionBatchDeleteSucceededItem[]
+  failed: AssetVersionBatchDeleteFailedItem[]
+}
+
+export interface AssetVersionBatchDeleteResponse {
+  code: number
+  message: string
+  data: AssetVersionBatchDeleteResultData
+}
+
+/** POST /api/v1/plugins/versions/batch-delete — 批量删除待审/审查中版本（逐条独立成功/失败） */
+export async function deletePluginVersionsBatch(
+  items: AssetVersionBatchDeleteItemInput[],
+): Promise<AssetVersionBatchDeleteResultData> {
+  const client = getApiClient()
+  try {
+    const { data } = await client.post<AssetVersionBatchDeleteResponse>(
+      API_ENDPOINTS.PLUGINS.versionsBatchDelete,
+      { items },
+    )
+    if (data.code !== 200 || !data.data) {
+      throw new MarketplaceApiError(data.message || '批量删除失败', data.code)
+    }
+    const result = data.data
+    if (!Array.isArray(result.succeeded) || !Array.isArray(result.failed)) {
+      throw new MarketplaceApiError('批量删除响应无效')
+    }
+    return result
+  } catch (e) {
+    if (e instanceof MarketplaceApiError) throw e
+    if (axios.isAxiosError(e)) {
+      const detail = (e.response?.data as { detail?: { message?: string; error?: string } })?.detail
+      throw new MarketplaceApiError(
+        (detail && typeof detail === 'object' && detail.message) || apiErrorMessage(e, '批量删除失败'),
+        e.response?.status,
+        detail && typeof detail === 'object' ? (detail.error as string | undefined) : undefined,
+      )
+    }
+    throw new Error(apiErrorMessage(e, '批量删除失败'))
+  }
+}
+
 export async function getPlugins(
   request: MarketplacePluginListRequest = {}
 ): Promise<MarketplacePluginListResponse> {
@@ -374,6 +501,7 @@ export async function getPlugins(
       page_size: request.page_size ?? 20,
       search_keyword: request.search_keyword || undefined,
       publisher_id: request.publisher_id || undefined,
+      publisher_name: request.publisher_name || undefined,
       asset_id: request.asset_id || undefined,
       asset_type: request.asset_type || undefined,
       plugin_type: request.plugin_type || undefined,
