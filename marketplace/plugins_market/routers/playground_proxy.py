@@ -71,20 +71,34 @@ async def _release_session(session_id: str) -> None:
 
 
 async def _check_session_token(session_id: str, request: Request) -> bool:
-    """能力令牌校验：EventSource/sendBeacon 带不了 header，用 ?pt= 查询参数。"""
+    """能力令牌校验：EventSource/sendBeacon 带不了 header，用 ?pt= 查询参数。
+
+    会话记录不存在或令牌为空时返回 False（fail-closed），避免 Redis 重启/淘汰、
+    多实例未共享 store 或手工构造请求时，已知 session_id 即可放行。
+    """
     rec = await _store().get_session(session_id)
     if rec is None or not rec.token:
-        return True
+        return False
     supplied = request.query_params.get("pt", "")
     return secrets.compare_digest(supplied, rec.token)
 
 
 async def _ensure_session_owner(session_id: str, auth: AuthContext) -> None:
-    """归属校验：记录不存在时放行（避免重启锁死）。"""
+    """归属校验：记录不存在或 user_id 为空一律拒绝（fail-closed）。"""
     if auth.is_admin:
         return
     rec = await _store().get_session(session_id)
-    if rec is not None and rec.user_id and rec.user_id != auth.acting_user_id:
+    if rec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "session_not_found", "message": "会话不存在或已过期"},
+        )
+    if not rec.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "session_orphaned", "message": "会话归属信息缺失"},
+        )
+    if rec.user_id != auth.acting_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": "not_your_session", "message": "无权操作他人的 Playground 会话"},
