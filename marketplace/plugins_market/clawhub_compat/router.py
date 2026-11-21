@@ -333,8 +333,10 @@ def clawhub_skill_versions(
         raise _http_exception(status.HTTP_404_NOT_FOUND, "skill not found", error="skill_not_found")
     vrepo = MarketAssetVersionRepository(db)
     cap = _clamp_clawhub_limit(limit)
-    rows = vrepo.list_versions(slug, limit=cap)
-    rows = _publicly_visible_skill_versions(item, rows)
+    # 先过滤公开可见版本，再截断到 cap：若先 limit 后过滤，
+    # 最近 cap 条含未过审版本时返回条数变少，更早的已过审版本永远取不到。
+    rows = _publicly_visible_skill_versions(item, vrepo.list_versions(slug))
+    rows = rows[:cap]
     out = [
         mappers.version_list_item(
             r.version,
@@ -531,7 +533,9 @@ async def clawhub_resolve(
 
     vrepo = MarketAssetVersionRepository(db)
     max_n = int(CLAWHUB_RESOLVE_MAX_VERSIONS)
-    rows = _publicly_visible_skill_versions(item, vrepo.list_versions(slug, limit=max_n))
+    # 同 versions 接口：先过滤可见版本再截断，避免 fingerprint 匹配的
+    # 可见版本落在最近 max_n 条之外（或被未过审版本挤出窗口）时漏配。
+    rows = _publicly_visible_skill_versions(item, vrepo.list_versions(slug))[:max_n]
     if not rows:
         return {"match": None, "latestVersion": None}
 
