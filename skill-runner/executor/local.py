@@ -7,6 +7,8 @@ import logging
 import os
 import re
 import shutil
+import signal
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,6 +20,31 @@ logger = logging.getLogger("skill_runner.local")
 
 _LLM_MODEL: Any = None
 _LLM_LOCK = asyncio.Lock()
+
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """终止子进程所在进程组并回收，避免僵尸与孙进程逃逸。"""
+    if proc.returncode is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            proc.kill()
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        logger.warning("kill process group failed: %s; fallback to proc.kill", exc)
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await proc.wait()
+    except Exception:
+        logger.warning("reap timed-out process failed", exc_info=True)
 
 
 def _wipe_empty_proxy_env() -> None:
@@ -250,18 +277,24 @@ class LocalExecutor(SandboxExecutor):
         yield sse_event("tool_call", name="shell", input=command)
         try:
             args = shlex.split(command)
+            popen_kwargs: dict[str, Any] = {}
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = _CREATE_NEW_PROCESS_GROUP
+            else:
+                popen_kwargs["start_new_session"] = True
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 cwd=work_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                **popen_kwargs,
             )
             try:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=settings.exec_timeout_seconds
                 )
             except asyncio.TimeoutError:
-                proc.kill()
+                await _terminate_process_tree(proc)
                 yield sse_event(
                     "error", code="timeout",
                     message=f"command timed out after {settings.exec_timeout_seconds}s",
