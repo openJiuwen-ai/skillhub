@@ -7,6 +7,8 @@ import logging
 import os
 import re
 import shutil
+import signal
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,6 +20,37 @@ logger = logging.getLogger("skill_runner.local")
 
 _LLM_MODEL: Any = None
 _LLM_LOCK = asyncio.Lock()
+
+_IS_POSIX = sys.platform != "win32"
+
+
+def _subprocess_group_kwargs() -> dict[str, Any]:
+    """让命令在独立进程组里运行，超时可连同它派生的子孙进程一起终止。"""
+    if _IS_POSIX:
+        return {"start_new_session": True}
+    return {"creationflags": 0x00000200}  # subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def _terminate_process_group(proc: Any) -> None:
+    """POSIX 下终止整组，失败退回单进程 kill()；Windows 无进程组信号语义。"""
+    if _IS_POSIX and proc.pid is not None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            return
+        except OSError:
+            pass  # 进程组已消失/无权限 → 退回单进程 kill()
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+async def _reap(proc: Any) -> None:
+    """回收子进程，让 returncode 落定并避免僵尸；失败只记日志，不掩盖 timeout 事件。"""
+    try:
+        await proc.wait()
+    except Exception:
+        logger.warning("reaping timed-out child failed: pid=%s", proc.pid, exc_info=True)
 
 
 def _wipe_empty_proxy_env() -> None:
@@ -255,13 +288,15 @@ class LocalExecutor(SandboxExecutor):
                 cwd=work_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                **_subprocess_group_kwargs(),
             )
             try:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=settings.exec_timeout_seconds
                 )
             except asyncio.TimeoutError:
-                proc.kill()
+                _terminate_process_group(proc)
+                await _reap(proc)
                 yield sse_event(
                     "error", code="timeout",
                     message=f"command timed out after {settings.exec_timeout_seconds}s",
