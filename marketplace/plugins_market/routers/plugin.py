@@ -1046,7 +1046,7 @@ async def asset_import(
     "/git-sources",
     response_model=ResponseModel[GitSourceListResponse],
 )
-async def list_my_git_sources(
+def list_my_git_sources(
     auth: AuthContext = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
@@ -1171,7 +1171,7 @@ async def sync_git_source_route(
     "/git-sources/{source_id}",
     response_model=ResponseModel[dict],
 )
-async def delete_git_source_route(
+def delete_git_source_route(
     request: Request,
     source_id: str,
     auth: AuthContext = Depends(require_auth),
@@ -1232,7 +1232,7 @@ async def delete_git_source_route(
     "",
     response_model=ResponseModel[PluginListResponse],
 )
-async def list_plugins(
+def list_plugins(
     query: Annotated[PluginListQuery, Query()],
     db: Session = Depends(get_db),
     storage=Depends(get_storage_client),
@@ -1251,7 +1251,7 @@ _TAG_OPTIONS_CACHE_TTL = 30
     "/tags",
     response_model=ResponseModel[List[TagOption]],
 )
-async def list_plugin_tags(
+def list_plugin_tags(
     db: Session = Depends(get_db),
     plugin_type: Optional[str] = Query(None, description="限定插件类型（如 skill / swarmskill）"),
     limit: int = Query(20, ge=1, le=100, description="返回的标签数量上限"),
@@ -1323,7 +1323,7 @@ _CATEGORY_TOTALS_CACHE_TTL = 30
     "/category-totals",
     response_model=ResponseModel[Dict[str, CategoryTotalsData]],
 )
-async def get_category_totals(db: Session = Depends(get_db)):
+def get_category_totals(db: Session = Depends(get_db)):
     """侧栏分类计数聚合：一次返回所有市场 tab 类型的分类计数，口径与列表 total 一致。"""
     cache_key = "plugins:category-totals:v2"
     hit = cache_get(cache_key)
@@ -1352,7 +1352,7 @@ async def get_category_totals(db: Session = Depends(get_db)):
     "/audit/skill-moderation",
     response_model=ResponseModel[SkillModerationAuditListResponse],
 )
-async def list_my_skill_moderation_audits(
+def list_my_skill_moderation_audits(
     db: Session = Depends(get_db),
     auth: AuthContext = Depends(require_auth),
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
@@ -1372,7 +1372,7 @@ async def list_my_skill_moderation_audits(
     "/{id}",
     response_model=ResponseModel[PluginDownloadData],
 )
-async def get_artifact_download(
+def get_artifact_download(
     request: Request,
     artifact_id: str = Path(..., alias="id"),
     version: Optional[str] = Query(
@@ -1557,7 +1557,7 @@ async def download_skill_redirect(
     "/{asset_id}/versions/{version}/files",
     response_model=ResponseModel[VersionFilesData],
 )
-async def list_version_files(
+def list_version_files(
     asset_id: str,
     version: str,
     with_content: Optional[str] = Query(None, description="同时返回该文件的文本内容"),
@@ -1579,7 +1579,7 @@ async def list_version_files(
     "/{asset_id}/versions/{version}",
     response_model=ResponseModel[PluginVersionDetail],
 )
-async def get_plugin_version_detail(
+def get_plugin_version_detail(
     asset_id: str,
     version: str,
     db: Session = Depends(get_db),
@@ -1600,7 +1600,7 @@ async def get_plugin_version_detail(
     "/{asset_id}/moderation",
     response_model=ResponseModel[SkillModerationResult],
 )
-async def moderate_skill(
+def moderate_skill(
     asset_id: str,
     body: SkillModerationRequest,
     auth: AuthContext = Depends(require_auth),
@@ -1649,7 +1649,7 @@ async def moderate_skill(
     "/{asset_id}/versions/{version}",
     response_model=ResponseModel[AssetVersionDeleteData | PluginVersionDeleteData],
 )
-async def delete_plugin_version(
+def delete_plugin_version(
     asset_id: str,
     version: str,
     auth: AuthContext = Depends(require_auth),
