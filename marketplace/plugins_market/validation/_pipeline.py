@@ -13,10 +13,12 @@ from typing import Any
 from plugins_market.core.errors import PublishError
 from plugins_market.validation.constants import (
     MARKET_ASSET_DETAIL_DESC_MAX_BYTES,
+    MAX_YAML_BYTES,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_APP,
     RUNTIME_MCP_STDIO,
     RUNTIME_RESTFUL_API,
     RUNTIME_SKILL,
@@ -55,6 +57,7 @@ from plugins_market.validation.types.agent_asset import (
     validate_agent_asset_layout,
 )
 from plugins_market.validation.types.agent_mcp import validate_agent_mcp_layout
+from plugins_market.validation.types.app_asset import validate_app_asset_layout
 
 
 def _find_plugin_yaml_path(zf: zipfile.ZipFile) -> str | None:
@@ -82,6 +85,38 @@ def _plugin_prefix(plugin_yaml_path: str) -> str:
     if "/" not in path:
         return ""
     return path.rsplit("/", 1)[0] + "/"
+
+
+def peek_plugin_runtime_type(content: bytes) -> str:
+    """Return ``runtime.type`` without running the full validation pipeline.
+
+    Publish preserves the original ZIP bytes for apps. A bare upload has no
+    market wrapper and continues through the existing wrapping path.
+    """
+    with open_zip_bytes(content) as zf:
+        plugin_yaml_path = _find_plugin_yaml_path(zf)
+        if not plugin_yaml_path:
+            # Bare uploads are wrapped later by prepare_publish_zip_content.
+            return ""
+        info = zf.getinfo(plugin_yaml_path)
+        if int(info.file_size or 0) > MAX_YAML_BYTES:
+            raise PublishError(
+                code=400,
+                error="invalid_plugin_config",
+                message=f"plugin.yaml 超过大小上限（最大 {MAX_YAML_BYTES // 1024} KB）",
+            )
+        raw = safe_read_zip_member(zf, plugin_yaml_path, DecompressCounter())
+        data = safe_load_yaml(validate_plugin_yaml_bytes(raw), context="plugin.yaml")
+        if not isinstance(data, dict):
+            raise PublishError(
+                code=400,
+                error="invalid_plugin_config",
+                message="plugin.yaml 根结构必须为 mapping（字典）",
+            )
+        runtime = data.get("runtime")
+        if not isinstance(runtime, dict):
+            return ""
+        return str(runtime.get("type") or "").strip().lower()
 
 
 def _find_preview_png_path(zf: zipfile.ZipFile, payload_prefix: str) -> str | None:
@@ -234,18 +269,41 @@ def extract_plugin_metadata(content: bytes) -> dict[str, Any]:
             RUNTIME_AGENT_TEMPLATE,
             RUNTIME_AGENT_GROUP,
             RUNTIME_SYSTEM_PLUGIN,
+            RUNTIME_APP,
         ):
-            layout = validate_agent_asset_layout(
-                zf,
-                AgentAssetOuterRef(
-                    prefix=prefix,
-                    name=public.name,
-                    version=version,
-                    runtime_type=rt,
-                ),
-                counter,
-            )
-            extra_meta = {"asset_type": layout["asset_type"]}
+            if rt == RUNTIME_APP:
+                layout = validate_app_asset_layout(
+                    zf,
+                    AgentAssetOuterRef(
+                        prefix=prefix,
+                        name=public.name,
+                        version=version,
+                        runtime_type=rt,
+                    ),
+                    counter,
+                    metadata=yaml_data.get("metadata")
+                    if isinstance(yaml_data.get("metadata"), dict)
+                    else {},
+                )
+                extra_meta = {
+                    "asset_type": layout["asset_type"],
+                    "source_size": layout["source_size"],
+                    "requires_project": layout["requires_project"],
+                    "permissions": layout["permissions"],
+                    "has_server_script": layout["has_server_script"],
+                }
+            else:
+                layout = validate_agent_asset_layout(
+                    zf,
+                    AgentAssetOuterRef(
+                        prefix=prefix,
+                        name=public.name,
+                        version=version,
+                        runtime_type=rt,
+                    ),
+                    counter,
+                )
+                extra_meta = {"asset_type": layout["asset_type"]}
             detail_desc = layout["detail_desc"]
             icon_bytes = layout["icon_bytes"]
             public = _merge_agent_market_fields(public, layout)

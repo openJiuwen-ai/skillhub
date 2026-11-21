@@ -1737,6 +1737,11 @@ export default function PluginMarketPage() {
                     label: t('plugins.marketTypeLabel.agent-group'),
                     icon: AgentGroupGlyph,
                   },
+                  {
+                    value: 'app' as const,
+                    label: t('plugins.marketTypeLabel.app'),
+                    icon: AgentPluginGlyph,
+                  },
                 ]).map(option => {
                   const active =
                     activeType === option.value ||

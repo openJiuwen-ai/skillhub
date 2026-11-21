@@ -9,6 +9,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_GROUP,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_APP,
     RUNTIME_SYSTEM_PLUGIN,
 )
 
@@ -28,6 +29,7 @@ AGENT_ASSET_PLUGIN_TYPES = frozenset(
         RUNTIME_AGENT_GROUP,
         RUNTIME_AGENT_MCP,
         RUNTIME_SYSTEM_PLUGIN,
+        RUNTIME_APP,
     }
 )
 
@@ -69,6 +71,7 @@ def moderated_asset_type_label(plugin_type: str | None) -> str:
         RUNTIME_AGENT_GROUP: "专家团",
         RUNTIME_AGENT_MCP: "连接器",
         RUNTIME_SYSTEM_PLUGIN: "系统插件",
+        RUNTIME_APP: "应用",
     }
     return labels.get(normalize_market_plugin_type(plugin_type), "市场资产")
 

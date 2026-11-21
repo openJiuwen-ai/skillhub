@@ -35,6 +35,13 @@ column_exists() {
   [ "${count:-0}" != "0" ]
 }
 
+column_type() {
+  local table="$1"
+  local column="$2"
+  mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -s "$MYSQL_DATABASE" -e \
+    "SELECT COLUMN_TYPE FROM information_schema.columns WHERE table_schema='${MYSQL_DATABASE}' AND table_name='${table}' AND column_name='${column}'"
+}
+
 # ── Baseline：初始建表（按外键依赖排序） ──
 BL="/sql/baseline/openjiuwen_market/DDL"
 run_sql "baseline" "$BL/market_assets.sql"
@@ -91,6 +98,16 @@ if column_exists "market_asset_versions" "has_preview"; then
   echo "[mysql-init] B006: has_preview already present, skip"
 else
   run_sql "B006" "$INC6_DDL/market_asset_versions_has_preview.sql"
+fi
+
+# ── Incremental v0.0.2.B007：审计资源版本列与应用版本上限对齐 ──
+# baseline 已是 varchar(32)；全新初始化在此跳过，旧库（varchar(30)）才执行增量。
+# B007 DDL 位于仓库 sql/ 目录，compose 以 ../sql:/sql:ro 挂载。
+INC7_DDL="/sql/incremental/v0.0.2.B007/openjiuwen_market/DDL"
+if [ "$(column_type "audit_logs" "resource_version")" = "varchar(32)" ]; then
+  echo "[mysql-init] B007: resource_version already varchar(32), skip"
+else
+  run_sql "B007" "$INC7_DDL/audit_logs_resource_version_32.sql"
 fi
 
 if [ "$SKIPPED" -gt 0 ]; then

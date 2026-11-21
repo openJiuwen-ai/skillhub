@@ -101,6 +101,12 @@ agentichub publish my-swarm-skill \
 
 若被识别成专家，检查 `package_type` 是不是 `agent_group`。
 
+## 应用
+
+发布类型选「应用」。上传标准市场包装包（外层 `plugin.yaml` + 同名内层应用目录），服务端不会自动补 `plugin.yaml`，也不支持在表单中改写包内元数据；需要修改请重新打包。内层必须有 `index.html`，可选 `README.md`、`assets/`、`scripts/app_server.py`。发布请求体上限 512 MiB（含 multipart 开销），应用源文件总量上限 512 MiB，单文件上限 64 MiB。字段与包格式见 [应用](../5.%20开发指南/Agent资产.md#应用)。通过后出现在市场「应用」页签，JiuwenSwarm 用户可在应用市场的「市场」页签安装运行。
+
+若提示包内缺少 `plugin.yaml`，说明上传的是裸应用目录 zip；请先用 CLI `agentichub plugin pack` 或手工补齐外层包装。
+
 ## 相关文档
 
 - [场景化指引与 FAQ](./场景化指引与FAQ.md)

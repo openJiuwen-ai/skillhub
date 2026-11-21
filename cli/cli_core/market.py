@@ -41,7 +41,7 @@ MARKET_HTTP_LONG_TRANSFER_TIMEOUT_SEC = 600
 SKILL_LIKE_PLUGIN_TYPES = frozenset({"skill", "swarmskill"})
 # 列表接口在未传 plugin_type 时只返回 skill/swarmskill。按 asset_id 精确查询要带上全部资产类型。
 _MARKET_LIST_ALL_PLUGIN_TYPES = (
-    "skill,swarmskill,agent-plugin,agent-mcp,agent-template,agent-group,system-plugin"
+    "skill,swarmskill,agent-plugin,agent-mcp,agent-template,agent-group,system-plugin,app"
 )
 
 
@@ -104,7 +104,8 @@ def _market_translate_message_for_cli(msg: str) -> str:
         rt = m_runtime.group(1)
         return (
             f"Unsupported runtime.type '{rt}'. "
-            "Supported values: skill, swarmskill, agent-plugin, agent-mcp, agent-template, agent-group, system-plugin."
+            "Supported values: skill, swarmskill, agent-plugin, agent-mcp, agent-template, "
+            "agent-group, system-plugin, app."
         )
 
     if "invalid or expired access token" in lower:

@@ -78,6 +78,7 @@ from plugins_market.validation.constants import (
     RUNTIME_AGENT_MCP,
     RUNTIME_AGENT_PLUGIN,
     RUNTIME_AGENT_TEMPLATE,
+    RUNTIME_APP,
     RUNTIME_SYSTEM_PLUGIN,
     ZIP_STREAM_READ_CHUNK_BYTES,
 )
@@ -152,6 +153,7 @@ def _asset_audit_resource_type(plugin_type: str | None) -> str:
         RUNTIME_AGENT_TEMPLATE: ResourceType.AGENT_TEMPLATE,
         RUNTIME_AGENT_MCP: ResourceType.AGENT_MCP,
         RUNTIME_SYSTEM_PLUGIN: ResourceType.SYSTEM_PLUGIN,
+        RUNTIME_APP: ResourceType.APP,
     }.get((plugin_type or "").strip().lower(), ResourceType.PLUGIN)
 
 
@@ -657,6 +659,8 @@ async def publish_plugin(
         )
         _log_operation_started("plugin publish", filename=form.file.filename)
         try:
+            if form.file.size is not None and form.file.size > MAX_FILE_SIZE:
+                raise PublishError(code=413, error="file_too_large", message="文件大小超过限制（最大512MB）")
             content = await form.file.read()
             result = await asyncio.to_thread(
                 plugin_publish,

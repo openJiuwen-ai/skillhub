@@ -31,6 +31,12 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        location ~ ^/hub/api/v1/plugins/?$ {
+            client_max_body_size 512M;
+            rewrite ^/hub(/api.*)$ $1 break;
+            proxy_pass http://backend;
+        }
     }
 
     # 前端 SPA 挂载在 /hub（无尾斜杠主页）；静态产物位于 root/hub/（见 docker/Dockerfile.skillhub-frontend）
@@ -59,6 +65,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        location ~ ^/api/v1/plugins/?$ {
+            client_max_body_size 512M;
+            proxy_pass http://backend;
+        }
     }
 
     location /health {
