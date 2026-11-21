@@ -32,9 +32,12 @@ class ViewerContext:
     is_system_admin: bool
     """X-System-Token 校验通过。"""
 
+    user_provider: str = "gitcode"
+    """OAuth identity provider; used to scope username-based privileges."""
+
     @property
     def is_market_moderation_admin(self) -> bool:
-        return self.is_system_admin or is_market_moderation_username(self.user_login)
+        return self.is_system_admin or is_market_moderation_username(self.user_login, self.user_provider)
 
     @property
     def can_see_all_skill_moderation_states(self) -> bool:

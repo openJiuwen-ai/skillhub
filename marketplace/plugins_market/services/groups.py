@@ -902,7 +902,10 @@ def list_group_grants_service(
     if safe_status != GRANT_STATUS_ACTIVE and not access.can_manage:
         safe_status = GRANT_STATUS_ACTIVE
     viewer = ViewerContext(
-        user_id=auth.acting_user_id, user_login=auth.acting_user_name, is_system_admin=access.is_privileged
+        user_id=auth.acting_user_id,
+        user_login=auth.acting_user_name,
+        is_system_admin=access.is_privileged,
+        user_provider=auth.acting_user_provider,
     )
     grant_repo = MarketGroupSkillGrantRepository(db)
     if safe_status == GRANT_STATUS_ACTIVE:
@@ -951,7 +954,10 @@ def list_my_group_skills_service(
     safe_page = _page(page)
     safe_size = _page_size(page_size)
     viewer = ViewerContext(
-        user_id=auth.acting_user_id, user_login=auth.acting_user_name, is_system_admin=_is_privileged(auth)
+        user_id=auth.acting_user_id,
+        user_login=auth.acting_user_name,
+        is_system_admin=_is_privileged(auth),
+        user_provider=auth.acting_user_provider,
     )
     grant_rows, total = MarketGroupSkillGrantRepository(db).list_grants_for_user(
         user_id=auth.acting_user_id,

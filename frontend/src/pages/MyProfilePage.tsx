@@ -395,8 +395,7 @@ export default function MyProfilePage() {
   }
 
   const handleLogout = () => {
-    logout()
-    navigate('/', { replace: true })
+    if (!logout()) navigate('/', { replace: true })
   }
 
   const { openPublish } = usePublishDrawer()
