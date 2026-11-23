@@ -3626,13 +3626,19 @@ def _load_app_package_metadata(
     """
     if (asset.plugin_type or "").strip().lower() != RUNTIME_APP:
         return None
-    key = _build_artifact_key(
+    # The object key embeds the *current* asset name, but a version published
+    # before a rename still lives under its old name. Resolve through the
+    # version's file_path prefix (which does not carry the name) before giving
+    # up, otherwise the detail page silently loses every app field for old
+    # versions. This mirrors the download path in ``get_download_info``.
+    fallback_key = _build_artifact_key(
         publisher_id=asset.publisher_id,
         asset_id=asset.asset_id,
         version=version_row.version,
         name=asset.name,
         plugin_type=asset.plugin_type,
     )
+    key = _resolve_artifact_key_from_version_row(storage, version_row, fallback_key)
     head = storage.head_object(key)
     if not head.get("success"):
         return None
