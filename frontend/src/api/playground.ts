@@ -101,6 +101,7 @@ export async function endPlaygroundSession(sessionId: string): Promise<void> {
 }
 
 export interface SiteConfig {
+  identity_extensions?: import('@/identity_extensions/providers').IdentityExtension[]
   playground_enabled: boolean
   github_star_enabled: boolean
   gitcode_oauth_enabled: boolean

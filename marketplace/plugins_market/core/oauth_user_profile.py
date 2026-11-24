@@ -50,6 +50,18 @@ async def _fetch_agentos_profile(access_token: str) -> dict[str, Any] | None:
 
 
 async def fetch_oauth_user_profile(provider: str, access_token: str) -> dict[str, Any] | None:
+    # Built-in providers never initialize or consult the extension layer.
+    if provider not in ("gitcode", "github", "agentos"):
+        from plugins_market.identity_extensions.contracts import IdentityError, validate_profile
+        from plugins_market.identity_extensions.registry import get_runtime_registry
+
+        extension = get_runtime_registry().get(provider)
+        if extension is not None:
+            try:
+                profile = await extension.adapter.fetch_profile(access_token)
+                return validate_profile(profile, system_user=settings.system_admin_user) if profile else None
+            except IdentityError:
+                return None
     if provider == "agentos":
         return await _fetch_agentos_profile(access_token)
     if provider == "github":

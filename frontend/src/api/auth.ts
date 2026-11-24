@@ -3,6 +3,8 @@
 import axios from 'axios'
 import { API_CONFIG } from './config'
 import type { OAuthProvider, OAuthUser } from '@/auth/gitcodeStorage'
+import { isExtensionProvider } from '@/identity_extensions/providers'
+import { exchangeExtensionSession, getExtensionStartUrl } from '@/identity_extensions/api'
 
 /** 避免 StrictMode 下重复兑换；统一支持 gitcode / github */
 export const OAUTH_PENDING_KEY = '__marketplace_oauth_pending'
@@ -27,6 +29,7 @@ export function stringifyOAuthPending(payload: OAuthPendingPayload): string {
 export function parseOAuthPending(raw: string): OAuthPendingPayload | null {
   try {
     const d = JSON.parse(raw) as OAuthPendingPayload
+    if (d && isExtensionProvider(d.provider)) return d.session ? d : null
     if (!d || (d.provider !== 'gitcode' && d.provider !== 'github' && d.provider !== 'agentos') || !d.session) {
       return null
     }
@@ -37,11 +40,13 @@ export function parseOAuthPending(raw: string): OAuthPendingPayload | null {
 }
 
 export function getOAuthStartUrl(provider: OAuthProvider): string {
+  if (isExtensionProvider(provider)) return getExtensionStartUrl(provider)
   const base = (API_CONFIG.BASE_URL || '/api/v1').replace(/\/$/, '')
   return `${base}/auth/oauth/${provider}/start`
 }
 
 export async function exchangeOAuthSession(provider: OAuthProvider, sessionId: string): Promise<OAuthSessionData> {
+  if (isExtensionProvider(provider)) return exchangeExtensionSession(provider, sessionId)
   const base = (API_CONFIG.BASE_URL || '/api/v1').replace(/\/$/, '')
   const url = `${base}/auth/oauth/${provider}/session`
   const { data } = await axios.post<{ code: number; message: string; data: OAuthSessionData }>(

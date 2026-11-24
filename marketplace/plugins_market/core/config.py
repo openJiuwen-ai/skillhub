@@ -50,6 +50,9 @@ class Settings(BaseSettings):
 
     db_url: str = ""
 
+    # Optional YAML file for additional identity providers; built-in OAuth is unchanged.
+    identity_extensions_config: str = ""
+
     # Skill 审核管理员：env 中逗号分隔或 JSON 数组（如 ["a","b"]），须为 str 以便 pydantic-settings 不作 JSON 预解析
     review_admin_usernames: str = Field(
         default="",

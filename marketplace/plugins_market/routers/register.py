@@ -17,6 +17,12 @@ from plugins_market.routers.site_public import router as site_public_router
 def router_register(app: FastAPI) -> None:
     """注册所有路由。"""
 
+    from plugins_market.identity_extensions.registry import get_runtime_registry
+    from plugins_market.identity_extensions.router import router as identity_extensions_router
+
+    get_runtime_registry()  # Extension failures must not prevent built-in OAuth startup.
+    app.include_router(identity_extensions_router, prefix="/api/v1")
+
     app.include_router(plugin_routers.router, prefix="/api/v1")
     app.include_router(interaction_router, prefix="/api/v1")
     app.include_router(groups_router, prefix="/api/v1")

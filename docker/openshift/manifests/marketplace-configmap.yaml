@@ -26,6 +26,8 @@ data:
   SYSTEM_ADMIN_USER: "system_admin"        # 系统令牌请求的用户标识，令牌本身放 Secret。
   MARKET_GITCODE_OAUTH_ENABLED: "false"   # 回调、Client ID/Secret 配齐后改 true。
   MARKET_GITHUB_OAUTH_ENABLED: "false"    # 本轮不用 GitHub 登录。
+  MARKET_IDENTITY_EXTENSIONS_ENABLED: "false"  # 挂载适配器 YAML 并通过 Secret 注入客户端密钥后改 true。
+  MARKET_IDENTITY_EXTENSIONS_CONFIG: ""   # 填写 YAML 在后端容器内的绝对路径。
   MARKET_REVIEW_ADMIN_USERNAMES: "REPLACE_WITH_REVIEWER_GITCODE_LOGIN" # 与 GitCode login 精确匹配。
   MARKET_SKILL_REVIEW_ENABLED: "false"    # 关闭 AI 审查，人工审核仍可用。
   PLAYGROUND_ENABLED: "false"             # 本轮不部署 Runner/Worker。
