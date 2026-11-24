@@ -741,8 +741,9 @@ def test_broken_extension_config_does_not_break_builtin_routes(
 
 
 @pytest.fixture
-def oidc_app(tmp_path, monkeypatch):
+def oidc_app(tmp_path, monkeypatch, request):
     issuer = "https://sso.example.test/realms/company"
+    configured_issuer = issuer + getattr(request, "param", "")
     monkeypatch.setenv("TEST_IDENTITY_SECRET", "test-client-secret")
     monkeypatch.setenv("TEST_IDENTITY_EXTENSIONS_ENABLED", "true")
     monkeypatch.setattr(settings, "review_admin_usernames", "reviewer01")
@@ -756,7 +757,7 @@ def oidc_app(tmp_path, monkeypatch):
                         "adapter": "keycloak",
                         "display_name": "Enterprise",
                         "settings": {
-                            "issuer": issuer,
+                            "issuer": configured_issuer,
                             "client_id": "skillhub",
                             "client_secret_env": "TEST_IDENTITY_SECRET",
                             "redirect_uri": (
@@ -784,7 +785,7 @@ def oidc_app(tmp_path, monkeypatch):
             return httpx.Response(
                 200,
                 json={
-                    "issuer": issuer,
+                    "issuer": state.get("metadata_issuer", issuer),
                     "authorization_endpoint": f"{issuer}/auth",
                     "token_endpoint": f"{issuer}/token",
                     "userinfo_endpoint": f"{issuer}/userinfo",
@@ -820,7 +821,7 @@ def oidc_app(tmp_path, monkeypatch):
             assert request.headers["authorization"].startswith("Basic ")
             now = int(time.time())
             claims = {
-                "iss": issuer,
+                "iss": state.get("token_issuer", issuer),
                 "sub": "keycloak-user",
                 "aud": "skillhub",
                 "iat": now,
@@ -1547,6 +1548,7 @@ def test_extension_validation_logs_do_not_include_rejected_request_body(
     assert "private-token" not in str(log.mock_calls)
 
 
+@pytest.mark.parametrize("oidc_app", ["", "/"], indirect=True)
 @pytest.mark.parametrize(
     "fault", [None, "mixed-jwks", "valid-azp", "multi-audience-valid-azp"]
 )
@@ -1555,6 +1557,9 @@ def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
     state["fault"] = fault
     with TestClient(app, base_url="https://hub.example.test") as client:
         login_state = begin(client, state)
+        assert str(state["requests"][0].url) == (
+            "https://sso.example.test/realms/company/.well-known/openid-configuration"
+        )
         response = finish(client, login_state)
         query = parse_qs(urlsplit(response.headers["location"]).query)
         assert query["oauth_provider"] == ["enterprise"]
@@ -1593,6 +1598,37 @@ def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
         }
         state["fault"] = "invalid-token"
         assert client.get("/business", headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("oidc_app", ["", "/"], indirect=True)
+@pytest.mark.parametrize("issuer_field", ["metadata_issuer", "token_issuer"])
+@pytest.mark.parametrize(
+    "untrusted_issuer",
+    [
+        "https://other.example.test/realms/company",
+        "https://sso.example.test/realms/other",
+        "https://sso.example.test/realms/company/",
+    ],
+)
+def test_oidc_issuer_normalization_preserves_exact_server_validation(
+    oidc_app, issuer_field, untrusted_issuer
+):
+    app, state, _ = oidc_app
+    state[issuer_field] = untrusted_issuer
+    with TestClient(app, base_url="https://hub.example.test") as client:
+        if issuer_field == "metadata_issuer":
+            response = client.get(
+                "/api/v1/auth/oauth/enterprise/start", follow_redirects=False
+            )
+            assert response.status_code == 502
+            assert len(state["requests"]) == 1
+        else:
+            response = finish(client, begin(client, state))
+            assert response.status_code == 302
+            query = parse_qs(urlsplit(response.headers["location"]).query)
+            assert "oauth_error" in query
+            assert "oauth_session" not in query
+            assert len(state["requests"]) == 3
 
 
 @pytest.mark.parametrize(
@@ -1667,6 +1703,9 @@ def test_browser_binding_loopback_and_expiry(oidc_app, monkeypatch):
         {"issuer": "https://@sso.test"},
         {"issuer": "https://sso.test#fragment"},
         {"issuer": "https://sso.test?query=value"},
+        {"issuer": "https://sso.test/realms/company/?query=value"},
+        {"issuer": "https://sso.test/realms/company/#fragment"},
+        {"issuer": "https://user:password@sso.test/realms/company/"},
         {"redirect_uri": "http://hub.test/cb"},
         {"redirect_uri": "https://hub.test/cb#fragment"},
     ],
@@ -1685,14 +1724,28 @@ def test_oidc_configuration_rejects_invalid_protocol_settings(change):
 
 
 @pytest.mark.parametrize(
-    ("allow_insecure_http", "issuer"),
+    ("allow_insecure_http", "issuer", "expected_issuer"),
     [
-        (False, "https://sso.test"),
-        (True, "https://sso.test"),
-        (True, "http://sso.test"),
+        (False, "https://sso.test", "https://sso.test"),
+        (True, "https://sso.test", "https://sso.test"),
+        (True, "http://sso.test", "http://sso.test"),
+        (False, "https://sso.test/", "https://sso.test"),
+        (
+            False,
+            "https://sso.test/realms/company/",
+            "https://sso.test/realms/company",
+        ),
+        (
+            False,
+            "https://sso.test/realms/company///",
+            "https://sso.test/realms/company",
+        ),
+        (True, "http://sso.test/realms/company/", "http://sso.test/realms/company"),
     ],
 )
-def test_oidc_configuration_accepts_trusted_urls(allow_insecure_http, issuer):
+def test_oidc_configuration_accepts_trusted_urls(
+    allow_insecure_http, issuer, expected_issuer
+):
     config = KeycloakConfig.model_validate(
         {
             "issuer": issuer,
@@ -1702,7 +1755,7 @@ def test_oidc_configuration_accepts_trusted_urls(allow_insecure_http, issuer):
             "allow_insecure_http": allow_insecure_http,
         }
     )
-    assert config.issuer == issuer
+    assert config.issuer == expected_issuer
 
 
 def test_extension_identity_reaches_existing_publish_and_moderation_services(

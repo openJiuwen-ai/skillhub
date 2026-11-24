@@ -70,7 +70,7 @@ providers:
 
 - `enabled: true` 开启当前渠道，还须打开后端的框架总开关 `MARKET_IDENTITY_EXTENSIONS_ENABLED`，渠道才会生效。总开关默认 `false`，关闭时所有扩展渠道均不可用。需要独立控制该渠道时，可用 `enabled_env: ENTERPRISE_LOGIN_ENABLED` 替换此行，并同时将总开关与 `ENTERPRISE_LOGIN_ENABLED` 设为 `true`。原来的 `enabled_env: MARKET_IDENTITY_EXTENSIONS_ENABLED` 写法继续兼容。
 - `display_name` 是登录页的按钮文字。`enterprise` 是 Skillhub 渠道 ID。更改渠道 ID 时，同步更新两边回调地址中的对应路径段。
-- `issuer` 是 Realm 的标识。适配器会访问它下面的 `/.well-known/openid-configuration`，自动取得授权、Token、UserInfo 和 JWKS 地址。Discovery 返回的 `issuer` 必须与配置值一致。 [Keycloak OIDC 端点](https://www.keycloak.org/securing-apps/oidc-layers)
+- `issuer` 是 Realm 的标识。Keycloak 插件会在加载配置时去掉其尾部斜杠，例如 `https://sso.example.com/realms/company/` 会统一为 `https://sso.example.com/realms/company`。适配器会访问它下面的 `/.well-known/openid-configuration`，自动取得授权、Token、UserInfo 和 JWKS 地址。Discovery 返回的 `issuer` 和 ID Token 的 `iss` 必须与处理后的配置值完全一致；服务端返回值不会去掉斜杠或放宽比较。推荐直接填写 Discovery 响应中的 `issuer`，本例不带尾斜杠。 [Keycloak OIDC 端点](https://www.keycloak.org/securing-apps/oidc-layers)
 - `redirect_uri` 是 Keycloak 登录后让浏览器访问的 Skillhub 后端回调地址。客户端的 **Valid redirect URIs** 要包含同一个 URL。
 - `client_secret_env` 只填环境变量名。`client_secret_basic` 指 Skillhub 后端在兑换授权码时，用客户端 ID 和密钥进行 HTTP Basic 客户端认证。
 - 需要每次点击登录都重新显示 Keycloak 认证页面时，在 `settings` 下增加 `prompt: login`。Skillhub 退出后，Keycloak 的浏览器单点登录会话可能继续有效。启用此项后，再次登录将要求重新认证，可在认证页切换用户。
@@ -153,7 +153,7 @@ kubectl -n skillhub rollout status deployment/skillhub-backend
 
 配置应用后，先检查三个位置。
 
-1. 从后端 Pod 的终端访问 `https://sso.example.com/realms/company/.well-known/openid-configuration`，确认返回的 `issuer` 与 YAML 一致，且后端可访问响应中的 Token、UserInfo 和 JWKS 地址。
+1. 从后端 Pod 的终端访问 `https://sso.example.com/realms/company/.well-known/openid-configuration`，确认返回的 `issuer` 与 YAML 中去掉尾部斜杠后的值完全一致，且后端可访问响应中的 Token、UserInfo 和 JWKS 地址。
 2. 在浏览器打开 `https://hub.example.com/api/v1/site/config`，确认 `identity_extensions` 中包含 `id: enterprise`、`adapter: keycloak` 和 `display_name: 企业账号登录`。
 3. 如果渠道为空，检查后端 Pod 日志、ConfigMap 的开关和文件路径、Secret 的键名以及实际挂载。修正后滚动更新后端。
 

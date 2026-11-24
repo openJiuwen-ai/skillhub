@@ -43,6 +43,8 @@ class KeycloakConfig(BaseModel):
         self.validate_url(self.redirect_uri)
         if urlsplit(self.issuer).query:
             raise ValueError("OIDC issuer must not contain a query")
+        # Normalize only the configured Keycloak issuer; server issuers stay exact.
+        self.issuer = self.issuer.rstrip("/")
         if "openid" not in self.scopes:
             raise ValueError("OIDC scopes must include openid")
         allowed = {
