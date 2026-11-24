@@ -44,13 +44,9 @@ def isolated_registry(monkeypatch):
     monkeypatch.setattr(http_error_logging, "audit_failed_mutation", lambda *args, **kwargs: None)
     # Extension scenarios opt in explicitly; individual tests exercise the off state.
     monkeypatch.setattr(settings, "identity_extensions_enabled", True)
-    strict_loader = registry._load_registry
-    runtime_loader = registry._load_runtime_registry
-    strict_loader.cache_clear()
-    runtime_loader.cache_clear()
+    registry.clear_registry_caches()
     yield
-    strict_loader.cache_clear()
-    runtime_loader.cache_clear()
+    registry.clear_registry_caches()
 
 
 @pytest.mark.parametrize(
@@ -88,8 +84,6 @@ def test_global_off_skips_configuration_discovery_and_plugin_import(
         assert registry.get_registry().get("enterprise") is None
         assert registry.get_runtime_registry().public_providers() == []
     forbidden.assert_not_called()
-    assert registry._load_registry.cache_info().misses == 0
-    assert registry._load_runtime_registry.cache_info().misses == 0
 
 
 @pytest.mark.parametrize("global_enabled", [False, True])
@@ -134,6 +128,12 @@ def test_global_and_channel_switches_are_both_required(
     assert bool(runtime.public_providers()) is expected
     assert runtime is strict
     assert factory.call_count == int(expected)
+    if not global_enabled:
+        # The off state must not cache an empty result that prevents later opt-in.
+        monkeypatch.setattr(settings, "identity_extensions_enabled", True)
+        assert (registry.get_registry().get("enterprise") is not None) is channel_enabled
+        assert bool(registry.get_runtime_registry().public_providers()) is channel_enabled
+        assert factory.call_count == int(channel_enabled)
 
 
 @pytest.mark.parametrize("extensions_enabled", [False, True])
@@ -550,6 +550,7 @@ def test_builtin_profile_dispatch_is_unchanged(provider, monkeypatch, extensions
 @pytest.mark.parametrize("provider", ["github", "gitcode", "agentos"])
 def test_builtin_auth_never_reads_extension_registry(provider, monkeypatch, extensions_enabled):
     monkeypatch.setattr(settings, "identity_extensions_enabled", extensions_enabled)
+
     def forbidden():
         raise AssertionError("Built-in OAuth must not consult extension configuration")
 
@@ -587,6 +588,7 @@ def test_builtin_auth_never_reads_extension_registry(provider, monkeypatch, exte
 @pytest.mark.parametrize("provider", ["github", "gitcode", "agentos"])
 def test_builtin_full_oauth_contract_stays_compatible(provider, monkeypatch, extensions_enabled):
     monkeypatch.setattr(settings, "identity_extensions_enabled", extensions_enabled)
+
     def forbidden():
         raise AssertionError("Built-in login must not load identity extensions")
 
@@ -1027,11 +1029,15 @@ def test_global_off_blocks_cached_providers_pending_login_and_existing_token(
 
     app, state, store = oidc_app
     app.include_router(plugin.router, prefix="/api/v1")
+
+    def no_io_dependency():
+        return None
+
     # Keep real publish/moderation authentication; bypass only local I/O dependencies.
-    app.dependency_overrides[plugin.build_publish_form] = lambda: None
-    app.dependency_overrides[plugin.get_publish_plugin_dependencies] = lambda: None
-    app.dependency_overrides[plugin.get_db] = lambda: None
-    app.dependency_overrides[plugin.get_storage_client] = lambda: None
+    app.dependency_overrides[plugin.build_publish_form] = no_io_dependency
+    app.dependency_overrides[plugin.get_publish_plugin_dependencies] = no_io_dependency
+    app.dependency_overrides[plugin.get_db] = no_io_dependency
+    app.dependency_overrides[plugin.get_storage_client] = no_io_dependency
     publish = Mock(side_effect=AssertionError("Disabled user reached publishing"))
     moderate = Mock(side_effect=AssertionError("Disabled user reached moderation"))
     monkeypatch.setattr(plugin, "plugin_publish", publish)
@@ -1212,12 +1218,13 @@ def identity_operation_logs(oidc_app, monkeypatch):
 
 def _completion_for_response(log, response):
     request_id = response.headers["x-request-id"]
-    completions = [
-        call.kwargs
-        for call in log.method_calls
-        if call.kwargs.get("stage") == "complete"
-        and call.kwargs.get("request_id") == request_id
-    ]
+    completions = []
+    for call in log.method_calls:
+        record = call.kwargs
+        is_completion = record.get("stage") == "complete"
+        matches_request = record.get("request_id") == request_id
+        if is_completion and matches_request:
+            completions.append(record)
     assert len(completions) == 1
     fields = completions[0]
     assert fields["operation_id"].startswith("op_")
@@ -1430,12 +1437,14 @@ def test_plugin_exceptions_are_safe_and_have_one_operation_completion(
             request=httpx.Request("GET", "https://sso.test/?token=private-token"),
         ),
     }
+    error = errors.get(error_kind)
+    assert error is not None
     with TestClient(app, base_url="https://hub.example.test") as client:
         login_state = (
             begin(client, state) if method == "complete_authorization" else None
         )
         monkeypatch.setattr(
-            provider.adapter, method, AsyncMock(side_effect=errors[error_kind])
+            provider.adapter, method, AsyncMock(side_effect=error)
         )
         if method == "start_authorization":
             response = client.get(

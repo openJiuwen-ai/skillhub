@@ -165,6 +165,12 @@ class IdentityRegistry:
 _EMPTY_REGISTRY = IdentityRegistry({})
 
 
+def clear_registry_caches() -> None:
+    """Reset plugin initialization caches for isolated validation and tests."""
+    _load_runtime_registry.cache_clear()
+    _load_registry.cache_clear()
+
+
 def get_registry() -> IdentityRegistry:
     """Apply the global gate and strictly validate the cached initialization."""
     if not settings.identity_extensions_enabled:
