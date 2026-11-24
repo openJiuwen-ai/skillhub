@@ -15,6 +15,8 @@ import {
 } from '@/api/auth'
 import { useGitCodeAuth } from '@/auth/GitCodeAuthContext'
 import type { OAuthProvider } from '@/auth/gitcodeStorage'
+import { resolveExtensionCallbackProvider, type IdentityExtension } from '@/identity_extensions/providers'
+import { ExtensionLoginButtons } from '@/identity_extensions/LoginButtons'
 import { getSiteConfig } from '@/api/playground'
 import { POST_LOGIN_REDIRECT_KEY, sanitizePostLoginPath } from '@/auth/postLoginRedirect'
 import { AppHeader } from '@/components/Common/AppHeader'
@@ -33,6 +35,7 @@ export default function LoginPage() {
   const [gitcodeOAuthEnabled, setGitcodeOAuthEnabled] = useState(false)
   const [githubOAuthEnabled, setGithubOAuthEnabled] = useState(false)
   const [agentosOAuthEnabled, setAgentosOAuthEnabled] = useState(false)
+  const [identityExtensions, setIdentityExtensions] = useState<IdentityExtension[]>([])
 
   // 是否从标星按钮跳来：从 URL 参数同步读取，惰性初始化避免闪烁
   const [fromStar, setFromStar] = useState(() => searchParams.get('from') === 'star')
@@ -43,6 +46,7 @@ export default function LoginPage() {
         setGitcodeOAuthEnabled(Boolean(cfg.gitcode_oauth_enabled))
         setGithubOAuthEnabled(Boolean(cfg.github_oauth_enabled))
         setAgentosOAuthEnabled(Boolean(cfg.agentos_oauth_enabled))
+        setIdentityExtensions(cfg.identity_extensions || [])
       })
       .catch(() => { /* 获取失败按未启用处理 */ })
   }, [])
@@ -78,6 +82,14 @@ export default function LoginPage() {
     const fromUrl = searchParams.get('oauth_session')
     if (fromUrl) {
       const providerFromUrl = (searchParams.get('oauth_provider') || '').trim().toLowerCase()
+      const extensionProvider = resolveExtensionCallbackProvider(
+        providerFromUrl, sessionStorage.getItem(OAUTH_ACTIVE_PROVIDER_KEY),
+      )
+      if (extensionProvider) {
+        sessionStorage.setItem(OAUTH_PENDING_KEY, stringifyOAuthPending({ provider: extensionProvider, session: fromUrl }))
+        navigate('/login', { replace: true })
+        return
+      }
       const provider =
         providerFromUrl === 'github' || providerFromUrl === 'gitcode' || providerFromUrl === 'agentos'
           ? providerFromUrl
@@ -231,7 +243,8 @@ export default function LoginPage() {
               <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
             </button>
             ) : null}
-            {!fromStar && !gitcodeOAuthEnabled && !githubOAuthEnabled && !agentosOAuthEnabled ? (
+            {!fromStar && <ExtensionLoginButtons providers={identityExtensions} disabled={exchanging} onLogin={startOAuth} />}
+            {!fromStar && !gitcodeOAuthEnabled && !githubOAuthEnabled && !agentosOAuthEnabled && identityExtensions.length === 0 ? (
               <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200/80 bg-red-50/80 px-3 py-2.5 text-sm text-red-800">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden />
                 <span className="leading-relaxed">{t('auth.login.noProviderError')}</span>

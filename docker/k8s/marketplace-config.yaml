@@ -38,6 +38,10 @@ data:
   MARKET_GITHUB_OAUTH_REDIRECT_URI: "http://skillhub.local:9002/api/v1/auth/oauth/github/callback"
   MARKET_OAUTH_FRONTEND_ORIGIN: "http://skillhub.local:9002"
 
+  # 第三方账号扩展：挂载适配器 YAML 并通过 Secret 注入客户端密钥后，改为 true。
+  MARKET_IDENTITY_EXTENSIONS_ENABLED: "false"
+  MARKET_IDENTITY_EXTENSIONS_CONFIG: ""  # 填写 YAML 在后端容器内的绝对路径。
+
   # 审核管理员（部署时按环境填写实际管理员用户名，多个用逗号分隔）
   MARKET_REVIEW_ADMIN_USERNAMES: ""
 
