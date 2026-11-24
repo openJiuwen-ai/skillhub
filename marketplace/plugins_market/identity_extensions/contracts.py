@@ -22,13 +22,16 @@ class LoginResult:
 
 
 class IdentityAdapter(Protocol):
-    async def start_authorization(self, *, state: str) -> AuthorizationStart: ...
+    async def start_authorization(self, *, state: str) -> AuthorizationStart:
+        ...
 
     async def complete_authorization(
         self, *, callback_params: dict[str, str], transaction: dict[str, Any]
-    ) -> LoginResult: ...
+    ) -> LoginResult:
+        ...
 
-    async def fetch_profile(self, access_token: str) -> dict[str, Any] | None: ...
+    async def fetch_profile(self, access_token: str) -> dict[str, Any] | None:
+        ...
 
 
 def validate_profile(profile: dict[str, Any], *, system_user: str) -> dict[str, Any]:

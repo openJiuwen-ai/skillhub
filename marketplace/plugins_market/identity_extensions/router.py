@@ -51,7 +51,7 @@ def _cookie_name(state: str) -> str:
 
 
 def _redirect(params: dict[str, str], target: str | None = None) -> RedirectResponse:
-    destination = target or settings.oauth_frontend_origin.rstrip("/") + "/login"
+    destination = target or f"{settings.oauth_frontend_origin.rstrip('/')}/login"
     return RedirectResponse(
         _append_query_params(destination, params),
         status_code=302,

@@ -26,11 +26,11 @@ class KeycloakConfig(BaseModel):
 
     def validate_url(self, value: str) -> str:
         parts = urlsplit(value)
+        schemes = {"https", "http"} if self.allow_insecure_http else {"https"}
+        if parts.scheme not in schemes or not parts.hostname:
+            raise ValueError("OIDC URLs must be trusted HTTPS URLs")
         if (
-            parts.scheme
-            not in ({"https", "http"} if self.allow_insecure_http else {"https"})
-            or not parts.hostname
-            or parts.username is not None
+            parts.username is not None
             or parts.password is not None
             or parts.fragment
         ):

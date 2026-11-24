@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import time
+from types import SimpleNamespace
 from typing import Annotated
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
@@ -13,10 +14,11 @@ import httpx
 import jwt
 import plugins_market.identity_extensions as extension_packages
 import pytest
+import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from plugins_market.core import oauth_user_profile
+from plugins_market.core import oauth_session_store, oauth_user_profile
 from plugins_market.core.auth import (
     AuthContext,
     normalize_oauth_provider_header,
@@ -126,6 +128,29 @@ def test_invalid_and_disabled_configuration(tmp_path, monkeypatch):
         registry.get_registry()
 
 
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ("providers: {}\nproviders: {}\n", ValueError),
+        (
+            "providers:\n  enterprise:\n    enabled: false\n    enabled: true\n",
+            ValueError,
+        ),
+        ("providers:\n  1: {}\n", ValueError),
+        ("providers: !!python/tuple []\n", yaml.constructor.ConstructorError),
+        ("providers: {}\n---\nproviders: {}\n", yaml.composer.ComposerError),
+    ],
+)
+def test_extension_yaml_rejects_ambiguous_or_unsafe_input(
+    tmp_path, monkeypatch, payload, error
+):
+    path = tmp_path / "extensions.yaml"
+    path.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(settings, "identity_extensions_config", str(path))
+    with pytest.raises(error):
+        registry.get_registry()
+
+
 @pytest.mark.parametrize("provider", ["github", "gitcode", "agentos"])
 def test_builtin_profile_dispatch_is_unchanged(provider, monkeypatch):
     monkeypatch.setattr(settings, "identity_extensions_config", "")
@@ -144,7 +169,11 @@ def test_builtin_profile_dispatch_is_unchanged(provider, monkeypatch):
         asyncio.run(oauth_user_profile.fetch_oauth_user_profile(provider, "old-token"))
         is expected
     )
-    mocks[functions[provider]].assert_awaited_once_with("old-token")
+    function_name = functions.get(provider)
+    assert function_name is not None
+    selected_mock = mocks.get(function_name)
+    assert selected_mock is not None
+    selected_mock.assert_awaited_once_with("old-token")
     assert sum(mock.await_count for mock in mocks.values()) == 1
     assert {p.value for p in OAuthProvider} == {"gitcode", "github", "agentos"}
     assert normalize_oauth_provider_header(None) == "gitcode"
@@ -163,7 +192,9 @@ def test_builtin_auth_never_reads_extension_registry(provider, monkeypatch):
         "agentos": "_fetch_agentos_profile",
     }
     original = AsyncMock(return_value=original_profile)
-    monkeypatch.setattr(oauth_user_profile, names[provider], original)
+    function_name = names.get(provider)
+    assert function_name is not None
+    monkeypatch.setattr(oauth_user_profile, function_name, original)
     assert normalize_oauth_provider_header(provider) == provider
     assert (
         asyncio.run(oauth_user_profile.fetch_oauth_user_profile(provider, "old-token"))
@@ -260,9 +291,9 @@ def oidc_app(tmp_path, monkeypatch):
                             "issuer": issuer,
                             "client_id": "skillhub",
                             "client_secret_env": "TEST_IDENTITY_SECRET",
-                            "redirect_uri": "https://hub.example.test/api/v1/auth/extensions/"
-                            + name
-                            + "/callback",
+                            "redirect_uri": (
+                                f"https://hub.example.test/api/v1/auth/extensions/{name}/callback"
+                            ),
                         },
                     }
                     for name in ("enterprise", "other")
@@ -286,16 +317,28 @@ def oidc_app(tmp_path, monkeypatch):
                 200,
                 json={
                     "issuer": issuer,
-                    "authorization_endpoint": issuer + "/auth",
-                    "token_endpoint": issuer + "/token",
-                    "userinfo_endpoint": issuer + "/userinfo",
-                    "jwks_uri": issuer + "/certs",
+                    "authorization_endpoint": f"{issuer}/auth",
+                    "token_endpoint": f"{issuer}/token",
+                    "userinfo_endpoint": f"{issuer}/userinfo",
+                    "jwks_uri": f"{issuer}/certs",
                 },
             )
         if request.url.path.endswith("/certs"):
             if state["fault"] == "jwks":
                 return httpx.Response(200, json={"keys": None})
-            return httpx.Response(200, json={"keys": [public]})
+            keys = [public]
+            if state["fault"] == "mixed-jwks":
+                keys = [
+                    None,
+                    "not-a-key",
+                    {**public, "kid": "other-key"},
+                    {**public, "use": "enc"},
+                    {**public, "alg": "RS512"},
+                    public,
+                ]
+            if state["fault"] == "duplicate-jwks":
+                keys = [public, public]
+            return httpx.Response(200, json={"keys": keys})
         if request.url.path.endswith("/token"):
             form = parse_qs(request.content.decode())
             challenge = (
@@ -329,7 +372,15 @@ def oidc_app(tmp_path, monkeypatch):
                 claims["exp"] = now - 120
             if fault == "subject":
                 claims["sub"] = "different-user"
-            if fault == "azp":
+            if fault in {
+                "multi-audience-missing-azp",
+                "multi-audience-valid-azp",
+                "multi-audience-wrong-azp",
+            }:
+                claims["aud"] = ["skillhub", "another-app"]
+            if fault in {"valid-azp", "multi-audience-valid-azp"}:
+                claims["azp"] = "skillhub"
+            if fault in {"azp", "multi-audience-wrong-azp"}:
                 claims["azp"] = "another-app"
             if fault == "hash":
                 claims["at_hash"] = "invalid"
@@ -393,7 +444,7 @@ def oidc_app(tmp_path, monkeypatch):
 
 def begin(client, state, query=""):
     response = client.get(
-        "/api/v1/auth/extensions/enterprise/start" + query, follow_redirects=False
+        f"/api/v1/auth/extensions/enterprise/start{query}", follow_redirects=False
     )
     assert response.status_code == 302
     params = parse_qs(urlsplit(response.headers["location"]).query)
@@ -423,8 +474,12 @@ def finish(client, login_state):
     )
 
 
-def test_oidc_login_session_and_existing_business_identity(oidc_app):
+@pytest.mark.parametrize(
+    "fault", [None, "mixed-jwks", "valid-azp", "multi-audience-valid-azp"]
+)
+def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
     app, state, _ = oidc_app
+    state["fault"] = fault
     with TestClient(app, base_url="https://hub.example.test") as client:
         login_state = begin(client, state)
         response = finish(client, login_state)
@@ -473,12 +528,15 @@ def test_oidc_login_session_and_existing_business_identity(oidc_app):
         "nonce",
         "unicode-nonce",
         "jwks",
+        "duplicate-jwks",
         "issuer",
         "audience",
         "signature",
         "expired",
         "subject",
         "azp",
+        "multi-audience-missing-azp",
+        "multi-audience-wrong-azp",
         "hash",
         "reserved-id",
     ],
@@ -492,8 +550,8 @@ def test_invalid_oidc_result_cannot_create_session(oidc_app, fault):
         assert "oauth_session" not in response.headers["location"]
 
 
-def test_browser_binding_loopback_and_expiry(oidc_app):
-    app, state, store = oidc_app
+def test_browser_binding_loopback_and_expiry(oidc_app, monkeypatch):
+    app, state, _ = oidc_app
     with TestClient(app, base_url="https://hub.example.test") as client:
         assert client.get("/api/v1/auth/extensions/missing/start").status_code == 404
         assert client.get("/api/v1/auth/extensions/github/start").status_code == 404
@@ -515,8 +573,12 @@ def test_browser_binding_loopback_and_expiry(oidc_app):
         parts = urlsplit(response.headers["location"])
         assert parts.hostname == "127.0.0.1"
         assert parse_qs(parts.query)["client_state"] == ["original"]
+        now = time.monotonic()
+        monkeypatch.setattr(
+            oauth_session_store, "time", SimpleNamespace(monotonic=lambda: now)
+        )
         expired = begin(client, state)
-        store.delete(extension_routes._key("state", "enterprise", expired))
+        now += 601  # State expires after 600 seconds, without a real-time wait.
         assert "oauth_error" in finish(client, expired).headers["location"]
 
 
@@ -526,6 +588,14 @@ def test_browser_binding_loopback_and_expiry(oidc_app):
         {"scopes": ["profile"]},
         {"algorithms": ["HS256"]},
         {"issuer": "http://untrusted.test"},
+        {"issuer": "https:///missing-host"},
+        {"issuer": "https://user@sso.test"},
+        {"issuer": "https://user:password@sso.test"},
+        {"issuer": "https://@sso.test"},
+        {"issuer": "https://sso.test#fragment"},
+        {"issuer": "https://sso.test?query=value"},
+        {"redirect_uri": "http://hub.test/cb"},
+        {"redirect_uri": "https://hub.test/cb#fragment"},
     ],
 )
 def test_oidc_configuration_rejects_invalid_protocol_settings(change):
@@ -539,6 +609,27 @@ def test_oidc_configuration_rejects_invalid_protocol_settings(change):
                 **change,
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("allow_insecure_http", "issuer"),
+    [
+        (False, "https://sso.test"),
+        (True, "https://sso.test"),
+        (True, "http://sso.test"),
+    ],
+)
+def test_oidc_configuration_accepts_trusted_urls(allow_insecure_http, issuer):
+    config = KeycloakConfig.model_validate(
+        {
+            "issuer": issuer,
+            "client_id": "hub",
+            "client_secret_env": "SECRET",
+            "redirect_uri": "https://hub.test/cb",
+            "allow_insecure_http": allow_insecure_http,
+        }
+    )
+    assert config.issuer == issuer
 
 
 def test_extension_identity_reaches_existing_publish_and_moderation_services(

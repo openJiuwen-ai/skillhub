@@ -95,12 +95,12 @@ class IdentityRegistry:
                 raise ValueError(f"Unknown identity adapter for {provider_id}")
             name = entry.get("display_name", provider_id)
             options = entry.get("settings", {})
-            if (
+            invalid_name = (
                 not isinstance(name, str)
                 or not name.strip()
                 or len(name) > 128
-                or not isinstance(options, dict)
-            ):
+            )
+            if invalid_name or not isinstance(options, dict):
                 raise ValueError(
                     f"Invalid identity provider configuration: {provider_id}"
                 )
@@ -139,7 +139,11 @@ def get_registry() -> IdentityRegistry:
         return IdentityRegistry({})
     path = Path(config_path).expanduser()
     with path.open(encoding="utf-8") as stream:
-        config = yaml.load(stream, Loader=_UniqueLoader)
+        loader = _UniqueLoader(stream)
+        try:
+            config = loader.get_single_data()
+        finally:
+            loader.dispose()
     return IdentityRegistry(config)
 
 

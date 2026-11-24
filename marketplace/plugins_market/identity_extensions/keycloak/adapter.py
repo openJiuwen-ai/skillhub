@@ -171,14 +171,17 @@ class KeycloakAdapter:
             candidates = jwks.get("keys")
             if not isinstance(candidates, list):
                 raise IdentityError("Invalid OIDC signing keys")
-            keys = [
-                k
-                for k in candidates
-                if isinstance(k, dict)
-                and k.get("kid") == header.get("kid")
-                and k.get("use", "sig") == "sig"
-                and k.get("alg", algorithm) == algorithm
-            ]
+            keys = []
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                if candidate.get("kid") != header.get("kid"):
+                    continue
+                if candidate.get("use", "sig") != "sig":
+                    continue
+                if candidate.get("alg", algorithm) != algorithm:
+                    continue
+                keys.append(candidate)
             if len(keys) != 1:
                 continue
             try:
@@ -203,9 +206,9 @@ class KeycloakAdapter:
         ):
             raise IdentityError("OIDC nonce mismatch")
         audience = claims["aud"]
-        if (
-            (isinstance(audience, list) and len(audience) > 1) or "azp" in claims
-        ) and claims.get("azp") != self.config.client_id:
+        multiple_audiences = isinstance(audience, list) and len(audience) > 1
+        requires_authorized_party = multiple_audiences or "azp" in claims
+        if requires_authorized_party and claims.get("azp") != self.config.client_id:
             raise IdentityError("OIDC authorized party mismatch")
         if "at_hash" in claims:
             digest = hashlib.new(
