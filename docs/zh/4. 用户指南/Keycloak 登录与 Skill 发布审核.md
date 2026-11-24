@@ -14,7 +14,7 @@
 | Keycloak Issuer | `https://sso.example.com/realms/company` |
 | OIDC 客户端 ID | `skillhub` |
 | Skillhub 渠道 ID | `enterprise` |
-| Skillhub 回调地址 | `https://hub.example.com/api/v1/auth/extensions/enterprise/callback` |
+| Skillhub 回调地址 | `https://hub.example.com/api/v1/auth/oauth/enterprise/callback` |
 | 发布者与审核员 | `publisher01`、`reviewer01` |
 
 浏览器需要能访问 Skillhub 和 Keycloak 的对外地址。Skillhub 后端需要能访问 Keycloak 的 Discovery、Token、UserInfo 和 JWKS 地址，并信任 Keycloak 的 HTTPS 证书。Skillhub 网关需要将回调请求转发给后端。
@@ -26,7 +26,7 @@
 1. 登录 Keycloak 管理控制台并切换到目标 Realm。如果需要新建业务 Realm，在 Realm 选择器中选择 **Create realm**，填入名称，例如 `company`，并保存。
 2. 进入 **Clients → Create client**。设置 **Client type** 为 `OpenID Connect`，**Client ID** 为 `skillhub`。如果客户端已存在，打开它，按后续步骤核对配置。
 3. 打开 **Client authentication** 和 **Standard flow**。本流程使用授权码模式，可以关闭 **Direct access grants**、**Implicit flow** 和 **Service accounts roles**。
-4. 在客户端的登录设置中，将第 1 节选定的完整回调地址填入 **Valid redirect URIs**，例如 `https://hub.example.com/api/v1/auth/extensions/enterprise/callback`。**Root URL** 和 **Home URL** 可以留空，或填写 Skillhub 前端入口。本流程可将 **Web origins** 留空。
+4. 在客户端的登录设置中，将第 1 节选定的完整回调地址填入 **Valid redirect URIs**，例如 `https://hub.example.com/api/v1/auth/oauth/enterprise/callback`。**Root URL** 和 **Home URL** 可以留空，或填写 Skillhub 前端入口。本流程可将 **Web origins** 留空。
 5. 保存客户端。在 **Advanced** 设置中确认 **PKCE method** 为 `S256`，并确认 **ID Token Signature Algorithm** 为 `RS256`，或继承使用 `RS256` 的 Realm 默认值。不同 Keycloak 版本可能将 PKCE 放在创建向导或高级设置中。
 6. 在 **Client scopes** 确认客户端可以请求 `profile` 和 `email`，并确认 UserInfo 能返回 `sub` 和 `preferred_username`。`name` 和 `picture` 可用于显示姓名和头像。定制过客户端映射时，检查用户名映射已启用 **Add to userinfo**。
 7. 在 **Credentials** 页确认 **Client Authenticator** 为 **Client Id and Secret**，把生成的 **Client Secret** 存入部署所用的密钥管理系统，供 Skillhub 后端读取。
@@ -52,14 +52,14 @@
 ```yaml
 providers:
   enterprise:
-    enabled_env: MARKET_IDENTITY_EXTENSIONS_ENABLED
+    enabled: true
     adapter: keycloak
     display_name: 企业账号登录
     settings:
       issuer: https://sso.example.com/realms/company
       client_id: skillhub
       client_secret_env: SKILLHUB_ENTERPRISE_SECRET
-      redirect_uri: https://hub.example.com/api/v1/auth/extensions/enterprise/callback
+      redirect_uri: https://hub.example.com/api/v1/auth/oauth/enterprise/callback
       scopes: [openid, profile, email]
       token_endpoint_auth_method: client_secret_basic
       login_claim: preferred_username
@@ -68,7 +68,7 @@ providers:
       algorithms: [RS256]
 ```
 
-- `enabled_env` 指定控制该渠道的环境变量。示例将渠道绑定到 `MARKET_IDENTITY_EXTENSIONS_ENABLED`，默认关闭。配齐适配器配置和密钥后，将该变量设为 `true`。已有渠道使用 `enabled: true` 时，用示例里的 `enabled_env` 替换该行，即可切换到环境变量控制。
+- `enabled: true` 开启当前渠道，还须打开后端的框架总开关 `MARKET_IDENTITY_EXTENSIONS_ENABLED`，渠道才会生效。总开关默认 `false`，关闭时所有扩展渠道均不可用。需要独立控制该渠道时，可用 `enabled_env: ENTERPRISE_LOGIN_ENABLED` 替换此行，并同时将总开关与 `ENTERPRISE_LOGIN_ENABLED` 设为 `true`。原来的 `enabled_env: MARKET_IDENTITY_EXTENSIONS_ENABLED` 写法继续兼容。
 - `display_name` 是登录页的按钮文字。`enterprise` 是 Skillhub 渠道 ID。更改渠道 ID 时，同步更新两边回调地址中的对应路径段。
 - `issuer` 是 Realm 的标识。适配器会访问它下面的 `/.well-known/openid-configuration`，自动取得授权、Token、UserInfo 和 JWKS 地址。Discovery 返回的 `issuer` 必须与配置值一致。 [Keycloak OIDC 端点](https://www.keycloak.org/securing-apps/oidc-layers)
 - `redirect_uri` 是 Keycloak 登录后让浏览器访问的 Skillhub 后端回调地址。客户端的 **Valid redirect URIs** 要包含同一个 URL。
@@ -86,7 +86,8 @@ MARKET_OAUTH_FRONTEND_ORIGIN=https://hub.example.com
 MARKET_REVIEW_ADMIN_USERNAMES=reviewer01
 ```
 
-- `MARKET_OAUTH_FRONTEND_ORIGIN` 决定后端完成 OIDC 回调后将用户送回哪个 Skillhub 前端。填写浏览器访问的前端基地址。前端以 `/hub` 部署时，基地址可为 `https://hub.example.com/hub`，回调继续使用同一域名根路径下的 `/api/v1/auth/extensions/enterprise/callback`，并确保网关转发这条路径。
+- `MARKET_IDENTITY_EXTENSIONS_ENABLED` 是所有第三方账号扩展的总开关，渠道的 `enabled` 或其他 `enabled_env` 不能覆盖它。关闭后扩展登录、回调、会话兑换以及已有扩展 token 的业务鉴权均被拒绝，GitCode、GitHub、AgentOS 和系统管理员 Token 的原有行为不变。修改开关后需重启全部后端副本；不会删除已有资产，也不会撤销 Keycloak 自身的 token 或单点登录会话。
+- `MARKET_OAUTH_FRONTEND_ORIGIN` 决定后端完成 OIDC 回调后将用户送回哪个 Skillhub 前端。填写浏览器访问的前端基地址。前端以 `/hub` 部署时，基地址可为 `https://hub.example.com/hub`，回调继续使用同一域名根路径下的 `/api/v1/auth/oauth/enterprise/callback`，并确保网关转发这条路径。
 - 审核名单已有账号时，将 `reviewer01` 追加到原名单，例如 `alice,bob,reviewer01`。如果部署使用 `MARKET_REVIEW_ADMIN_USERNAMES_FILE`，在原名单文件中追加，保持环境变量名单为空以继续使用文件。权限判断按用户名跨渠道匹配，应采用在已启用渠道中不会冲突的审核员用户名，并由管理员管控其使用。
 - 通过部署的密钥管理机制，将 Keycloak Client Secret 以 `SKILLHUB_ENTERPRISE_SECRET` 注入后端进程。已启用 Skillhub 密钥加密的部署，沿用现有 Root Key 或 KMS 体系生成兼容密文再注入。将真实凭证仅保存在密钥管理系统及其受控运行环境。 [Skillhub 密钥读取实现](../../../marketplace/common/security/security_utils.py)
 - Skillhub 默认禁止自审。启用自动审查的环境中，Skill 需先通过自动审查，再进入人工审核。 [配置项与默认值](../../../.env.example)
@@ -156,9 +157,13 @@ kubectl -n skillhub rollout status deployment/skillhub-backend
 2. 在浏览器打开 `https://hub.example.com/api/v1/site/config`，确认 `identity_extensions` 中包含 `id: enterprise`、`adapter: keycloak` 和 `display_name: 企业账号登录`。
 3. 如果渠道为空，检查后端 Pod 日志、ConfigMap 的开关和文件路径、Secret 的键名以及实际挂载。修正后滚动更新后端。
 
+配置多个扩展渠道时，一个渠道初始化失败只会隐藏和禁用该渠道，其他正常渠道继续可用。同一 Keycloak 适配器下的渠道分别校验配置和 Secret。若只有某个渠道缺失，查后端 `stage=provider_init` 日志中的 `provider_id`、配置项序号 `entry_index` 和 `error_type`；若整份 YAML 无法读取、语法或顶层结构错误、存在重复键等，则所有扩展渠道关闭，查 `stage=registry_init`。日志不输出原始异常或密钥值。修复后滚动更新全部后端副本，初始化失败不会在每次登录时自动重试。
+
 打开服务器上的 Skillhub，点击 **登录 → 企业账号登录**。浏览器跳转到 Keycloak 后，使用发布者账号登录，例如 `publisher01`。返回 Skillhub 后，在个人中心查看当前账号。
 
 浏览器开发者工具的 **Network** 面板中，`/api/v1/auth/me` 响应的 `data.login` 应为 `publisher01`，`data.is_market_moderation_admin` 应为 `false`。审核员登录后，后一个字段应为 `true`。
+
+排查登录问题时，可通过响应头的 `x-request-id` 查询后端现有日志目录中的 `app.log`，查看 `provider=enterprise` 以及 `oauth_start`、`oauth_callback`、`oauth_session_exchange` 或 `oauth_me` 操作。每个请求的完成日志包含操作 ID 和处理结果；回调通过 `302` 返回登录页时也可能是认证失败，应查看 `result` 和标准错误码。总开关关闭、渠道初始化失败及请求参数错误也会记录。上述操作日志不会输出原始凭证、完整回调参数或插件异常正文，日志查询时无需提供 Token 或 Client Secret。操作日志和资产发布、审核的数据库审计记录分别用于技术排查与业务追溯。 [操作日志说明](./扩展账号接入.md#操作日志与错误处理)
 
 ## 5. 用发布者账号上传资产
 
@@ -180,9 +185,11 @@ kubectl -n skillhub rollout status deployment/skillhub-backend
 
 | 现象 | 按顺序检查 |
 |---|---|
-| 登录页没有 **企业账号登录** | 查 `/api/v1/site/config` 的 `identity_extensions`。为空时检查后端配置挂载、`enabled_env` 对应的开关、密钥注入和启动日志。接口已有渠道时，确认浏览器加载的是包含扩展入口的前端构建。 |
+| 登录页没有 **企业账号登录** | 查 `/api/v1/site/config` 的 `identity_extensions`。为空时先确认总开关 `MARKET_IDENTITY_EXTENSIONS_ENABLED=true`，再检查渠道的 `enabled` 或 `enabled_env`、配置挂载、密钥注入和启动日志，并确认所有后端副本已重启。接口已有渠道时，确认浏览器加载的是包含扩展入口的前端构建。 |
+| 其他第三方渠道正常，只有企业渠道缺失 | 查 `stage=provider_init`、`provider_id=enterprise` 的初始化日志，核对该渠道字段、适配器目录、Secret 注入及异步接口。修正后重启全部后端副本。正常渠道无需删除或重新配置。 |
 | Keycloak 报 `Invalid parameter: redirect_uri` | 逐字符对照客户端的 **Valid redirect URIs** 和 YAML 的 `redirect_uri`，包括 HTTPS、端口、渠道 ID、路径和末尾斜杠。 |
 | 登录回调失败或兑换授权码失败 | 检查回调请求是否经原访问域名到达 Skillhub 后端。核对客户端认证、密钥、`S256`、Issuer、证书和后端网络。多副本部署检查共享 Redis。修正后从登录页重新发起登录。 |
+| 需要定位某次登录失败 | 用响应头 `x-request-id` 查询 `app.log` 中对应操作的完成结果、错误码和阶段诊断。发起登录、回调和会话兑换分别是不同请求，不应把 state、授权码或 Token 复制到日志中作为关联值。 |
 | 使用审核员账号登录后没有 **待审核** | 查 `/api/v1/auth/me` 的 `login` 与权限标志。核对 Keycloak 的 `preferred_username`、Skillhub 生效的审核名单及其优先级。修改环境变量后滚动更新后端，再用独立窗口登录。 |
 | 有 **待审核**菜单，但找不到版本 | 用发布者账号确认提交成功，并检查版本处于 **审核中**。若仍为 **审查中**，先看自动审查结果。 |
 

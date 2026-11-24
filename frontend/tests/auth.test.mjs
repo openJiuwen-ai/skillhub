@@ -41,14 +41,13 @@ const bundled = await build({
 })
 const auth = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`)
 
-test('existing providers retain OAuth routes and extension IDs select independent routes', async () => {
+test('built-in and configured extension providers share the existing OAuth routes', async () => {
   globalThis.httpCalls = []
   for (const provider of ['gitcode', 'github', 'agentos', 'enterprise', 'future-idp']) {
-    const segment = ['gitcode', 'github', 'agentos'].includes(provider) ? 'oauth' : 'extensions'
-    assert.equal(auth.getOAuthStartUrl(provider), `/api/v1/auth/${segment}/${provider}/start`)
+    assert.equal(auth.getOAuthStartUrl(provider), `/api/v1/auth/oauth/${provider}/start`)
     const result = await auth.exchangeOAuthSession(provider, 'pending-session')
     assert.equal(result.provider, provider)
-    assert.equal(globalThis.httpCalls.at(-1).url, `/api/v1/auth/${segment}/${provider}/session`)
+    assert.equal(globalThis.httpCalls.at(-1).url, `/api/v1/auth/oauth/${provider}/session`)
     assert.deepEqual(auth.parseOAuthPending(auth.stringifyOAuthPending({provider, session: 'pending-session'})),
       {provider, session: 'pending-session'})
     await auth.fetchOAuthMe('token', provider)

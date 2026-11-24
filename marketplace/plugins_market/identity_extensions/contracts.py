@@ -12,6 +12,7 @@ class IdentityError(Exception):
 class AuthorizationStart:
     url: str
     transaction: dict[str, Any]
+    callback_uri: str | None = None
 
 
 @dataclass(frozen=True)

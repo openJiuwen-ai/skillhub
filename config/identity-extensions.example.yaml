@@ -1,16 +1,17 @@
 # Copy this file, configure your deployment and point
 # MARKET_IDENTITY_EXTENSIONS_CONFIG at the copy's absolute path.
-# Enable the enterprise channel with MARKET_IDENTITY_EXTENSIONS_ENABLED=true.
+# Global opt-in is required: MARKET_IDENTITY_EXTENSIONS_ENABLED=true.
+# Each channel also needs enabled: true or its own enabled_env=true.
 providers:
   enterprise:
-    enabled_env: MARKET_IDENTITY_EXTENSIONS_ENABLED
+    enabled: true
     adapter: keycloak
     display_name: 企业账号登录
     settings:
       issuer: https://sso.example.com/realms/company
       client_id: skillhub
       client_secret_env: SKILLHUB_ENTERPRISE_SECRET
-      redirect_uri: https://hub.example.com/api/v1/auth/extensions/enterprise/callback
+      redirect_uri: https://hub.example.com/api/v1/auth/oauth/enterprise/callback
       scopes: [openid, profile, email]
       token_endpoint_auth_method: client_secret_basic
       login_claim: preferred_username

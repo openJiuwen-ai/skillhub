@@ -108,7 +108,10 @@ class KeycloakAdapter:
             url = urlunsplit(
                 (parts.scheme, parts.netloc, parts.path, urlencode(query), "")
             )
-            return AuthorizationStart(url, {"code_verifier": verifier, "nonce": nonce})
+            return AuthorizationStart(
+                url, {"code_verifier": verifier, "nonce": nonce},
+                callback_uri=self.config.redirect_uri,
+            )
         except (httpx.HTTPError, ValueError) as exc:
             raise IdentityError("Cannot connect to identity service") from exc
 

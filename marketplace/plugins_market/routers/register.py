@@ -1,13 +1,11 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
 from fastapi import FastAPI
-
-from plugins_market.core.config import settings
 from plugins_market.clawhub_compat import router as clawhub_router
+from plugins_market.core.config import settings
 from plugins_market.routers import audit as audit_router_module
-from plugins_market.routers import github_watch
+from plugins_market.routers import github_watch, oauth_provider
 from plugins_market.routers import notifications as notifications_router
-from plugins_market.routers import oauth_provider
 from plugins_market.routers import plugin as plugin_routers
 from plugins_market.routers.groups import router as groups_router
 from plugins_market.routers.interaction import interaction_router
@@ -18,10 +16,7 @@ def router_register(app: FastAPI) -> None:
     """注册所有路由。"""
 
     from plugins_market.identity_extensions.registry import get_runtime_registry
-    from plugins_market.identity_extensions.router import router as identity_extensions_router
-
     get_runtime_registry()  # Extension failures must not prevent built-in OAuth startup.
-    app.include_router(identity_extensions_router, prefix="/api/v1")
 
     app.include_router(plugin_routers.router, prefix="/api/v1")
     app.include_router(interaction_router, prefix="/api/v1")
@@ -34,7 +29,9 @@ def router_register(app: FastAPI) -> None:
         from plugins_market.routers.recommender import router as recommender_router
     else:
         # 关闭时仍注册路径并按 install_count 出卡片；否则 Swarm 预热 POST /recommend 会 404。
-        from plugins_market.routers.recommender_disabled import router as recommender_router
+        from plugins_market.routers.recommender_disabled import (
+            router as recommender_router,
+        )
 
     app.include_router(recommender_router, prefix="/api/v1")
     app.include_router(github_watch.router, prefix="/api/v1")
@@ -44,9 +41,11 @@ def router_register(app: FastAPI) -> None:
     if settings.playground_enabled:
         # skill-runner 是独立服务，marketplace 通过 HTTP 反向代理转发
         # /api/v1/playground/*，不在本进程内 import agent-core 执行栈。
-        from plugins_market.core.playground_state import get_playground_state_store
-        from plugins_market.routers.playground_proxy import router as playground_proxy_router
         from plugins_market.core.logging import get_logger
+        from plugins_market.core.playground_state import get_playground_state_store
+        from plugins_market.routers.playground_proxy import (
+            router as playground_proxy_router,
+        )
         # 启动即初始化状态存储：多实例开关开着但没配 Redis 属配置错误，
         # 在这里快速失败，而不是等第一个请求 500
         get_playground_state_store()
