@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test:auth": "node --test tests/auth.test.mjs tests/identity-ui.test.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",

@@ -90,6 +90,9 @@ def normalize_oauth_provider_header(raw: Optional[str]) -> str:
     p = str(raw).strip().lower()
     if p in ("gitcode", "github", "agentos"):
         return p
+    from plugins_market.identity_extensions.registry import get_runtime_registry
+    if get_runtime_registry().get(p) is not None:
+        return p
     raise _http_exception(
         status.HTTP_400_BAD_REQUEST,
         "Invalid X-OAuth-Provider; allowed: gitcode, github, agentos",
