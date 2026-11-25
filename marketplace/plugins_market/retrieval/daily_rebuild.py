@@ -1006,7 +1006,9 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
 
     lock_acquired = False
     if redis_client is not None and not skip_lock:
-        lock_acquired = bool(redis_client.set(redis_key(_SKILL_TAG_LOCK_KEY), "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS))
+        lock_acquired = bool(
+            redis_client.set(redis_key(_SKILL_TAG_LOCK_KEY), "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS)
+        )
         if not lock_acquired:
             logger.info("refresh_skill_tags: another instance holds the lock, skipping this run")
             return

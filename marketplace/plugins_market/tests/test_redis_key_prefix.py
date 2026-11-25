@@ -77,18 +77,22 @@ def test_cache_operations_share_namespace_without_changing_values(monkeypatch, p
 
 @pytest.mark.parametrize("prefix", ["", "app:", "app::"])
 def test_oauth_getdel_fallback_pipeline_uses_same_namespace(monkeypatch, prefix):
-    from plugins_market.core.oauth_session_store import _RedisOAuthStore
+    from plugins_market.core import oauth_session_store
 
     monkeypatch.setattr(settings, "redis_key_prefix", prefix)
-    store = object.__new__(_RedisOAuthStore)
-    store._r = MagicMock()
-    store._r.getdel.side_effect = RuntimeError("old Redis")
-    pipe = store._r.pipeline.return_value
+    monkeypatch.setattr(settings, "redis_host", "redis.test")
+    monkeypatch.setattr(oauth_session_store, "_redis_store", None)
+    monkeypatch.setattr(oauth_session_store, "_redis_init_attempted", False)
+    client = MagicMock()
+    monkeypatch.setattr("redis.Redis", MagicMock(return_value=client))
+    client.getdel.side_effect = RuntimeError("old Redis")
+    pipe = client.pipeline.return_value
     pipe.execute.return_value = ["token", 1]
+    store = oauth_session_store.get_oauth_str_store()
     store.set_ex("pending", "token", 60)
     assert store.get_del("pending") == "token"
-    store._r.setex.assert_called_once_with((prefix + "pending"), 60, "token")
-    store._r.getdel.assert_called_once_with(prefix + "pending")
+    client.setex.assert_called_once_with(prefix + "pending", 60, "token")
+    client.getdel.assert_called_once_with(prefix + "pending")
     pipe.get.assert_called_once_with(prefix + "pending")
     pipe.delete.assert_called_once_with(prefix + "pending")
 
@@ -101,7 +105,6 @@ def test_playground_pipeline_lua_and_message_counter(monkeypatch, prefix):
     )
 
     monkeypatch.setattr(settings, "redis_key_prefix", prefix)
-    store = object.__new__(RedisPlaygroundStateStore)
     client = MagicMock()
     pipe = client.pipeline.return_value
     pipe.execute = AsyncMock()
@@ -115,7 +118,8 @@ def test_playground_pipeline_lua_and_message_counter(monkeypatch, prefix):
     client.eval = AsyncMock()
     client.incr = AsyncMock(return_value=1)
     client.expire = AsyncMock()
-    store._r = client
+    monkeypatch.setattr("redis.asyncio.Redis", MagicMock(return_value=client))
+    store = RedisPlaygroundStateStore(host="redis.test", port=6379, db=0, password="")
 
     async def run():
         await store.register_session("s", PlaygroundSessionRecord("u", "t", "url"), 100)
@@ -162,7 +166,11 @@ def test_recommendation_writer_reader_and_gc_use_same_namespace(
     logical_prefix = business_prefix.rstrip(":")
     client = MagicMock()
     stored = {}
-    client.set.side_effect = lambda key, value, **kw: stored.__setitem__(key, value)
+
+    def store_value(key, value, **_kwargs):
+        stored[key] = value
+
+    client.set.side_effect = store_value
     client.get.side_effect = stored.get
     pipe = client.pipeline.return_value
     pipe.set.side_effect = client.set.side_effect
@@ -187,7 +195,9 @@ def test_recommendation_writer_reader_and_gc_use_same_namespace(
     topk_install.run_topk_install(cfg)
     user_sequences.run_user_sequences(cfg)
     assert prefix + cfg.redis.topk_install.key in stored
-    assert json.loads(stored[(prefix + logical_prefix + ":u:download")]) == ["asset"]
+    download_sequence = stored.get(prefix + logical_prefix + ":u:download")
+    assert download_sequence is not None
+    assert json.loads(download_sequence) == ["asset"]
     assert redis_seeds.load_user_seed_ids("u", redis_cfg=cfg.redis) == ["asset"]
     redis_seeds.load_topk_install_items(5, redis_cfg=cfg.redis)
     assert client.get.call_args.args[0] == prefix + cfg.redis.topk_install.key
@@ -201,13 +211,45 @@ def test_recommendation_writer_reader_and_gc_use_same_namespace(
     }
 
 
-def test_recommender_client_cache_separates_namespaces():
-    from recommender.online.redis_seeds import _client_key
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"host": "other-host"},
+        {"port": 6380},
+        {"db": 1},
+        {"ssl": True},
+        {"password": "other-password"},
+        {"username": "other-user"},
+        {"key_prefix": "other-prefix"},
+    ],
+)
+def test_recommender_client_cache_separates_connection_and_namespace(monkeypatch, change):
+    from recommender.online import redis_seeds
 
-    cfg = load_config().redis
-    assert _client_key(replace(cfg, key_prefix="one")) != _client_key(
-        replace(cfg, key_prefix="two")
+    client = MagicMock()
+    other_client = MagicMock()
+    create = MagicMock(side_effect=[client, other_client])
+    monkeypatch.setattr(redis_seeds, "create_redis_client", create)
+    cfg = replace(
+        load_config().redis,
+        host="redis.test",
+        port=6379,
+        db=0,
+        ssl=False,
+        password="",
+        username="",
+        key_prefix="",
     )
+    redis_seeds.reset_redis_clients()
+    try:
+        first, _ = redis_seeds.get_redis_client(cfg)
+        same, _ = redis_seeds.get_redis_client(replace(cfg))
+        different, _ = redis_seeds.get_redis_client(replace(cfg, **change))
+        assert first is same is client
+        assert different is other_client
+        assert create.call_count == 2
+    finally:
+        redis_seeds.reset_redis_clients()
 
 
 @pytest.mark.parametrize("prefix", ["", "app:", "app::"])
@@ -217,16 +259,29 @@ def test_milvus_lock_acquire_renew_release_use_same_key(monkeypatch, prefix):
     cfg = replace(load_config(), redis=replace(load_config().redis, key_prefix=prefix))
     client = MagicMock()
     monkeypatch.setattr(lock, "create_redis_client", lambda _: client)
-    monkeypatch.setattr(lock.threading, "Thread", MagicMock())
+    stop = MagicMock()
+    stop.wait.side_effect = [False, True]
+    monkeypatch.setattr(lock.threading, "Event", MagicMock(return_value=stop))
+
+    def make_renewer(*, target, args, **_kwargs):
+        renewer = MagicMock()
+
+        def start_renewer():
+            target(*args)
+
+        renewer.start.side_effect = start_renewer
+        return renewer
+
+    monkeypatch.setattr(lock.threading, "Thread", make_renewer)
     with lock.milvus_index_lock(cfg) as handle:
         assert handle.proceed
     key = prefix + lock.LOCK_KEY
     assert client.set.call_args.args[0] == key
-    assert client.eval.call_args.args[2] == key
-    stop = MagicMock()
-    stop.wait.side_effect = [False, True]
-    lock._renew_until_stopped(client, "owner", stop, key)
-    assert client.eval.call_args.args[2:] == (key, "owner", str(lock.LOCK_TTL_SECONDS))
+    owner = client.set.call_args.args[1]
+    renew_call, release_call = client.eval.call_args_list
+    assert renew_call.args[2:] == (key, owner, str(lock.LOCK_TTL_SECONDS))
+    assert release_call.args[2:] == (key, owner)
+    stop.set.assert_called_once()
 
 
 @pytest.mark.parametrize("prefix", ["", "app:", "app::"])
@@ -237,10 +292,11 @@ def test_shared_index_state_does_not_read_other_namespace(tmp_path, prefix):
     client = MagicMock()
     client.set.side_effect = data.__setitem__
     client.get.side_effect = data.get
-    state.save_state_shared({}, tmp_path / "state.json", client, prefix)
+    expected = state.save_state_shared({}, tmp_path / "state.json", client, prefix)
     assert set(data) == {prefix + state.MILVUS_INDEX_STATE_KEY}
-    assert state._load_redis_state(client, "other") is None
-    assert state._load_redis_state(client, prefix) is not None
+    remote_only_path = tmp_path / "remote-only.json"
+    assert state.load_state_shared(remote_only_path, client, "other") == state.IndexState.empty()
+    assert state.load_state_shared(remote_only_path, client, prefix) == expected
 
 
 @pytest.mark.parametrize("prefix", ["", "app:", "app::"])
@@ -282,7 +338,11 @@ def test_cache_namespaces_isolate_values_and_deletes(monkeypatch):
     client = MagicMock()
     client.get.side_effect = data.get
     client.set.side_effect = data.__setitem__
-    client.delete.side_effect = lambda key: data.pop(key, None)
+
+    def delete_value(key):
+        return data.pop(key, None)
+
+    client.delete.side_effect = delete_value
     monkeypatch.setattr(cache, "_make_client", lambda: client)
     monkeypatch.setattr(settings, "redis_key_prefix", "app:")
     assert cache.cache_get("key") is None
@@ -306,8 +366,13 @@ def test_embedding_counter_uses_same_key_for_increment_expire_and_release(
     monkeypatch.setattr(index.time, "time", lambda: 120.0)
     monkeypatch.setattr(index.time, "sleep", lambda _: None)
     index.configure_offline_embedding_redis(client, prefix)
-    index._wait_shared_embedding_slot()
-    index._wait_shared_embedding_slot()
+    model = MagicMock()
+    model.embeddings.create.return_value = SimpleNamespace(
+        data=[SimpleNamespace(embedding=[1.0, 0.0])]
+    )
+    embedding = index.OpenAIEmbeddingClient(client=model, model="test-model", min_interval_s=0.8)
+    assert embedding.embed_text("first") == [1.0, 0.0]
+    assert embedding.embed_text("second") == [1.0, 0.0]
     assert all(
         call.args == ((prefix + "embedding:offline:rpm:2"),)
         for call in client.incr.call_args_list

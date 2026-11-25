@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from dataclasses import dataclass, field
 from typing import Any
 
 from common.redis_namespace import redis_key
@@ -24,12 +25,34 @@ logger = logging.getLogger(__name__)
 
 _KIND_ORDER = (KIND_DOWNLOAD, KIND_LIKE, KIND_STAR)
 
+
+@dataclass(frozen=True)
+class RedisClientKey:
+    """Hashable connection and namespace identity for cached Redis clients."""
+
+    host: str
+    port: int
+    db: int
+    ssl: bool
+    password: str = field(repr=False)
+    username: str
+    key_prefix: str
+
+
 _client_lock = threading.Lock()
-_clients: dict[tuple, Any] = {}
+_clients: dict[RedisClientKey, Any] = {}
 
 
-def _client_key(cfg: RedisConfig) -> tuple:
-    return (cfg.host, int(cfg.port), int(cfg.db), bool(cfg.ssl), cfg.password or "", cfg.username, cfg.key_prefix)
+def _client_key(cfg: RedisConfig) -> RedisClientKey:
+    return RedisClientKey(
+        host=cfg.host,
+        port=int(cfg.port),
+        db=int(cfg.db),
+        ssl=bool(cfg.ssl),
+        password=cfg.password or "",
+        username=cfg.username,
+        key_prefix=cfg.key_prefix,
+    )
 
 
 def reset_redis_clients() -> None:
