@@ -28,6 +28,35 @@ MARKET_REDIS_PASSWORD=********
 
 影响范围：OAuth session、通用 cache、Playground 多实例状态、推荐 Redis 快照读写。
 
+### 多应用共享 Redis：应用命名空间
+
+在 marketplace 根目录 `.env` 或部署环境变量中设置：
+
+```env
+REDIS_KEY_PREFIX=skillhub:prod
+```
+
+未配置、空值或仅有空白时保持原有键名。非空值去掉首尾空白后，若末尾没有英文冒号则自动补齐；
+例如 `skillhub:prod` 和 `skillhub:prod:` 均生效为 `skillhub:prod:`。已经以冒号结尾时不再添加。
+
+该前缀覆盖 marketplace 的缓存、OAuth、下载去重、标星记录、Playground 状态及锁、
+推荐快照及用户序列、推荐建库锁及共享状态、检索重建锁、热加载 Stream 和离线 Embedding 计数。
+频道名称使用同一命名规则；当前检索通知采用 Stream，没有 Pub/Sub 频道调用。
+值、Hash 字段、Set 成员、Stream 消息字段、消费者组和消费者名称不加前缀。
+
+原有 `REDIS_USER_SEQ_KEY_PREFIX` 仍是推荐业务前缀：上述配置配合其默认值 `skill_rec:user`，
+用户下载序列最终为 `skillhub:prod:skill_rec:user:<uid>:download`。
+
+所有 marketplace 副本及独立推荐同步、建库任务必须使用同一个 `REDIS_KEY_PREFIX`；
+独立 CLI 任务需显式注入该环境变量，不能假定自动加载 `.env`。K8s 使用 marketplace ConfigMap，
+Docker Compose 通过现有 `env_file` 注入；更新后重启服务和相关任务。
+
+启用或修改前缀不会迁移或回读旧命名空间。缓存可以回源重建，推荐快照需要重新同步；
+现有 OAuth、在线试用会话及长期标星展示状态需要安排切换或迁移。不得清空共享 Redis 数据库。
+前缀提供命名隔离；权限隔离需配合 Redis ACL，内存和连接等资源仍由各应用共享。
+离线 Embedding 计数随命名空间隔离；共用模型账号的跨应用总配额需另行统一控制。
+本配置仅作用于 marketplace，不影响独立 skill-runner。
+
 ## 2. 对象存储：MinIO ↔ OBS
 
 主站已支持 `STORAGE_TYPE`；推荐离线拉包与主站共用同一套 `MARKET_S3_*`。

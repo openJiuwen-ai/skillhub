@@ -300,7 +300,7 @@ class TestRedisTopkCategory(unittest.TestCase):
     def _patch_redis(self, items: list[dict]):
         client = MagicMock()
         client.get.return_value = json.dumps({"items": items})
-        cfg = SimpleNamespace(topk_install=SimpleNamespace(key="k"))
+        cfg = SimpleNamespace(topk_install=SimpleNamespace(key="k"), key_prefix="")
         return patch(
             "recommender.online.redis_seeds._redis",
             return_value=(client, cfg),
@@ -363,7 +363,7 @@ class TestRedisTopkCategory(unittest.TestCase):
     def test_missing_key_returns_empty(self) -> None:
         client = MagicMock()
         client.get.return_value = None
-        cfg = SimpleNamespace(topk_install=SimpleNamespace(key="k"))
+        cfg = SimpleNamespace(topk_install=SimpleNamespace(key="k"), key_prefix="")
         with patch("recommender.online.redis_seeds._redis", return_value=(client, cfg)):
             self.assertEqual(load_topk_install_items(0, category_id="x"), [])
 

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.redis_namespace import redis_key
 from recommender.shared.config import DATA_ROOT
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,8 @@ def load_state(path: Path = DEFAULT_STATE_PATH) -> IndexState:
     return _state_from_payload(json.loads(path.read_text(encoding="utf-8")))
 
 
-def _load_redis_state(redis_client: Any) -> IndexState | None:
-    raw = redis_client.get(MILVUS_INDEX_STATE_KEY)
+def _load_redis_state(redis_client: Any, key_prefix: str = "") -> IndexState | None:
+    raw = redis_client.get(redis_key(MILVUS_INDEX_STATE_KEY, key_prefix))
     if not raw:
         return None
     if isinstance(raw, bytes):
@@ -68,7 +69,7 @@ def _load_redis_state(redis_client: Any) -> IndexState | None:
     return _state_from_payload(json.loads(raw))
 
 
-def load_state_shared(path: Path = DEFAULT_STATE_PATH, redis_client: Any | None = None) -> IndexState:
+def load_state_shared(path: Path = DEFAULT_STATE_PATH, redis_client: Any | None = None, key_prefix: str = "") -> IndexState:
     """Prefer the newer of the local file and the shared Redis copy.
 
     A truncated local file falls back to Redis. If neither copy can be read, the
@@ -85,7 +86,7 @@ def load_state_shared(path: Path = DEFAULT_STATE_PATH, redis_client: Any | None 
     remote: IndexState | None = None
     if redis_client is not None:
         try:
-            remote = _load_redis_state(redis_client)
+            remote = _load_redis_state(redis_client, key_prefix)
         except Exception as exc:
             logger.warning("load milvus index state from redis failed: %s", exc)
             if local_error is not None:
@@ -152,12 +153,13 @@ def save_state_shared(
     active: dict[str, IndexedAsset],
     path: Path = DEFAULT_STATE_PATH,
     redis_client: Any | None = None,
+    key_prefix: str = "",
 ) -> IndexState:
     state = replace_state(active, path)
     if redis_client is None:
         return state
     try:
-        redis_client.set(MILVUS_INDEX_STATE_KEY, path.read_text(encoding="utf-8"))
+        redis_client.set(redis_key(MILVUS_INDEX_STATE_KEY, key_prefix), path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("save milvus index state to redis failed: %s", exc)
     return state

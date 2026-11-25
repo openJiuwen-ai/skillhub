@@ -304,7 +304,7 @@ async def lifespan(app: FastAPI):
     try:
         from indexing.embedding.index import configure_offline_embedding_redis  # type: ignore[import]
 
-        configure_offline_embedding_redis(redis_client)
+        configure_offline_embedding_redis(redis_client, settings.redis_key_prefix)
     except Exception as exc:
         logger.warning("retrieval: offline embedding rate limit not configured: %s", exc)
 

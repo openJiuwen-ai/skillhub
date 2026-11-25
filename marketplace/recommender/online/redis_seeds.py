@@ -7,6 +7,7 @@ import logging
 import threading
 from typing import Any
 
+from common.redis_namespace import redis_key
 from recommender.offline.redis_sync.client import create_redis_client
 from recommender.offline.redis_sync.tasks.user_sequences import (
     KIND_DOWNLOAD,
@@ -28,7 +29,7 @@ _clients: dict[tuple, Any] = {}
 
 
 def _client_key(cfg: RedisConfig) -> tuple:
-    return (cfg.host, int(cfg.port), int(cfg.db), bool(cfg.ssl), cfg.password or "")
+    return (cfg.host, int(cfg.port), int(cfg.db), bool(cfg.ssl), cfg.password or "", cfg.username, cfg.key_prefix)
 
 
 def reset_redis_clients() -> None:
@@ -124,7 +125,7 @@ def load_user_seed_ids(
         return []
 
     def _load(client: Any, cfg: RedisConfig) -> list[str]:
-        prefix = cfg.user_seq.key_prefix.rstrip(":")
+        prefix = redis_key(cfg.user_seq.key_prefix.rstrip(":"), cfg.key_prefix)
         if not client.sismember(user_seq_index_key(prefix), uid):
             return []
 
@@ -175,7 +176,8 @@ def load_topk_install_items(
     plugin_types = parse_plugin_types(plugin_type)
 
     def _load(client: Any, cfg: RedisConfig):
-        return client.get(cfg.topk_install.key), cfg.topk_install.key
+        key = redis_key(cfg.topk_install.key, cfg.key_prefix)
+        return client.get(key), key
 
     raw, key = _execute_redis(redis_cfg, _load)
     if not raw:

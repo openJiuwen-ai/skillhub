@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from common.redis_namespace import redis_channel as _redis_channel
+from common.redis_namespace import redis_key as _redis_key
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
 
@@ -48,3 +50,13 @@ def redis_connection_kwargs(*, decode_responses: bool = True) -> dict[str, Any]:
     if resolve_redis_ssl():
         kwargs["ssl"] = True
     return kwargs
+
+
+def redis_key(name: str) -> str:
+    """Resolve a logical marketplace key in its application namespace."""
+    return _redis_key(name, settings.redis_key_prefix)
+
+
+def redis_channel(name: str) -> str:
+    """Resolve a logical marketplace Pub/Sub channel or subscription pattern."""
+    return _redis_channel(name, settings.redis_key_prefix)

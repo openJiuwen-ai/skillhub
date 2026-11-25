@@ -12,6 +12,7 @@ from typing import Protocol
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
 from plugins_market.core.logging import get_logger
+from plugins_market.core.redis_client import redis_key
 
 logger = get_logger(__name__)
 
@@ -127,25 +128,25 @@ class _RedisOAuthStore:
         self._r.ping()
 
     def get(self, key: str) -> str | None:
-        v = self._r.get(key)
+        v = self._r.get(redis_key(key))
         return v if isinstance(v, str) else None
 
     def set_ex(self, key: str, value: str, ttl_seconds: int) -> None:
-        self._r.setex(key, max(1, ttl_seconds), value)
+        self._r.setex(redis_key(key), max(1, ttl_seconds), value)
 
     def delete(self, key: str) -> None:
-        self._r.delete(key)
+        self._r.delete(redis_key(key))
 
     def get_del(self, key: str) -> str | None:
         # 优先用 Redis 原生 GETDEL（Redis >= 6.2）原子取出并删除；
         # 旧版本不支持时回退到 pipeline(GET+DEL)，单连接下两条命令顺序执行，
         # 同一 key 的并发兑换最多只有一个能拿到非空值（DEL 幂等）。
         try:
-            v = self._r.getdel(key)
+            v = self._r.getdel(redis_key(key))
         except Exception:
             pipe = self._r.pipeline()
-            pipe.get(key)
-            pipe.delete(key)
+            pipe.get(redis_key(key))
+            pipe.delete(redis_key(key))
             v = pipe.execute()[0]
         return v if isinstance(v, str) else None
 

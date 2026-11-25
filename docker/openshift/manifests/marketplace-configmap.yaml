@@ -89,6 +89,7 @@ data:
   # MARKET_REDIS_HOST: "REPLACE_WITH_REDIS_HOST"
   # MARKET_REDIS_PORT: "6379"
   # MARKET_REDIS_DB: "0"
+  # REDIS_KEY_PREFIX: ""                 # 应用命名空间，如 skillhub:prod；末尾冒号自动补齐。
   # MARKET_REDIS_USERNAME: "REPLACE_WITH_REDIS_USER" # Redis ACL 用户，密码放 Secret。
   # MARKET_CACHE_BACKEND: "redis"        # 缓存后端类型。
   # MARKET_REDIS_SSL: "false"            # 按 Redis 端 TLS 配置设置。

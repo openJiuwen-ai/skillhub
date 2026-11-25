@@ -8,6 +8,7 @@ from typing import Optional
 
 from plugins_market.core.config import settings
 from plugins_market.core.logging import get_logger
+from plugins_market.core.redis_client import redis_key
 
 logger = get_logger(__name__)
 
@@ -25,8 +26,10 @@ def _make_client():
         return None
     try:
         import redis  # type: ignore[import-not-found]
-
-        from plugins_market.core.redis_client import redis_connection_kwargs, resolve_redis_ssl
+        from plugins_market.core.redis_client import (
+            redis_connection_kwargs,
+            resolve_redis_ssl,
+        )
 
         kwargs = redis_connection_kwargs(decode_responses=True)
         r = redis.Redis(**kwargs)
@@ -50,7 +53,7 @@ def cache_get(key: str) -> str | None:
     if r is None:
         return None
     try:
-        v = r.get(key)  # type: ignore[union-attr]
+        v = r.get(redis_key(key))  # type: ignore[union-attr]
         return v if isinstance(v, str) else None
     except Exception as e:
         logger.debug("cache_get failed key=%s: %s", key, e)
@@ -62,7 +65,7 @@ def cache_set(key: str, value: str, ttl: int = 86400 * 7) -> None:
     if r is None:
         return
     try:
-        r.setex(key, max(1, ttl), value)  # type: ignore[union-attr]
+        r.setex(redis_key(key), max(1, ttl), value)  # type: ignore[union-attr]
     except Exception as e:
         logger.debug("cache_set failed key=%s: %s", key, e)
 
@@ -77,7 +80,7 @@ def cache_set_nx(key: str, ttl: int) -> bool:
     if r is None:
         return True
     try:
-        return bool(r.set(key, "1", nx=True, ex=max(1, ttl)))  # type: ignore[union-attr]
+        return bool(r.set(redis_key(key), "1", nx=True, ex=max(1, ttl)))  # type: ignore[union-attr]
     except Exception as e:
         logger.debug("cache_set_nx failed key=%s: %s", key, e)
         return True
@@ -88,7 +91,7 @@ def cache_delete(key: str) -> None:
     if r is None:
         return
     try:
-        r.delete(key)  # type: ignore[union-attr]
+        r.delete(redis_key(key))  # type: ignore[union-attr]
     except Exception as e:
         logger.debug("cache_delete failed key=%s: %s", key, e)
 
@@ -103,7 +106,7 @@ def cache_set_persistent(key: str, value: str) -> None:
     if r is None:
         return
     try:
-        r.set(key, value)  # type: ignore[union-attr]
+        r.set(redis_key(key), value)  # type: ignore[union-attr]
     except Exception as e:
         logger.debug("cache_set_persistent failed key=%s: %s", key, e)
 
@@ -121,9 +124,9 @@ def cache_incr(key: str, ttl: int | None = None) -> int | None:
     if r is None:
         return None
     try:
-        new_val = r.incr(key)  # type: ignore[union-attr]
+        new_val = r.incr(redis_key(key))  # type: ignore[union-attr]
         if ttl is not None and new_val == 1:
-            r.expire(key, max(1, ttl))  # type: ignore[union-attr]
+            r.expire(redis_key(key), max(1, ttl))  # type: ignore[union-attr]
         return new_val
     except Exception as e:
         logger.debug("cache_incr failed key=%s: %s", key, e)

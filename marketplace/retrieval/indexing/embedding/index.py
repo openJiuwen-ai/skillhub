@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Protocol, Sequence
 
+from common.redis_namespace import normalize_redis_key_prefix, redis_key
 from shared.limits import MAX_JSON_ARTIFACT_BYTES, read_text_file
 
 try:
@@ -34,16 +35,18 @@ OFFLINE_EMBED_MAX_PER_MINUTE = 80
 _RATE_LIMIT_SECOND_ATTEMPTS = 5
 _RATE_LIMIT_MINUTE_ATTEMPTS = 3
 _slot_redis: Any | None = None
+_slot_key_prefix = ""
 
 
 class EmbeddingInputTooLong(Exception):
     """One input is longer than the embedding model's context window."""
 
 
-def configure_offline_embedding_redis(redis_client: Any | None) -> None:
+def configure_offline_embedding_redis(redis_client: Any | None, key_prefix: str = "") -> None:
     """Share one minute budget across retrieval rebuild and recommender indexing."""
-    global _slot_redis
+    global _slot_redis, _slot_key_prefix
     _slot_redis = redis_client
+    _slot_key_prefix = normalize_redis_key_prefix(key_prefix)
 
 
 def _wait_shared_embedding_slot() -> None:
@@ -52,7 +55,7 @@ def _wait_shared_embedding_slot() -> None:
         return
     while True:
         bucket = int(time.time()) // 60
-        key = f"embedding:offline:rpm:{bucket}"
+        key = redis_key(f"embedding:offline:rpm:{bucket}", _slot_key_prefix)
         try:
             count = int(client.incr(key))
             if count == 1:
