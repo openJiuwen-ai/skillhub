@@ -1,7 +1,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
 """
-OAuth2 授权码模式：统一路由 /oauth/{gitcode|github}/...，不落库用户表。
+统一 OAuth 登录路由：内置渠道保留原协议，配置渠道通过插件适配，不落库用户表。
 
 GitCode 文档：https://docs.gitcode.com/docs/apis/
 GitHub：https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
@@ -16,30 +16,49 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
-
 from plugins_market.core.auth import normalize_oauth_provider_header
 from plugins_market.core.config import settings
 from plugins_market.core.errors import BusinessError
+from plugins_market.core.logging import get_logger
+from plugins_market.core.oauth_flow import (
+    PENDING_TTL_SECONDS,
+    STATE_TTL_SECONDS,
+    OAuthExtensionChannel,
+    browser_binding_valid,
+    clear_browser_binding,
+    create_browser_binding,
+    oauth_pending_key,
+    oauth_state_key,
+    set_browser_binding,
+)
 from plugins_market.core.oauth_session_store import get_oauth_str_store
 from plugins_market.core.oauth_user_profile import fetch_oauth_user_profile
 from plugins_market.core.operation_log import (
     bind_operation_actor,
     bind_operation_resource,
     complete_operation_result,
-    operation_context,
     operation_log_fields,
     safe_error_summary,
 )
 from plugins_market.core.review_admins import is_market_moderation_username
+from plugins_market.identity_extensions.contracts import (
+    AuthorizationStart,
+    IdentityError,
+    validate_profile,
+)
+from plugins_market.identity_extensions.operations import (
+    ExtensionOAuthRoute,
+    invoke_adapter,
+    oauth_operation_context,
+)
 from plugins_market.schemas.common import ResponseModel
-from plugins_market.core.logging import get_logger
+from pydantic import BaseModel, Field
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+router = APIRouter(route_class=ExtensionOAuthRoute)
 
 
 class OAuthProvider(str, Enum):
@@ -48,18 +67,21 @@ class OAuthProvider(str, Enum):
     agentos = "agentos"
 
 
+OAuthChannel = OAuthProvider | OAuthExtensionChannel
+
+
 class OAuthSessionBody(BaseModel):
     """一次性 pending id（由回调重定向的 oauth_session query 给出），勿用 GET 传参以免进访问日志。"""
 
     session: str = Field(..., min_length=8, max_length=256)
 
 
-def _state_key(provider: OAuthProvider, state: str) -> str:
-    return f"market_oauth_state:{provider.value}:{state}"
+def _state_key(provider: OAuthChannel, state: str) -> str:
+    return oauth_state_key(provider.value, state)
 
 
-def _pending_key(provider: OAuthProvider, pending_id: str) -> str:
-    return f"market_oauth_pending:{provider.value}:{pending_id}"
+def _pending_key(provider: OAuthChannel, pending_id: str) -> str:
+    return oauth_pending_key(provider.value, pending_id)
 
 
 def _frontend_login_url() -> str:
@@ -153,7 +175,9 @@ def _redirect_error(
     )
 
 
-def _provider_label(provider: OAuthProvider) -> str:
+def _provider_label(provider: OAuthChannel) -> str:
+    if isinstance(provider, OAuthExtensionChannel):
+        return provider.label
     if provider == OAuthProvider.agentos:
         return "AgentOS"
     if provider == OAuthProvider.github:
@@ -161,7 +185,7 @@ def _provider_label(provider: OAuthProvider) -> str:
     return "GitCode"
 
 
-def _safe_oauth_meta(provider: OAuthProvider, *, upstream_status: int | None = None) -> dict[str, str | int]:
+def _safe_oauth_meta(provider: OAuthChannel, *, upstream_status: int | None = None) -> dict[str, str | int]:
     meta: dict[str, str | int] = {"provider": provider.value}
     if upstream_status is not None:
         meta["upstream_status"] = upstream_status
@@ -169,7 +193,7 @@ def _safe_oauth_meta(provider: OAuthProvider, *, upstream_status: int | None = N
 
 
 def _oauth_log_fields(
-    provider: OAuthProvider,
+    provider: OAuthChannel,
     *,
     stage: str,
     result: str,
@@ -189,7 +213,9 @@ def _oauth_log_fields(
     )
 
 
-def _assert_oauth_ready(provider: OAuthProvider) -> None:
+def _assert_oauth_ready(provider: OAuthChannel) -> None:
+    if isinstance(provider, OAuthExtensionChannel):
+        return
     label = _provider_label(provider)
     if provider == OAuthProvider.agentos:
         if not settings.agentos_oauth_enabled:
@@ -261,7 +287,7 @@ def _assert_oauth_ready(provider: OAuthProvider) -> None:
 def _redirect_from_publish_error(
     exc: BusinessError,
     *,
-    provider: OAuthProvider | None = None,
+    provider: OAuthChannel | None = None,
     redirect_to: str | None = None,
 ) -> RedirectResponse:
     if provider is not None:
@@ -313,7 +339,7 @@ def _oauth_redirect_error(
     error_code: str,
     error_class: str = "auth",
     *,
-    provider: OAuthProvider | None = None,
+    provider: OAuthChannel | None = None,
     status_code: int = 400,
     redirect_to: str | None = None,
 ) -> RedirectResponse:
@@ -399,20 +425,181 @@ async def _exchange_code_for_token_json(client: httpx.AsyncClient, provider: OAu
     return token_res.json()
 
 
+def _resolve_oauth_provider(provider_id: str) -> OAuthProvider | OAuthExtensionChannel:
+    try:
+        return OAuthProvider(provider_id)
+    except ValueError:
+        from plugins_market.identity_extensions.registry import get_runtime_registry
+
+        extension = get_runtime_registry().get(provider_id)
+        if extension is None:
+            raise _oauth_api_error(
+                status_code=404,
+                message="Unknown or disabled identity provider",
+                error="oauth_disabled",
+                error_code="SKILLHUB_OAUTH_DISABLED",
+                error_class="auth",
+            ) from None
+        return OAuthExtensionChannel(
+            extension.id, extension.display_name, extension.adapter
+        )
+
+
+def _builtin_authorization_url(provider: OAuthProvider, state: str) -> str:
+    if provider == OAuthProvider.agentos:
+        params = {
+            "client_id": settings.agentos_oauth_client_id,
+            "redirect_uri": settings.agentos_oauth_redirect_uri,
+            "response_type": "code",
+            "state": state,
+        }
+        authorize_url = settings.agentos_oauth_authorize_url
+    elif provider == OAuthProvider.gitcode:
+        params = {
+            "client_id": settings.gitcode_oauth_client_id,
+            "redirect_uri": settings.gitcode_oauth_redirect_uri,
+            "response_type": "code",
+            "scope": settings.gitcode_oauth_scope,
+            "state": state,
+        }
+        authorize_url = settings.gitcode_oauth_authorize_url
+    else:
+        params = {
+            "client_id": settings.github_oauth_client_id,
+            "redirect_uri": settings.github_oauth_redirect_uri,
+            "response_type": "code",
+            "scope": settings.github_oauth_scope,
+            "state": state,
+        }
+        authorize_url = settings.github_oauth_authorize_url
+
+    return f"{authorize_url}?{urlencode(params)}"
+
+
+async def _provider_authorization(
+    provider: OAuthChannel, state: str
+) -> AuthorizationStart:
+    if isinstance(provider, OAuthExtensionChannel):
+        return await invoke_adapter(
+            provider.adapter, provider.value, "start_authorization", state=state
+        )
+    return AuthorizationStart(_builtin_authorization_url(provider, state), {})
+
+
+async def _complete_provider_authorization(
+    provider: OAuthChannel,
+    callback_params: dict[str, str],
+    state_record: dict[str, Any] | None,
+    redirect_to: str | None,
+) -> dict[str, Any] | RedirectResponse:
+    if isinstance(provider, OAuthExtensionChannel):
+        transaction = state_record.get("transaction", {})
+        result = await invoke_adapter(
+            provider.adapter, provider.value, "complete_authorization",
+            callback_params=callback_params,
+            transaction=transaction,
+        )
+        user = validate_profile(result.user, system_user=settings.system_admin_user)
+        if not isinstance(result.access_token, str) or not result.access_token.strip():
+            raise IdentityError("Missing access token")
+        if (
+            not isinstance(result.token_type, str)
+            or result.token_type.lower() != "bearer"
+        ):
+            raise IdentityError("Unsupported access token type")
+        return {
+            "provider": provider.value,
+            "access_token": result.access_token,
+            "token_type": result.token_type,
+            "user": user,
+        }
+    label = _provider_label(provider)
+    code = callback_params.get("code")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        token_json = await _exchange_code_for_token_json(client, provider, code)
+        access_token = token_json.get("access_token")
+        if not access_token:
+            return _oauth_redirect_error(
+                f"{label} 未返回 access_token",
+                "SKILLHUB_OAUTH_ACCESS_TOKEN_MISSING",
+                "upstream",
+                provider=provider,
+                redirect_to=redirect_to,
+            )
+
+        u = await fetch_oauth_user_profile(provider.value, access_token)
+        if not u:
+            logger.warning(
+                "oauth profile fetch failed",
+                **_oauth_log_fields(
+                    provider,
+                    stage="profile_fetch",
+                    result="failure",
+                    error_code="SKILLHUB_OAUTH_PROFILE_FETCH_FAILED",
+                    error_class="upstream",
+                ),
+            )
+            return _oauth_redirect_error(
+                f"获取 {label} 用户信息失败",
+                "SKILLHUB_OAUTH_PROFILE_FETCH_FAILED",
+                "upstream",
+                provider=provider,
+                redirect_to=redirect_to,
+            )
+
+        uid_raw = u.get("id") or ""
+        uid = str(uid_raw).strip()
+        if not uid:
+            logger.warning(
+                "oauth user id missing",
+                **_oauth_log_fields(
+                    provider,
+                    stage="profile_validate",
+                    result="failure",
+                    error_code="SKILLHUB_OAUTH_USER_ID_MISSING",
+                    error_class="upstream",
+                ),
+            )
+            return _oauth_redirect_error(
+                f"获取 {label} 用户信息失败",
+                "SKILLHUB_OAUTH_USER_ID_MISSING",
+                "upstream",
+                provider=provider,
+                redirect_to=redirect_to,
+            )
+
+        login = (u.get("login") or u.get("username") or "").strip() or str(
+            uid_raw
+        ).strip()
+        display_name = (u.get("name") or "").strip() or login
+        avatar = u.get("avatar_url") or u.get("avatar") or ""
+        result = {
+            "provider": provider.value,
+            "access_token": access_token,
+            "token_type": str(token_json.get("token_type") or "bearer"),
+            "user": {
+                "id": uid,
+                "name": display_name,
+                "login": login,
+                "avatar_url": (avatar or None) if avatar else None,
+            },
+        }
+
+        return result
+
+
 @router.get("/oauth/{provider}/start")
-async def oauth_start(provider: OAuthProvider, redirect_to: str | None = None):
-    """浏览器访问：重定向到对应厂商授权页。
-
-    redirect_to：本地客户端（loopback）回调地址，登录完成后 oauth_session 将
-    302 到该地址而非前端 /login。仅允许 http://127.0.0.1:port、http://[::1]:port
-    （RFC 8252 字面 IP，不含 localhost）；非法值直接 400，不回退默认（避免调用方
-    误以为回跳生效）。
-    """
-    with operation_context(operation_type="oauth_start"):
+async def oauth_start(provider: str, request: Request, redirect_to: str | None = None):
+    """Start built-in or configured adapter authorization using one OAuth transaction flow."""
+    provider = _resolve_oauth_provider(provider)
+    with oauth_operation_context(
+        "oauth_start", extension=isinstance(provider, OAuthExtensionChannel)
+    ):
         bind_operation_actor(actor_type="anonymous")
-        bind_operation_resource(resource_type="oauth_provider", resource_id=provider.value)
+        bind_operation_resource(
+            resource_type="oauth_provider", resource_id=provider.value
+        )
         _assert_oauth_ready(provider)
-
         validated_redirect_to = _validate_loopback_redirect(redirect_to)
         if redirect_to and not validated_redirect_to:
             raise BusinessError(
@@ -423,215 +610,166 @@ async def oauth_start(provider: OAuthProvider, redirect_to: str | None = None):
                 error_code="SKILLHUB_OAUTH_INVALID_REDIRECT_TO",
                 error_class="validation",
             )
-
         state = secrets.token_urlsafe(32)
-        store = get_oauth_str_store()
-        # state 记录携带 redirect_to：回调时从服务端取出，绝不在 /callback 上
-        # 作为参数接收（信任决策只在 /start 一处做）
-        store.set_ex(
+        record = {"redirect_to": validated_redirect_to}
+        binding = None
+        try:
+            authorization = await _provider_authorization(provider, state)
+            if isinstance(provider, OAuthExtensionChannel):
+                callback_path = f"/api/v1/auth/oauth/{provider.value}/callback"
+                binding, browser_record = create_browser_binding(
+                    authorization.callback_uri, callback_path
+                )
+                record.update(browser_record)
+                record["transaction"] = authorization.transaction
+        except IdentityError:
+            logger.warning(
+                "oauth start failed",
+                **complete_operation_result(
+                    result="failure",
+                    provider=provider.value,
+                    error_code="SKILLHUB_OAUTH_REQUEST_FAILED",
+                    error_class="upstream",
+                ),
+            )
+            raise _oauth_api_error(
+                status_code=502,
+                message="Cannot connect to identity service",
+                error="oauth_request_failed",
+                error_code="SKILLHUB_OAUTH_REQUEST_FAILED",
+                error_class="upstream",
+            ) from None
+        get_oauth_str_store().set_ex(
             _state_key(provider, state),
-            json.dumps({"redirect_to": validated_redirect_to}, ensure_ascii=False),
-            600,
+            json.dumps(record, ensure_ascii=False),
+            STATE_TTL_SECONDS,
+        )
+        response = None
+        if binding is not None:
+            response = RedirectResponse(url=authorization.url, status_code=302)
+            set_browser_binding(response, request, state, binding, record)
+        logger.info(
+            "oauthstart",
+            **complete_operation_result(result="success", provider=provider.value),
+        )
+        return (
+            response
+            if response is not None
+            else RedirectResponse(url=authorization.url, status_code=302)
         )
 
-        if provider == OAuthProvider.agentos:
-            params = {
-                "client_id": settings.agentos_oauth_client_id,
-                "redirect_uri": settings.agentos_oauth_redirect_uri,
-                "response_type": "code",
-                "state": state,
-            }
-            authorize_url = settings.agentos_oauth_authorize_url
-        elif provider == OAuthProvider.gitcode:
-            params = {
-                "client_id": settings.gitcode_oauth_client_id,
-                "redirect_uri": settings.gitcode_oauth_redirect_uri,
-                "response_type": "code",
-                "scope": settings.gitcode_oauth_scope,
-                "state": state,
-            }
-            authorize_url = settings.gitcode_oauth_authorize_url
-        else:
-            params = {
-                "client_id": settings.github_oauth_client_id,
-                "redirect_uri": settings.github_oauth_redirect_uri,
-                "response_type": "code",
-                "scope": settings.github_oauth_scope,
-                "state": state,
-            }
-            authorize_url = settings.github_oauth_authorize_url
 
-        logger.info("oauthstart", **complete_operation_result(result="success", provider=provider.value))
-        url = f"{authorize_url}?{urlencode(params)}"
-        return RedirectResponse(url=url, status_code=302)
-
-
-@router.get("/oauth/{provider}/callback")
-async def oauth_callback(
-    provider: OAuthProvider,
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-    error_description: str | None = None,
+async def _oauth_callback_response(
+    provider, request: Request, callback_params: dict, store, preview
 ):
-    """用 code 换 access_token，拉用户信息，写入一次性 oauth_session 后重定向。
+    code = callback_params.get("code")
+    state = callback_params.get("state")
+    error = callback_params.get("error")
+    error_description = callback_params.get("error_description")
+    extension = isinstance(provider, OAuthExtensionChannel)
+    redirect_to = None
 
-    回跳目标：state 记录携带的合法 redirect_to（本地客户端），缺省前端 /login。
-    """
-    with operation_context(operation_type="oauth_callback"):
-        bind_operation_actor(actor_type="anonymous")
-        bind_operation_resource(resource_type="oauth_provider", resource_id=provider.value)
-        label = _provider_label(provider)
+    def _peek_redirect_to(state_value):
+        if not state_value:
+            return None
+        record = _load_state_record(store.get(_state_key(provider, state_value)))
+        return _validate_loopback_redirect(
+            record.get("redirect_to") if isinstance(record, dict) else None
+        )
 
-        # state 记录里的 redirect_to 决定所有出口（成功/失败）的回跳目标；
-        # state 校验前的失败（如厂商返回 error）也尽量查一次记录取回目标，
-        # 查不到再回退默认前端 /login
-        store = get_oauth_str_store()
-        redirect_to: str | None = None
-
-        def _peek_redirect_to(state_value: str | None) -> str | None:
-            if not state_value:
-                return None
-            record = _load_state_record(store.get(_state_key(provider, state_value)))
-            return _validate_loopback_redirect(
-                record.get("redirect_to") if isinstance(record, dict) else None
-            )
-
-        try:
-            _assert_oauth_ready(provider)
-        except BusinessError as exc:
-            return _redirect_from_publish_error(exc, provider=provider, redirect_to=_peek_redirect_to(state))
-
+    try:
+        _assert_oauth_ready(provider)
+    except BusinessError as exc:
+        return _redirect_from_publish_error(
+            exc, provider=provider, redirect_to=_peek_redirect_to(state)
+        )
+    if error and not extension:
+        return _oauth_redirect_error(
+            error_description or error or "授权已取消",
+            "SKILLHUB_OAUTH_AUTHORIZATION_REJECTED",
+            provider=provider,
+            redirect_to=_peek_redirect_to(state),
+        )
+    if not state or (not code and not extension):
+        return _oauth_redirect_error(
+            "缺少授权参数",
+            "SKILLHUB_OAUTH_MISSING_CODE_OR_STATE",
+            "validation",
+            provider=provider,
+            redirect_to=_peek_redirect_to(state),
+        )
+    if extension and not browser_binding_valid(request, state, preview):
+        return _oauth_redirect_error(
+            "Invalid or expired login state",
+            "SKILLHUB_OAUTH_STATE_INVALID",
+            provider=provider,
+        )
+    raw_state = store.get_del(_state_key(provider, state))
+    if not raw_state:
+        return _oauth_redirect_error(
+            "状态无效或已过期，请重新登录",
+            "SKILLHUB_OAUTH_STATE_INVALID",
+            provider=provider,
+        )
+    state_record = _load_state_record(raw_state)
+    if extension and not browser_binding_valid(request, state, state_record):
+        return _oauth_redirect_error(
+            "Invalid or expired login state",
+            "SKILLHUB_OAUTH_STATE_INVALID",
+            provider=provider,
+        )
+    if isinstance(state_record, dict):
+        redirect_to = _validate_loopback_redirect(state_record.get("redirect_to"))
+    try:
         if error:
-            msg = error_description or error or "授权已取消"
-            return _oauth_redirect_error(
-                msg,
-                "SKILLHUB_OAUTH_AUTHORIZATION_REJECTED",
-                provider=provider,
-                redirect_to=_peek_redirect_to(state),
-            )
-
-        if not code or not state:
-            return _oauth_redirect_error(
-                "缺少授权参数",
-                "SKILLHUB_OAUTH_MISSING_CODE_OR_STATE",
-                "validation",
-                provider=provider,
-                redirect_to=_peek_redirect_to(state),
-            )
-
-        state_key = _state_key(provider, state)
-        # 原子取出并删除：state 一次性，与 /session 的 get_del 对齐（F-57 补修）
-        raw_state = store.get_del(state_key)
-        if not raw_state:
-            return _oauth_redirect_error(
-                "状态无效或已过期，请重新登录",
-                "SKILLHUB_OAUTH_STATE_INVALID",
-                provider=provider,
-            )
-        state_record = _load_state_record(raw_state)
-        if isinstance(state_record, dict):
-            redirect_to = _validate_loopback_redirect(state_record.get("redirect_to"))
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                token_json = await _exchange_code_for_token_json(client, provider, code)
-                access_token = token_json.get("access_token")
-                if not access_token:
-                    return _oauth_redirect_error(
-                        f"{label} 未返回 access_token",
-                        "SKILLHUB_OAUTH_ACCESS_TOKEN_MISSING",
-                        "upstream",
-                        provider=provider,
-                        redirect_to=redirect_to,
-                    )
-
-                u = await fetch_oauth_user_profile(provider.value, access_token)
-                if not u:
-                    logger.warning(
-                        "oauth profile fetch failed",
-                        **_oauth_log_fields(
-                            provider,
-                            stage="profile_fetch",
-                            result="failure",
-                            error_code="SKILLHUB_OAUTH_PROFILE_FETCH_FAILED",
-                            error_class="upstream",
-                        ),
-                    )
-                    return _oauth_redirect_error(
-                        f"获取 {label} 用户信息失败",
-                        "SKILLHUB_OAUTH_PROFILE_FETCH_FAILED",
-                        "upstream",
-                        provider=provider,
-                        redirect_to=redirect_to,
-                    )
-
-                uid_raw = u.get("id") or ""
-                uid = str(uid_raw).strip()
-                if not uid:
-                    logger.warning(
-                        "oauth user id missing",
-                        **_oauth_log_fields(
-                            provider,
-                            stage="profile_validate",
-                            result="failure",
-                            error_code="SKILLHUB_OAUTH_USER_ID_MISSING",
-                            error_class="upstream",
-                        ),
-                    )
-                    return _oauth_redirect_error(
-                        f"获取 {label} 用户信息失败",
-                        "SKILLHUB_OAUTH_USER_ID_MISSING",
-                        "upstream",
-                        provider=provider,
-                        redirect_to=redirect_to,
-                    )
-
-                login = (u.get("login") or u.get("username") or "").strip() or str(uid_raw).strip()
-                display_name = (u.get("name") or "").strip() or login
-                avatar = u.get("avatar_url") or u.get("avatar") or ""
-                bind_operation_actor(actor_id=uid, actor_name=display_name, actor_type="oauth_user")
-                result = {
-                    "provider": provider.value,
-                    "access_token": access_token,
-                    "token_type": str(token_json.get("token_type") or "bearer"),
-                    "user": {
-                        "id": uid,
-                        "name": display_name,
-                        "login": login,
-                        "avatar_url": (avatar or None) if avatar else None,
-                    },
-                }
-
-                pending = secrets.token_urlsafe(24)
-                store.set_ex(
-                    _pending_key(provider, pending),
-                    json.dumps(result, ensure_ascii=False),
-                    120,
-                )
-                logger.info(
-                    "oauthcallback",
-                    **complete_operation_result(
-                        result="success",
-                        provider=provider.value,
-                        user_id=uid,
-                    ),
-                )
-                # 回跳目标：redirect_to（loopback，含调用方自带 query 如 client_state）
-                # 或默认前端 /login；query 合并保证不破坏已有参数
-                return RedirectResponse(
-                    url=_append_query_params(
-                        _login_redirect_target({"redirect_to": redirect_to}),
-                        {
-                            "oauth_session": pending,
-                            "oauth_provider": provider.value,
-                        },
-                    ),
-                    status_code=302,
-                )
-        except BusinessError as exc:
-            return _redirect_from_publish_error(exc, provider=provider, redirect_to=redirect_to)
-        except httpx.RequestError:
+            raise IdentityError("Authorization rejected")
+        result = await _complete_provider_authorization(
+            provider, callback_params, state_record, redirect_to
+        )
+        if isinstance(result, RedirectResponse):
+            return result
+        user = result.get("user", {})
+        bind_operation_actor(
+            actor_id=user.get("id"),
+            actor_name=user.get("name"),
+            actor_type="oauth_user",
+        )
+        pending = secrets.token_urlsafe(24)
+        store.set_ex(
+            _pending_key(provider, pending),
+            json.dumps(result, ensure_ascii=False),
+            PENDING_TTL_SECONDS,
+        )
+        logger.info(
+            "oauthcallback",
+            **complete_operation_result(
+                result="success",
+                provider=provider.value,
+                user_id=user.get("id"),
+            ),
+        )
+        return RedirectResponse(
+            url=_append_query_params(
+                _login_redirect_target({"redirect_to": redirect_to}),
+                {"oauth_session": pending, "oauth_provider": provider.value},
+            ),
+            status_code=302,
+        )
+    except IdentityError:
+        return _oauth_redirect_error(
+            "Identity authentication failed; please sign in again",
+            "SKILLHUB_OAUTH_AUTHENTICATION_FAILED",
+            "upstream",
+            provider=provider,
+            status_code=502,
+            redirect_to=redirect_to,
+        )
+    except BusinessError as exc:
+        return _redirect_from_publish_error(
+            exc, provider=provider, redirect_to=redirect_to
+        )
+    except httpx.RequestError:
+        if not extension:
             logger.exception(
                 "oauth request failed",
                 **_oauth_log_fields(
@@ -647,58 +785,115 @@ async def oauth_callback(
                     ),
                 ),
             )
+        return _oauth_redirect_error(
+            "连接 OAuth 服务失败，请检查网络",
+            "SKILLHUB_OAUTH_REQUEST_FAILED",
+            "upstream",
+            provider=provider,
+            redirect_to=redirect_to,
+        )
+    except Exception:
+        if extension:
             return _oauth_redirect_error(
-                "连接 OAuth 服务失败，请检查网络",
-                "SKILLHUB_OAUTH_REQUEST_FAILED",
-                "upstream",
+                "Identity authentication failed; please sign in again",
+                "SKILLHUB_INTERNAL_UNEXPECTED",
+                "internal",
                 provider=provider,
+                status_code=500,
                 redirect_to=redirect_to,
             )
-        except Exception:
-            logger.exception(
-                "oauth callback failed",
-                **_oauth_log_fields(
-                    provider,
-                    stage="callback",
-                    result="failure",
-                    error_code="SKILLHUB_INTERNAL_UNEXPECTED",
-                    error_class="internal",
-                    error_message=safe_error_summary(
-                        error_code="SKILLHUB_INTERNAL_UNEXPECTED",
-                        error_class="internal",
-                        fallback="oauth callback failed",
-                    ),
-                ),
-            )
-            logger.warning(
-                "oauth callback redirect",
-                **complete_operation_result(
-                    result="failure",
-                    error_code="SKILLHUB_INTERNAL_UNEXPECTED",
-                    error_class="internal",
-                    error_message=safe_error_summary(
-                        error_code="SKILLHUB_INTERNAL_UNEXPECTED",
-                        error_class="internal",
-                        fallback="oauth callback failed",
-                    ),
-                    provider=provider.value,
-                    http_status=500,
-                ),
-            )
-            return _redirect_error(
-                "登录处理失败",
-                status_code=500,
+        logger.exception(
+            "oauth callback failed",
+            **_oauth_log_fields(
+                provider,
+                stage="callback",
+                result="failure",
                 error_code="SKILLHUB_INTERNAL_UNEXPECTED",
                 error_class="internal",
-                error_name="internal_error",
-                redirect_to=redirect_to,
-            )
+                error_message=safe_error_summary(
+                    error_code="SKILLHUB_INTERNAL_UNEXPECTED",
+                    error_class="internal",
+                    fallback="oauth callback failed",
+                ),
+            ),
+        )
+        logger.warning(
+            "oauth callback redirect",
+            **complete_operation_result(
+                result="failure",
+                error_code="SKILLHUB_INTERNAL_UNEXPECTED",
+                error_class="internal",
+                error_message=safe_error_summary(
+                    error_code="SKILLHUB_INTERNAL_UNEXPECTED",
+                    error_class="internal",
+                    fallback="oauth callback failed",
+                ),
+                provider=provider.value,
+                http_status=500,
+            ),
+        )
+        return _redirect_error(
+            "登录处理失败",
+            status_code=500,
+            error_code="SKILLHUB_INTERNAL_UNEXPECTED",
+            error_class="internal",
+            error_name="internal_error",
+            redirect_to=redirect_to,
+        )
+
+
+@router.get("/oauth/{provider}/callback")
+async def oauth_callback(
+    provider: str,
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """Consume one OAuth transaction, execute its protocol and return a one-use session."""
+    provider = _resolve_oauth_provider(provider)
+    with oauth_operation_context(
+        "oauth_callback", extension=isinstance(provider, OAuthExtensionChannel)
+    ):
+        bind_operation_actor(actor_type="anonymous")
+        bind_operation_resource(
+            resource_type="oauth_provider", resource_id=provider.value
+        )
+        store = get_oauth_str_store()
+        preview = None
+        if (
+            isinstance(provider, OAuthExtensionChannel)
+            and state
+            and 8 <= len(state) <= 256
+        ):
+            preview = _load_state_record(store.get(_state_key(provider, state)))
+        params = dict(request.query_params)
+        for name, value in {
+            "code": code,
+            "state": state,
+            "error": error,
+            "error_description": error_description,
+        }.items():
+            if value is not None:
+                params[name] = value
+        response = await _oauth_callback_response(
+            provider, request, params, store, preview
+        )
+        if isinstance(provider, OAuthExtensionChannel):
+            clear_browser_binding(response, state or "", preview)
+        return response
 
 
 @router.post("/oauth/{provider}/session", response_model=ResponseModel[dict])
-async def oauth_session_exchange(provider: OAuthProvider, body: OAuthSessionBody):
+async def oauth_session_exchange(provider: str, body: OAuthSessionBody, response: Response):
     """前端用 oauth_session 一次性兑换 access_token 与展示用用户信息（不返回 refresh_token）。"""
-    with operation_context(operation_type="oauth_session_exchange"):
+    provider = _resolve_oauth_provider(provider)
+    if isinstance(provider, OAuthExtensionChannel):
+        response.headers["Cache-Control"] = "no-store"
+    with oauth_operation_context(
+        "oauth_session_exchange", extension=isinstance(provider, OAuthExtensionChannel)
+    ):
         bind_operation_actor(actor_type="anonymous")
         bind_operation_resource(resource_type="oauth_provider", resource_id=provider.value)
         _assert_oauth_ready(provider)
@@ -763,8 +958,11 @@ async def auth_me(
     x_oauth_provider: str | None = Header(None, alias="X-OAuth-Provider"),
 ):
     """校验当前 Bearer，按 X-OAuth-Provider 选择厂商用户接口（缺省 gitcode）。"""
-    with operation_context(operation_type="oauth_me"):
-        bind_operation_actor(actor_type="oauth_user")
+    extension = (x_oauth_provider or "").strip().lower() not in (
+        "", "gitcode", "github", "agentos",
+    )
+    with oauth_operation_context("oauth_me", extension=extension):
+        bind_operation_actor(actor_type="anonymous" if extension else "oauth_user")
         if not authorization or not authorization.strip().lower().startswith("bearer "):
             raise _oauth_api_error(
                 status_code=status.HTTP_401_UNAUTHORIZED,

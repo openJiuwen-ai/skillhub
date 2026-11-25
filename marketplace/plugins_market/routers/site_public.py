@@ -32,7 +32,10 @@ def plain_markdown_response(text: str) -> PlainTextResponse:
 @router.get("/config")
 async def get_site_config():
     """前端运行时配置，用于功能开关，无需重新构建前端。"""
+    from plugins_market.identity_extensions.registry import get_runtime_registry
+
     return {
+        "identity_extensions": get_runtime_registry().public_providers(),
         "playground_enabled": settings.playground_enabled,
         "github_star_enabled": settings.github_star_enabled,
         "gitcode_oauth_enabled": settings.gitcode_oauth_enabled,

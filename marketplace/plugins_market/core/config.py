@@ -6,7 +6,6 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
-
 DEFAULT_AUTH_USER_API_URL = "https://gitcode.com/api/v5/user"
 DEFAULT_GITHUB_USER_API_URL = "https://api.github.com/user"
 
@@ -49,6 +48,11 @@ class Settings(BaseSettings):
     reload: bool = Field(default=False, validation_alias=AliasChoices("STORE_RELOAD", "RELOAD"))
 
     db_url: str = ""
+
+    # Global opt-in for all additional identity providers; built-in OAuth is unchanged.
+    identity_extensions_enabled: bool = False
+    # Optional YAML file; individual channel switches cannot override the global gate.
+    identity_extensions_config: str = ""
 
     # Skill 审核管理员：env 中逗号分隔或 JSON 数组（如 ["a","b"]），须为 str 以便 pydantic-settings 不作 JSON 预解析
     review_admin_usernames: str = Field(

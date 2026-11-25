@@ -7,10 +7,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-
 from plugins_market.core.config import settings
-from plugins_market.core.github_user import fetch_github_profile
 from plugins_market.core.gitcode_user import fetch_gitcode_profile
+from plugins_market.core.github_user import fetch_github_profile
 from plugins_market.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -50,6 +49,25 @@ async def _fetch_agentos_profile(access_token: str) -> dict[str, Any] | None:
 
 
 async def fetch_oauth_user_profile(provider: str, access_token: str) -> dict[str, Any] | None:
+    # Built-in providers never initialize or consult the extension layer.
+    if provider not in ("gitcode", "github", "agentos"):
+        from plugins_market.identity_extensions.contracts import (
+            IdentityError,
+            validate_profile,
+        )
+        from plugins_market.identity_extensions.operations import invoke_adapter
+        from plugins_market.identity_extensions.registry import get_runtime_registry
+
+        extension = get_runtime_registry().get(provider)
+        if extension is None:
+            return None
+        try:
+            profile = await invoke_adapter(
+                extension.adapter, provider, "fetch_profile", access_token
+            )
+            return validate_profile(profile, system_user=settings.system_admin_user) if profile else None
+        except IdentityError:
+            return None
     if provider == "agentos":
         return await _fetch_agentos_profile(access_token)
     if provider == "github":
