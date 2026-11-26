@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from dataclasses import dataclass, field
 from typing import Any
 
 from recommender.offline.redis_sync.client import create_redis_client
@@ -23,12 +24,34 @@ logger = logging.getLogger(__name__)
 
 _KIND_ORDER = (KIND_DOWNLOAD, KIND_LIKE, KIND_STAR)
 
+
+@dataclass(frozen=True)
+class RedisClientKey:
+    """Hashable connection and namespace identity for cached Redis clients."""
+
+    host: str
+    port: int
+    db: int
+    ssl: bool
+    password: str = field(repr=False)
+    username: str
+    key_prefix: str
+
+
 _client_lock = threading.Lock()
-_clients: dict[tuple, Any] = {}
+_clients: dict[RedisClientKey, Any] = {}
 
 
-def _client_key(cfg: RedisConfig) -> tuple:
-    return (cfg.host, int(cfg.port), int(cfg.db), bool(cfg.ssl), cfg.password or "")
+def _client_key(cfg: RedisConfig) -> RedisClientKey:
+    return RedisClientKey(
+        host=cfg.host,
+        port=int(cfg.port),
+        db=int(cfg.db),
+        ssl=bool(cfg.ssl),
+        password=cfg.password or "",
+        username=cfg.username,
+        key_prefix=cfg.key_prefix,
+    )
 
 
 def reset_redis_clients() -> None:
@@ -175,7 +198,8 @@ def load_topk_install_items(
     plugin_types = parse_plugin_types(plugin_type)
 
     def _load(client: Any, cfg: RedisConfig):
-        return client.get(cfg.topk_install.key), cfg.topk_install.key
+        key = cfg.topk_install.key
+        return client.get(key), key
 
     raw, key = _execute_redis(redis_cfg, _load)
     if not raw:

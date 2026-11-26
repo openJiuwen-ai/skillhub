@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from common.redis_client import create_redis_client as _create_redis_client
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
 
@@ -48,3 +49,10 @@ def redis_connection_kwargs(*, decode_responses: bool = True) -> dict[str, Any]:
     if resolve_redis_ssl():
         kwargs["ssl"] = True
     return kwargs
+
+
+def create_redis_client(*, decode_responses: bool = True, **overrides):
+    """Create the shared namespace-aware client, preserving per-use timeouts."""
+    kwargs = redis_connection_kwargs(decode_responses=decode_responses)
+    kwargs.update(overrides)
+    return _create_redis_client(key_prefix=settings.redis_key_prefix, **kwargs)

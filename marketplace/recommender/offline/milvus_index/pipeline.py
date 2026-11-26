@@ -18,9 +18,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
+from recommender.offline.package_sync.db import (
+    ActiveSkillVersion,
+    fetch_active_latest_skills,
+)
 from recommender.shared.config import AppConfig, load_config
-from recommender.offline.package_sync.db import ActiveSkillVersion, fetch_active_latest_skills
 
 from .embedding import embed_texts, make_embedding_model, upsert_batch
 from .lock import milvus_index_lock

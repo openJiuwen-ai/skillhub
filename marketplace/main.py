@@ -276,24 +276,13 @@ async def lifespan(app: FastAPI):
     redis_client = None
     if settings.redis_host:
         try:
-            import redis as redis_lib
-            redis_password = (
-                SecurityUtils.get_decrypt_secret("MARKET_REDIS_PASSWORD", default="")
-                or None
-            )
-            redis_username = (settings.redis_username or "").strip() or None
-            redis_client = redis_lib.Redis(
-                host=settings.redis_host,
-                port=settings.redis_port,
-                db=settings.redis_db,
-                username=redis_username,
-                password=redis_password,
+            from plugins_market.core.redis_client import create_redis_client
+
+            redis_client = create_redis_client(
                 decode_responses=False,
                 socket_connect_timeout=3,
-                # 须大于 reload_consumer 的 xreadgroup block=5s，否则正常轮询被误判超时；
-                # 坏连接限时报错后由消费者循环自行重试恢复
+                # Must exceed XREADGROUP's five-second blocking poll.
                 socket_timeout=10,
-                health_check_interval=30,
             )
             redis_client.ping()
             logger.info("retrieval: Redis connected %s:%s", settings.redis_host, settings.redis_port)

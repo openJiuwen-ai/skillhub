@@ -39,11 +39,11 @@ class MilvusLockHandle:
     redis: Any | None = None
 
 
-def _renew_until_stopped(client: Any, token: str, stop: threading.Event) -> None:
+def _renew_until_stopped(client: Any, token: str, stop: threading.Event, key: str = LOCK_KEY) -> None:
     interval = max(1.0, LOCK_TTL_SECONDS / 3)
     while not stop.wait(interval):
         try:
-            renewed = client.eval(_RENEW_SCRIPT, 1, LOCK_KEY, token, str(LOCK_TTL_SECONDS))
+            renewed = client.eval(_RENEW_SCRIPT, 1, key, token, str(LOCK_TTL_SECONDS))
         except Exception as exc:
             logger.warning("milvus index lock renew failed: %s", exc)
             continue
@@ -66,7 +66,8 @@ def milvus_index_lock(app_cfg: Any, *, skip: bool = False) -> Iterator[MilvusLoc
     token = str(uuid.uuid4())
     try:
         client = create_redis_client(app_cfg.redis)
-        acquired = bool(client.set(LOCK_KEY, token, nx=True, ex=LOCK_TTL_SECONDS))
+        key = LOCK_KEY
+        acquired = bool(client.set(key, token, nx=True, ex=LOCK_TTL_SECONDS))
     except Exception as exc:
         logger.error("milvus index lock unavailable: %s", exc)
         raise MilvusLockError(str(exc)) from exc
@@ -78,7 +79,7 @@ def milvus_index_lock(app_cfg: Any, *, skip: bool = False) -> Iterator[MilvusLoc
     stop = threading.Event()
     renewer = threading.Thread(
         target=_renew_until_stopped,
-        args=(client, token, stop),
+        args=(client, token, stop, key),
         name="milvus-index-lock-renew",
         daemon=True,
     )
@@ -89,6 +90,6 @@ def milvus_index_lock(app_cfg: Any, *, skip: bool = False) -> Iterator[MilvusLoc
         stop.set()
         renewer.join(timeout=1)
         try:
-            client.eval(_RELEASE_SCRIPT, 1, LOCK_KEY, token)
+            client.eval(_RELEASE_SCRIPT, 1, key, token)
         except Exception as exc:
             logger.warning("failed to release milvus index lock: %s", exc)
