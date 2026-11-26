@@ -28,9 +28,12 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from botocore.exceptions import ClientError
-from retrieval.indexing.workflows.artifacts import BuildMethod, IndexBuildRuntimeConfig
 from plugins_market.core.logging import get_logger
-from plugins_market.retrieval.groups import agent_retrieval_group, scanner_type_for_group
+from plugins_market.retrieval.groups import (
+    agent_retrieval_group,
+    scanner_type_for_group,
+)
+from retrieval.indexing.workflows.artifacts import BuildMethod, IndexBuildRuntimeConfig
 
 logger = get_logger(__name__)
 
@@ -98,11 +101,12 @@ def _index_dir_name() -> str:
 
 def _fetch_valid_item_records(db, group: str, bucket_name: str, uri_scheme: str = "obs") -> List[IndexItemRecord]:
     """Return storage zip URIs and market metadata for non-OFFLINE, latest-version plugins in *group*."""
-    from sqlalchemy import and_
-
-    from plugins_market.models.market_assets import MarketAssetDB
     from plugins_market.core.viewer_context import ANONYMOUS_VIEWER
-    from plugins_market.repositories.market_assets_repository import skill_moderation_list_clause
+    from plugins_market.models.market_assets import MarketAssetDB
+    from plugins_market.repositories.market_assets_repository import (
+        skill_moderation_list_clause,
+    )
+    from sqlalchemy import and_
 
     agent_group = agent_retrieval_group(group)
     if group == SKILL_GROUP:
@@ -429,9 +433,8 @@ def _fetch_uncategorized_skill_paths(db, item_paths: List[str]) -> set[str]:
 
 
 def _fetch_uncategorized_agent_paths(db, group: str, item_paths: List[str]) -> set[str]:
-    from sqlalchemy import or_
-
     from plugins_market.models.market_assets import MarketAssetDB
+    from sqlalchemy import or_
 
     asset_ids = {
         asset_id
@@ -1002,7 +1005,9 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
 
     lock_acquired = False
     if redis_client is not None and not skip_lock:
-        lock_acquired = bool(redis_client.set(_SKILL_TAG_LOCK_KEY, "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS))
+        lock_acquired = bool(
+            redis_client.set(_SKILL_TAG_LOCK_KEY, "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS)
+        )
         if not lock_acquired:
             logger.info("refresh_skill_tags: another instance holds the lock, skipping this run")
             return

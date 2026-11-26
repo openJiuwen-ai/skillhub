@@ -32,6 +32,8 @@ def _cfg() -> SimpleNamespace:
         db=0,
         ssl=False,
         password="",
+        username="",
+        key_prefix="",
         topk_install=SimpleNamespace(key="k"),
         user_seq=SimpleNamespace(key_prefix="p"),
     )

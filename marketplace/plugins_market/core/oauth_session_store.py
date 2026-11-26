@@ -9,6 +9,7 @@ import time
 from collections import OrderedDict
 from typing import Protocol
 
+from common.redis_client import create_redis_client
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
 from plugins_market.core.logging import get_logger
@@ -101,8 +102,8 @@ class _RedisOAuthStore:
         password: str,
         ssl: bool = False,
         username: str = "",
+        key_prefix: str = "",
     ) -> None:
-        import redis  # type: ignore[import-not-found]
 
         kwargs: dict = {
             "host": host,
@@ -122,7 +123,7 @@ class _RedisOAuthStore:
             kwargs["password"] = password
         if ssl:
             kwargs["ssl"] = True
-        self._r = redis.Redis(**kwargs)
+        self._r = create_redis_client(key_prefix=key_prefix, **kwargs)
         # 首次建连：未 PING 则仅创建客户端对象，网络/密码错误要在第一次命令时才会暴露
         self._r.ping()
 
@@ -182,6 +183,7 @@ def get_oauth_str_store() -> OAuthStrStore:
                 password=_resolve_redis_password(),
                 ssl=ssl,
                 username=(settings.redis_username or "").strip(),
+                key_prefix=settings.redis_key_prefix,
             )
             logger.info(
                 "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",

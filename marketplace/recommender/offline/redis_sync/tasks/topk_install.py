@@ -10,9 +10,14 @@ from typing import Any
 
 import pymysql
 from pymysql.cursors import DictCursor
-
-from recommender.shared.config import DATA_ROOT, AppConfig, DatabaseConfig, RedisConfig, TopKInstallSettings
 from recommender.offline.package_sync.db import OFFLINE_STATUS
+from recommender.shared.config import (
+    DATA_ROOT,
+    AppConfig,
+    DatabaseConfig,
+    RedisConfig,
+    TopKInstallSettings,
+)
 
 from ..client import create_redis_client
 from ..writer import write_json_snapshot

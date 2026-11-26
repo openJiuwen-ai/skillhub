@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
+from common.redis_client import create_async_redis_client
 from plugins_market.core.config import settings
 from plugins_market.core.logging import get_logger
 from plugins_market.core.rate_limit import SlidingWindowRateLimiter
@@ -135,8 +136,8 @@ class RedisPlaygroundStateStore:
         password: str,
         ssl: bool = False,
         username: str = "",
+        key_prefix: str = "",
     ) -> None:
-        from redis import asyncio as aioredis
 
         kwargs: dict = {
             "host": host,
@@ -156,7 +157,7 @@ class RedisPlaygroundStateStore:
             kwargs["password"] = password
         if ssl:
             kwargs["ssl"] = True
-        self._r = aioredis.Redis(**kwargs)
+        self._r = create_async_redis_client(key_prefix=key_prefix, **kwargs)
 
     async def register_session(
         self, session_id: str, record: PlaygroundSessionRecord, ttl_seconds: int
@@ -273,6 +274,7 @@ def get_playground_state_store() -> PlaygroundStateStore:
                 password=_resolve_redis_password(),
                 ssl=ssl,
                 username=(settings.redis_username or "").strip(),
+                key_prefix=settings.redis_key_prefix,
             )
             logger.info(
                 "playground state store: redis (host=%s port=%s db=%s ssl=%s)",

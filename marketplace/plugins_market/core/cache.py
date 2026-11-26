@@ -24,12 +24,12 @@ def _make_client():
     if not host:
         return None
     try:
-        import redis  # type: ignore[import-not-found]
+        from plugins_market.core.redis_client import (
+            create_redis_client,
+            resolve_redis_ssl,
+        )
 
-        from plugins_market.core.redis_client import redis_connection_kwargs, resolve_redis_ssl
-
-        kwargs = redis_connection_kwargs(decode_responses=True)
-        r = redis.Redis(**kwargs)
+        r = create_redis_client(decode_responses=True)
         r.ping()
         _client = r
         logger.info(

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from common.redis_namespace import normalize_redis_key_prefix
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
@@ -95,6 +96,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MARKET_REDIS_USERNAME", "REDIS_USERNAME"),
     )
     redis_password: str = Field(default="", validation_alias="MARKET_REDIS_PASSWORD")
+    redis_key_prefix: str = Field(default="", validation_alias="REDIS_KEY_PREFIX")
+
+    @field_validator("redis_key_prefix", mode="before")
+    @classmethod
+    def _normalize_redis_key_prefix(cls, value: str | None) -> str:
+        return normalize_redis_key_prefix(value)
+
     cache_backend: str = Field(
         default="redis",
         validation_alias=AliasChoices("MARKET_CACHE_BACKEND", "CACHE_BACKEND", "REDIS_BACKEND"),

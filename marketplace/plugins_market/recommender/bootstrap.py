@@ -12,8 +12,10 @@ def apply_recommender_settings_to_env() -> None:
     """
     Ensure recommender.shared.config.load_config() sees marketplace Settings.
 
-    Only fills missing env keys so explicit process env still wins.
+    Only fills missing connection env keys so explicit process env still wins.
+    The namespace always follows Settings, including an explicitly empty prefix.
     """
+    os.environ["REDIS_KEY_PREFIX"] = settings.redis_key_prefix
     pairs = {
         "MILVUS_HOST": settings.milvus_host,
         "MILVUS_PORT": str(settings.milvus_port),

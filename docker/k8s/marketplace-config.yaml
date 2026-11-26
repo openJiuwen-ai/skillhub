@@ -56,6 +56,8 @@ data:
   REDIS_HOST: ""
   REDIS_PORT: "6379"
   REDIS_DB: "0"
+  # 共享 Redis 时填写，如 skillhub:prod；末尾冒号自动补齐。
+  REDIS_KEY_PREFIX: ""
   # Redis 6 ACL 用户名。禁止 default 用户时填写；留空则不传 username。
   REDIS_USERNAME: ""
 

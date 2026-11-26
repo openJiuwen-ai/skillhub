@@ -11,8 +11,13 @@ from typing import Any
 
 import pymysql
 from pymysql.cursors import DictCursor
-
-from recommender.shared.config import DATA_ROOT, AppConfig, DatabaseConfig, RedisConfig, UserSeqSettings
+from recommender.shared.config import (
+    DATA_ROOT,
+    AppConfig,
+    DatabaseConfig,
+    RedisConfig,
+    UserSeqSettings,
+)
 
 from ..client import create_redis_client
 from ..writer import write_json_snapshots_pipeline

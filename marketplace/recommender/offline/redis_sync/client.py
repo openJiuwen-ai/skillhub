@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from common.redis_client import create_redis_client as _create_redis_client
 from recommender.shared.config import RedisConfig
 
 
 def create_redis_client(cfg: RedisConfig):
-    import redis
-
     kwargs = {
         "host": cfg.host,
         "port": cfg.port,
@@ -22,4 +21,4 @@ def create_redis_client(cfg: RedisConfig):
     username = (cfg.username or "").strip()
     if username:
         kwargs["username"] = username
-    return redis.Redis(**kwargs)
+    return _create_redis_client(key_prefix=cfg.key_prefix, **kwargs)

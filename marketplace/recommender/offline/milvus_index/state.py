@@ -68,7 +68,10 @@ def _load_redis_state(redis_client: Any) -> IndexState | None:
     return _state_from_payload(json.loads(raw))
 
 
-def load_state_shared(path: Path = DEFAULT_STATE_PATH, redis_client: Any | None = None) -> IndexState:
+def load_state_shared(
+    path: Path = DEFAULT_STATE_PATH,
+    redis_client: Any | None = None,
+) -> IndexState:
     """Prefer the newer of the local file and the shared Redis copy.
 
     A truncated local file falls back to Redis. If neither copy can be read, the

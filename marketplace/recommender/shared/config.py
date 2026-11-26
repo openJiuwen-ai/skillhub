@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from common.redis_namespace import normalize_redis_key_prefix
+
 ROOT = Path(__file__).resolve().parents[2]  # marketplace/
 DATA_ROOT = ROOT.parent / "data" / "skill_packages"
 
@@ -74,6 +76,10 @@ class RedisConfig:
     topk_install: TopKInstallSettings
     user_seq: UserSeqSettings
     username: str = ""
+    key_prefix: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "key_prefix", normalize_redis_key_prefix(self.key_prefix))
 
 
 @dataclass(frozen=True)
@@ -217,6 +223,7 @@ def load_config() -> AppConfig:
             password=redis_password,
             ssl=_resolve_redis_ssl(),
             username=_env("REDIS_USERNAME", "MARKET_REDIS_USERNAME", default=""),
+            key_prefix=_env("REDIS_KEY_PREFIX", default=""),
             topk_install=TopKInstallSettings(
                 key=_env("REDIS_TOPK_INSTALL_KEY", "MARKET_REDIS_TOPK_INSTALL_KEY", default="skill_rec:topk:install"),
                 # 0 = full ranked catalog (兜底「全部」); >0 = classic TopK

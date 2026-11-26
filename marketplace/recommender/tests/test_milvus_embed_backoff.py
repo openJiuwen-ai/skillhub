@@ -318,7 +318,7 @@ class _Redis:
 def test_milvus_lock_allows_one_holder(monkeypatch) -> None:
     redis = _Redis()
     monkeypatch.setattr(milvus_lock, "create_redis_client", lambda cfg: redis)
-    app = SimpleNamespace(redis=object())
+    app = SimpleNamespace(redis=SimpleNamespace(key_prefix=""))
     with milvus_lock.milvus_index_lock(app) as first:
         assert first.proceed
         with milvus_lock.milvus_index_lock(app) as second:
