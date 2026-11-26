@@ -32,7 +32,9 @@ def test_business_modules_do_not_construct_raw_clients_or_prefix_keys():
                 assert (node.module or "").split(".")[0] != "redis", str(path)
             if isinstance(node, ast.Call):
                 name = ast.unparse(node.func)
-                assert name not in {"redis_key", "redis_channel", "redis.Redis", "aioredis.Redis", "redis_lib.Redis"}, str(path)
+                assert name not in {
+                    "redis_key", "redis_channel", "redis.Redis", "aioredis.Redis", "redis_lib.Redis"
+                }, str(path)
 
 
 @pytest.mark.parametrize("prefix", ["", "app", "app:", "app::"])
@@ -168,7 +170,10 @@ def test_pubsub_prefixes_callbacks_patterns_and_unsubscriptions():
     raw = MagicMock()
     pubsub = RedisClient(raw, "app[*]?").pubsub(ignore_subscribe_messages=True)
     sub = raw.pubsub.return_value
-    callback = lambda message: None
+
+    def callback(_message):
+        return None
+
     pubsub.subscribe("events", alerts=callback)
     sub.subscribe.assert_called_once_with("app[*]?:events", **{"app[*]?:alerts": callback})
     pubsub.psubscribe("events:*", **{"alerts:*": callback})
@@ -204,7 +209,10 @@ def test_pubsub_preserves_subscription_handlers_when_driver_supports_them():
     if subscription_type is None:
         pytest.skip("This driver predates Subscription objects")
     raw = MagicMock()
-    handler = lambda message: None
+
+    def handler(_message):
+        return None
+
     item = subscription_type("events", handler)
     RedisClient(raw, "app").pubsub().subscribe(item)
     raw.pubsub.return_value.subscribe.assert_called_once_with(subscription_type("app:events", handler))
@@ -277,7 +285,9 @@ def test_real_async_redis_pipeline_atomic_getdel_and_lua(redis_server):
                 assert await pipe.execute() == [True, 1]
             assert await client.get("key") == b"value"
             assert await client.hgetall("hash") == {b"field": b"value"}
-            assert await client.eval("return {redis.call('GET', KEYS[1]), ARGV[1]}", 1, "key", "owner") == [b"value", b"owner"]
+            assert await client.eval(
+                "return {redis.call('GET', KEYS[1]), ARGV[1]}", 1, "key", "owner"
+            ) == [b"value", b"owner"]
             values = await asyncio.gather(client.getdel("key"), client.getdel("key"))
             assert values.count(b"value") == 1 and values.count(None) == 1
         finally:
