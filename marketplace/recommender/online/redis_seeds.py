@@ -8,7 +8,6 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.redis_namespace import redis_key
 from recommender.offline.redis_sync.client import create_redis_client
 from recommender.offline.redis_sync.tasks.user_sequences import (
     KIND_DOWNLOAD,
@@ -148,7 +147,7 @@ def load_user_seed_ids(
         return []
 
     def _load(client: Any, cfg: RedisConfig) -> list[str]:
-        prefix = redis_key(cfg.user_seq.key_prefix.rstrip(":"), cfg.key_prefix)
+        prefix = cfg.user_seq.key_prefix.rstrip(":")
         if not client.sismember(user_seq_index_key(prefix), uid):
             return []
 
@@ -199,7 +198,7 @@ def load_topk_install_items(
     plugin_types = parse_plugin_types(plugin_type)
 
     def _load(client: Any, cfg: RedisConfig):
-        key = redis_key(cfg.topk_install.key, cfg.key_prefix)
+        key = cfg.topk_install.key
         return client.get(key), key
 
     raw, key = _execute_redis(redis_cfg, _load)

@@ -44,6 +44,10 @@ REDIS_KEY_PREFIX=skillhub:prod
 频道名称使用同一命名规则；当前检索通知采用 Stream，没有 Pub/Sub 频道调用。
 值、Hash 字段、Set 成员、Stream 消息字段、消费者组和消费者名称不加前缀。
 
+前缀在创建公共 Redis 客户端时绑定，由客户端内部统一处理。marketplace、推荐线上读写和
+离线任务均只传逻辑键名；Pipeline、Lua 的 KEYS 参数以及频道订阅也经过同一边界。
+业务代码不应手工拼接应用前缀，也不要将已经封装的客户端再次封装。
+
 原有 `REDIS_USER_SEQ_KEY_PREFIX` 仍是推荐业务前缀：上述配置配合其默认值 `skill_rec:user`，
 用户下载序列最终为 `skillhub:prod:skill_rec:user:<uid>:download`。
 

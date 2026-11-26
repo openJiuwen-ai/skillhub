@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from common.redis_namespace import normalize_redis_key_prefix, redis_channel, redis_key
+from common.redis_client import RedisClient
+from common.redis_namespace import normalize_redis_key_prefix
 from plugins_market.core.config import Settings, settings
 from recommender.shared.config import load_config
 
@@ -28,8 +29,6 @@ from recommender.shared.config import load_config
 )
 def test_namespace_normalization(value, expected):
     assert normalize_redis_key_prefix(value) == expected
-    assert redis_key("data", value) == expected + "data"
-    assert redis_channel("events", value) == expected + "events"
 
 
 def test_settings_and_standalone_recommender_agree(monkeypatch):
@@ -58,7 +57,7 @@ def test_cache_operations_share_namespace_without_changing_values(monkeypatch, p
     client = MagicMock()
     client.get.return_value = "value"
     client.incr.return_value = 1
-    monkeypatch.setattr(cache, "_make_client", lambda: client)
+    monkeypatch.setattr(cache, "_make_client", lambda: RedisClient(client, prefix))
     monkeypatch.setattr(settings, "redis_key_prefix", prefix)
     assert cache.cache_get("key") == "value"
     cache.cache_set("key", "value", 30)
@@ -119,7 +118,7 @@ def test_playground_pipeline_lua_and_message_counter(monkeypatch, prefix):
     client.incr = AsyncMock(return_value=1)
     client.expire = AsyncMock()
     monkeypatch.setattr("redis.asyncio.Redis", MagicMock(return_value=client))
-    store = RedisPlaygroundStateStore(host="redis.test", port=6379, db=0, password="")
+    store = RedisPlaygroundStateStore(host="redis.test", port=6379, db=0, password="", key_prefix=prefix)
 
     async def run():
         await store.register_session("s", PlaygroundSessionRecord("u", "t", "url"), 100)
@@ -176,8 +175,8 @@ def test_recommendation_writer_reader_and_gc_use_same_namespace(
     pipe.set.side_effect = client.set.side_effect
     client.smembers.return_value = {"old-user"}
     client.sismember.return_value = True
-    monkeypatch.setattr(topk_install, "create_redis_client", lambda _: client)
-    monkeypatch.setattr(user_sequences, "create_redis_client", lambda _: client)
+    monkeypatch.setattr(topk_install, "create_redis_client", lambda _: RedisClient(client, prefix))
+    monkeypatch.setattr(user_sequences, "create_redis_client", lambda _: RedisClient(client, prefix))
     monkeypatch.setattr(
         topk_install, "fetch_ranked_by_install_count", lambda *a, **k: []
     )
@@ -190,7 +189,7 @@ def test_recommendation_writer_reader_and_gc_use_same_namespace(
     monkeypatch.setattr(topk_install, "SUMMARY_PATH", tmp_path / "topk.json")
     monkeypatch.setattr(user_sequences, "SUMMARY_PATH", tmp_path / "users.json")
     monkeypatch.setattr(
-        redis_seeds, "_execute_redis", lambda cfg_arg, op: op(client, cfg_arg)
+        redis_seeds, "_execute_redis", lambda cfg_arg, op: op(RedisClient(client, prefix), cfg_arg)
     )
     topk_install.run_topk_install(cfg)
     user_sequences.run_user_sequences(cfg)
@@ -258,7 +257,7 @@ def test_milvus_lock_acquire_renew_release_use_same_key(monkeypatch, prefix):
 
     cfg = replace(load_config(), redis=replace(load_config().redis, key_prefix=prefix))
     client = MagicMock()
-    monkeypatch.setattr(lock, "create_redis_client", lambda _: client)
+    monkeypatch.setattr(lock, "create_redis_client", lambda _: RedisClient(client, prefix))
     stop = MagicMock()
     stop.wait.side_effect = [False, True]
     monkeypatch.setattr(lock.threading, "Event", MagicMock(return_value=stop))
@@ -292,11 +291,11 @@ def test_shared_index_state_does_not_read_other_namespace(tmp_path, prefix):
     client = MagicMock()
     client.set.side_effect = data.__setitem__
     client.get.side_effect = data.get
-    expected = state.save_state_shared({}, tmp_path / "state.json", client, prefix)
+    expected = state.save_state_shared({}, tmp_path / "state.json", RedisClient(client, prefix))
     assert set(data) == {prefix + state.MILVUS_INDEX_STATE_KEY}
     remote_only_path = tmp_path / "remote-only.json"
-    assert state.load_state_shared(remote_only_path, client, "other") == state.IndexState.empty()
-    assert state.load_state_shared(remote_only_path, client, prefix) == expected
+    assert state.load_state_shared(remote_only_path, RedisClient(client, "other")) == state.IndexState.empty()
+    assert state.load_state_shared(remote_only_path, RedisClient(client, prefix)) == expected
 
 
 @pytest.mark.parametrize("prefix", ["", "app:", "app::"])
@@ -315,7 +314,7 @@ def test_stream_group_read_and_ack_use_namespaced_stream(monkeypatch, prefix):
         ],
         asyncio.CancelledError(),
     ]
-    asyncio.run(reload.run_reload_consumer(object(), client))
+    asyncio.run(reload.run_reload_consumer(object(), RedisClient(client, prefix)))
     assert client.xgroup_create.call_args.args[0] == (prefix + "index:reload")
     assert client.xreadgroup.call_args.args[2] == {(prefix + "index:reload"): ">"}
     assert client.xack.call_args.args[0] == (prefix + "index:reload")
@@ -323,15 +322,15 @@ def test_stream_group_read_and_ack_use_namespaced_stream(monkeypatch, prefix):
 
 
 def test_channel_namespaces_are_distinct(monkeypatch):
-    from plugins_market.core import redis_client
-
-    monkeypatch.setattr(settings, "redis_key_prefix", "app:")
-    assert redis_client.redis_channel("events") == "app:events"
-    assert redis_client.redis_channel("events:*") == "app:events:*"
-    assert redis_channel("events", "app") != redis_channel("events", "other")
+    raw = MagicMock()
+    RedisClient(raw, "app").publish("events", "value")
+    RedisClient(raw, "other").publish("events", "value")
+    assert raw.publish.call_args_list[0].args == ("app:events", "value")
+    assert raw.publish.call_args_list[1].args == ("other:events", "value")
 
 
 def test_cache_namespaces_isolate_values_and_deletes(monkeypatch):
+    prefix = "app:"
     from plugins_market.core import cache
 
     data = {"key": "legacy", "other:key": "other app"}
@@ -343,7 +342,7 @@ def test_cache_namespaces_isolate_values_and_deletes(monkeypatch):
         return data.pop(key, None)
 
     client.delete.side_effect = delete_value
-    monkeypatch.setattr(cache, "_make_client", lambda: client)
+    monkeypatch.setattr(cache, "_make_client", lambda: RedisClient(client, prefix))
     monkeypatch.setattr(settings, "redis_key_prefix", "app:")
     assert cache.cache_get("key") is None
     cache.cache_set_persistent("key", "our app")
@@ -362,10 +361,9 @@ def test_embedding_counter_uses_same_key_for_increment_expire_and_release(
     client = MagicMock()
     client.incr.side_effect = [1, index.OFFLINE_EMBED_MAX_PER_MINUTE + 1, 1]
     monkeypatch.setattr(index, "_slot_redis", client)
-    monkeypatch.setattr(index, "_slot_key_prefix", "")
     monkeypatch.setattr(index.time, "time", lambda: 120.0)
     monkeypatch.setattr(index.time, "sleep", lambda _: None)
-    index.configure_offline_embedding_redis(client, prefix)
+    index.configure_offline_embedding_redis(RedisClient(client, prefix))
     model = MagicMock()
     model.embeddings.create.return_value = SimpleNamespace(
         data=[SimpleNamespace(embedding=[1.0, 0.0])]
@@ -408,7 +406,7 @@ def test_retrieval_broadcast_and_lock_are_namespaced(monkeypatch, prefix):
         db=MagicMock(),
         group_prefix="index",
         storage=SimpleNamespace(config=SimpleNamespace(bucket_name="bucket")),
-        redis_client=client,
+        redis_client=RedisClient(client, prefix),
         run_skill_tag=False,
     )
     client.xadd.assert_called_once_with(
@@ -424,7 +422,7 @@ def test_retrieval_broadcast_and_lock_are_namespaced(monkeypatch, prefix):
         storage=MagicMock(),
         skill_prefix="skill",
         plugin_prefix="plugin",
-        redis_client=client,
+        redis_client=RedisClient(client, prefix),
     )
     assert client.set.call_args.args[0] == (prefix + "retrieval:rebuild:lock")
     client.delete.assert_called_once_with(prefix + "retrieval:rebuild:lock")
@@ -441,7 +439,7 @@ def test_tag_refresh_locks_use_namespace_on_acquire_and_release(
     monkeypatch.setattr(rebuild, "_fetch_valid_item_paths", lambda *a, **kw: [])
     monkeypatch.setattr(rebuild, "_fetch_valid_item_records", lambda *a, **kw: [])
     client = MagicMock()
-    common = {"db_factory": MagicMock(), "storage": MagicMock(), "redis_client": client}
+    common = {"db_factory": MagicMock(), "storage": MagicMock(), "redis_client": RedisClient(client, prefix)}
     if kind == "skill":
         rebuild.refresh_skill_tags(
             rebuild.SkillTagRefreshOptions(skill_prefix="skills", **common)

@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pymysql
-from common.redis_namespace import redis_key
 from pymysql.cursors import DictCursor
 from recommender.shared.config import (
     DATA_ROOT,
@@ -144,7 +143,7 @@ def run_user_sequences(
         app_cfg.database, action_type=KIND_STAR, max_len=settings.max_len
     )
 
-    prefix = redis_key(settings.key_prefix.rstrip(":"), redis_cfg.key_prefix)
+    prefix = settings.key_prefix.rstrip(":")
     active_users: set[str] = set(downloads) | set(likes) | set(stars)
     payloads: dict[str, list[str]] = {}
     for uid in active_users:

@@ -29,7 +29,6 @@ from zoneinfo import ZoneInfo
 
 from botocore.exceptions import ClientError
 from plugins_market.core.logging import get_logger
-from plugins_market.core.redis_client import redis_key
 from plugins_market.retrieval.groups import (
     agent_retrieval_group,
     scanner_type_for_group,
@@ -905,7 +904,7 @@ def rebuild_one_group(
 
     if redis_client is not None:
         try:
-            redis_client.xadd(redis_key(_RELOAD_STREAM), {"group": group, "index_path": new_path_str})
+            redis_client.xadd(_RELOAD_STREAM, {"group": group, "index_path": new_path_str})
         except Exception as exc:
             logger.warning("broadcast reload failed group=%s: %s", group, exc)
 
@@ -950,7 +949,7 @@ def rebuild_all(
     """
     lock_acquired = False
     if redis_client is not None and not skip_lock:
-        lock_acquired = bool(redis_client.set(redis_key(_REBUILD_LOCK_KEY), "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS))
+        lock_acquired = bool(redis_client.set(_REBUILD_LOCK_KEY, "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS))
         if not lock_acquired:
             logger.info("rebuild_all: another instance holds the rebuild lock, skipping this run")
             return
@@ -988,7 +987,7 @@ def rebuild_all(
     finally:
         if redis_client is not None and lock_acquired:
             try:
-                redis_client.delete(redis_key(_REBUILD_LOCK_KEY))
+                redis_client.delete(_REBUILD_LOCK_KEY)
             except Exception as exc:
                 logger.warning("rebuild_all: failed to release rebuild lock: %s", exc)
 
@@ -1007,7 +1006,7 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
     lock_acquired = False
     if redis_client is not None and not skip_lock:
         lock_acquired = bool(
-            redis_client.set(redis_key(_SKILL_TAG_LOCK_KEY), "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS)
+            redis_client.set(_SKILL_TAG_LOCK_KEY, "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS)
         )
         if not lock_acquired:
             logger.info("refresh_skill_tags: another instance holds the lock, skipping this run")
@@ -1052,7 +1051,7 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
     finally:
         if redis_client is not None and lock_acquired:
             try:
-                redis_client.delete(redis_key(_SKILL_TAG_LOCK_KEY))
+                redis_client.delete(_SKILL_TAG_LOCK_KEY)
             except Exception as exc:
                 logger.warning("refresh_skill_tags: failed to release lock: %s", exc)
 
@@ -1063,7 +1062,7 @@ def refresh_agent_tags(options: AgentTagRefreshOptions) -> None:
     if options.redis_client is not None and not options.skip_lock:
         lock_acquired = bool(
             options.redis_client.set(
-                redis_key(_AGENT_TAG_LOCK_KEY),
+                _AGENT_TAG_LOCK_KEY,
                 "1",
                 nx=True,
                 ex=_REBUILD_LOCK_TTL_SECONDS,
@@ -1118,6 +1117,6 @@ def refresh_agent_tags(options: AgentTagRefreshOptions) -> None:
     finally:
         if options.redis_client is not None and lock_acquired:
             try:
-                options.redis_client.delete(redis_key(_AGENT_TAG_LOCK_KEY))
+                options.redis_client.delete(_AGENT_TAG_LOCK_KEY)
             except Exception as exc:
                 logger.warning("refresh_agent_tags: failed to release lock: %s", exc)

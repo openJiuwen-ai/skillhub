@@ -122,13 +122,13 @@ def _resolve_embedding_text(
         return extract, "market_fields"
 
 
-def _share_offline_embedding_budget(redis_client: Any | None, key_prefix: str = "") -> None:
+def _share_offline_embedding_budget(redis_client: Any | None) -> None:
     if redis_client is None:
         return
     try:
         from indexing.embedding.index import configure_offline_embedding_redis
 
-        configure_offline_embedding_redis(redis_client, key_prefix)
+        configure_offline_embedding_redis(redis_client)
     except Exception as exc:
         logger.warning("offline embedding rate limit not configured: %s", exc)
 
@@ -416,7 +416,7 @@ def run_incremental_index(
     with milvus_index_lock(app_cfg, skip=skip_lock) as handle:
         if not handle.proceed:
             return None
-        _share_offline_embedding_budget(handle.redis, app_cfg.redis.key_prefix)
+        _share_offline_embedding_budget(handle.redis)
         return _run_incremental_index(
             app_cfg=app_cfg,
             state_path=state_path,
@@ -441,7 +441,7 @@ def _run_incremental_index(
     batch_size = batch_size or app_cfg.milvus.batch_size
 
     active = fetch_active_latest_skills(app_cfg)
-    state = load_state_shared(state_path, redis_client, app_cfg.redis.key_prefix)
+    state = load_state_shared(state_path, redis_client)
     plan = plan_incremental(active, state)
     logger.info(
         "Incremental plan: active=%s upsert=%s category_only=%s delete=%s",
@@ -475,7 +475,7 @@ def _run_incremental_index(
             newly_indexed_now,
             failed_now,
         )
-        save_state_shared(merged_now, state_path, redis_client, app_cfg.redis.key_prefix)
+        save_state_shared(merged_now, state_path, redis_client)
 
     upserted, failed, newly_indexed, items, failed_ids = _index_skills(
         collection,
@@ -508,7 +508,7 @@ def _run_incremental_index(
         newly_indexed,
         failed_ids,
     )
-    save_state_shared(merged, state_path, redis_client, app_cfg.redis.key_prefix)
+    save_state_shared(merged, state_path, redis_client)
 
     stats = PipelineStats(
         mode="incremental",
@@ -544,7 +544,7 @@ def run_full_rebuild(
     with milvus_index_lock(app_cfg, skip=skip_lock) as handle:
         if not handle.proceed:
             return None
-        _share_offline_embedding_budget(handle.redis, app_cfg.redis.key_prefix)
+        _share_offline_embedding_budget(handle.redis)
         return _run_full_rebuild(
             app_cfg=app_cfg,
             state_path=state_path,
@@ -624,7 +624,7 @@ def _run_full_rebuild(
             logger.exception("failed to drop incomplete collection %s", physical)
         raise
 
-    save_state_shared(indexed, state_path, redis_client, app_cfg.redis.key_prefix)
+    save_state_shared(indexed, state_path, redis_client)
     if previous and previous != physical:
         try:
             drop_collection_if_exists(previous)

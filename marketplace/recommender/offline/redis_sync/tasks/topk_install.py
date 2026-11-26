@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pymysql
-from common.redis_namespace import redis_key
 from pymysql.cursors import DictCursor
 from recommender.offline.package_sync.db import OFFLINE_STATUS
 from recommender.shared.config import (
@@ -148,7 +147,7 @@ def run_topk_install(
     client.ping()
     write_json_snapshot(
         client,
-        key=redis_key(settings.key, redis_cfg.key_prefix),
+        key=settings.key,
         payload=build_snapshot(items, top_k=settings.k),
         ttl_seconds=settings.ttl_seconds,
     )
@@ -157,7 +156,7 @@ def run_topk_install(
         task=TASK_NAME,
         started_at=started.isoformat(),
         finished_at=datetime.now(timezone.utc).isoformat(),
-        redis_key=redis_key(settings.key, redis_cfg.key_prefix),
+        redis_key=settings.key,
         top_k=settings.k,
         ttl_seconds=settings.ttl_seconds,
         written=len(items),

@@ -10,7 +10,6 @@ import asyncio
 import socket
 
 from plugins_market.core.logging import get_logger
-from plugins_market.core.redis_client import redis_key
 
 logger = get_logger(__name__)
 
@@ -21,7 +20,7 @@ _CONSUMER_GROUP_PREFIX = "reload"
 def _ensure_consumer_group(redis_client, group: str) -> None:
     """Create stream + consumer group if missing (Redis restart / empty DB)."""
     try:
-        redis_client.xgroup_create(redis_key(RELOAD_STREAM), group, id="$", mkstream=True)
+        redis_client.xgroup_create(RELOAD_STREAM, group, id="$", mkstream=True)
         logger.info("reload_consumer: created group=%s stream=%s", group, RELOAD_STREAM)
     except Exception as exc:
         # BUSYGROUP = already exists; anything else is unexpected but non-fatal here
@@ -62,7 +61,7 @@ async def run_reload_consumer(index_manager, redis_client) -> None:
         return redis_client.xreadgroup(
             group,
             consumer,
-            {redis_key(RELOAD_STREAM): ">"},
+            {RELOAD_STREAM: ">"},
             count=10,
             block=5000,
         )
@@ -76,7 +75,7 @@ async def run_reload_consumer(index_manager, redis_client) -> None:
                 for msg_id, fields in entries:
                     await loop.run_in_executor(None, lambda f=fields: _apply_reload(index_manager, f))
                     try:
-                        redis_client.xack(redis_key(RELOAD_STREAM), group, msg_id)
+                        redis_client.xack(RELOAD_STREAM, group, msg_id)
                     except Exception as exc:
                         logger.warning("xack failed msg_id=%s: %s", msg_id, exc)
         except asyncio.CancelledError:

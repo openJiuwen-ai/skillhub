@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from common.redis_namespace import redis_key
 from recommender.offline.redis_sync.client import create_redis_client
 
 logger = logging.getLogger(__name__)
@@ -67,7 +66,7 @@ def milvus_index_lock(app_cfg: Any, *, skip: bool = False) -> Iterator[MilvusLoc
     token = str(uuid.uuid4())
     try:
         client = create_redis_client(app_cfg.redis)
-        key = redis_key(LOCK_KEY, app_cfg.redis.key_prefix)
+        key = LOCK_KEY
         acquired = bool(client.set(key, token, nx=True, ex=LOCK_TTL_SECONDS))
     except Exception as exc:
         logger.error("milvus index lock unavailable: %s", exc)

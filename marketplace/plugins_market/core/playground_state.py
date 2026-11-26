@@ -11,10 +11,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
+from common.redis_client import create_async_redis_client
 from plugins_market.core.config import settings
 from plugins_market.core.logging import get_logger
 from plugins_market.core.rate_limit import SlidingWindowRateLimiter
-from plugins_market.core.redis_client import redis_key
 
 logger = get_logger(__name__)
 
@@ -136,8 +136,8 @@ class RedisPlaygroundStateStore:
         password: str,
         ssl: bool = False,
         username: str = "",
+        key_prefix: str = "",
     ) -> None:
-        from redis import asyncio as aioredis
 
         kwargs: dict = {
             "host": host,
@@ -157,13 +157,13 @@ class RedisPlaygroundStateStore:
             kwargs["password"] = password
         if ssl:
             kwargs["ssl"] = True
-        self._r = aioredis.Redis(**kwargs)
+        self._r = create_async_redis_client(key_prefix=key_prefix, **kwargs)
 
     async def register_session(
         self, session_id: str, record: PlaygroundSessionRecord, ttl_seconds: int
     ) -> None:
-        skey = redis_key(_KEY_SESSION.format(sid=session_id))
-        ukey = redis_key(_KEY_USER_SESSIONS.format(uid=record.user_id))
+        skey = _KEY_SESSION.format(sid=session_id)
+        ukey = _KEY_USER_SESSIONS.format(uid=record.user_id)
         pipe = self._r.pipeline()
         pipe.hset(skey, mapping={
             "user_id": record.user_id,
@@ -176,7 +176,7 @@ class RedisPlaygroundStateStore:
         await pipe.execute()
 
     async def get_session(self, session_id: str) -> PlaygroundSessionRecord | None:
-        data = await self._r.hgetall(redis_key(_KEY_SESSION.format(sid=session_id)))
+        data = await self._r.hgetall(_KEY_SESSION.format(sid=session_id))
         if not data:
             return None
         return PlaygroundSessionRecord(
@@ -188,20 +188,20 @@ class RedisPlaygroundStateStore:
     async def release_session(self, session_id: str) -> None:
         record = await self.get_session(session_id)
         pipe = self._r.pipeline()
-        pipe.delete(redis_key(_KEY_SESSION.format(sid=session_id)))
+        pipe.delete(_KEY_SESSION.format(sid=session_id))
         if record is not None and record.user_id:
-            pipe.srem(redis_key(_KEY_USER_SESSIONS.format(uid=record.user_id)), session_id)
+            pipe.srem(_KEY_USER_SESSIONS.format(uid=record.user_id), session_id)
         await pipe.execute()
 
     async def list_user_sessions(self, user_id: str) -> list[str]:
-        ukey = redis_key(_KEY_USER_SESSIONS.format(uid=user_id))
+        ukey = _KEY_USER_SESSIONS.format(uid=user_id)
         sids = await self._r.smembers(ukey)
         if not sids:
             return []
         alive: list[str] = []
         stale: list[str] = []
         for sid in sids:
-            if await self._r.exists(redis_key(_KEY_SESSION.format(sid=sid))):
+            if await self._r.exists(_KEY_SESSION.format(sid=sid)):
                 alive.append(sid)
             else:
                 stale.append(sid)  # 会话记录 TTL 已过期，集合里的残留成员顺手清掉
@@ -211,7 +211,7 @@ class RedisPlaygroundStateStore:
 
     @asynccontextmanager
     async def create_lock(self, user_id: str):
-        key = redis_key(_KEY_CREATE_LOCK.format(uid=user_id))
+        key = _KEY_CREATE_LOCK.format(uid=user_id)
         owner = uuid.uuid4().hex
         deadline = time.monotonic() + _CREATE_LOCK_WAIT_SECONDS
         while True:
@@ -234,7 +234,7 @@ class RedisPlaygroundStateStore:
             return True
         window = max(1, int(window_seconds))
         win_id = int(time.time()) // window
-        key = redis_key(_KEY_MSG_WINDOW.format(uid=user_id, win=win_id))
+        key = _KEY_MSG_WINDOW.format(uid=user_id, win=win_id)
         count = await self._r.incr(key)
         if count == 1:
             await self._r.expire(key, window + 1)
@@ -274,6 +274,7 @@ def get_playground_state_store() -> PlaygroundStateStore:
                 password=_resolve_redis_password(),
                 ssl=ssl,
                 username=(settings.redis_username or "").strip(),
+                key_prefix=settings.redis_key_prefix,
             )
             logger.info(
                 "playground state store: redis (host=%s port=%s db=%s ssl=%s)",

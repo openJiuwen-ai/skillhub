@@ -9,10 +9,10 @@ import time
 from collections import OrderedDict
 from typing import Protocol
 
+from common.redis_client import create_redis_client
 from common.security.security_utils import SecurityUtils
 from plugins_market.core.config import settings
 from plugins_market.core.logging import get_logger
-from plugins_market.core.redis_client import redis_key
 
 logger = get_logger(__name__)
 
@@ -102,8 +102,8 @@ class _RedisOAuthStore:
         password: str,
         ssl: bool = False,
         username: str = "",
+        key_prefix: str = "",
     ) -> None:
-        import redis  # type: ignore[import-not-found]
 
         kwargs: dict = {
             "host": host,
@@ -123,30 +123,30 @@ class _RedisOAuthStore:
             kwargs["password"] = password
         if ssl:
             kwargs["ssl"] = True
-        self._r = redis.Redis(**kwargs)
+        self._r = create_redis_client(key_prefix=key_prefix, **kwargs)
         # 首次建连：未 PING 则仅创建客户端对象，网络/密码错误要在第一次命令时才会暴露
         self._r.ping()
 
     def get(self, key: str) -> str | None:
-        v = self._r.get(redis_key(key))
+        v = self._r.get(key)
         return v if isinstance(v, str) else None
 
     def set_ex(self, key: str, value: str, ttl_seconds: int) -> None:
-        self._r.setex(redis_key(key), max(1, ttl_seconds), value)
+        self._r.setex(key, max(1, ttl_seconds), value)
 
     def delete(self, key: str) -> None:
-        self._r.delete(redis_key(key))
+        self._r.delete(key)
 
     def get_del(self, key: str) -> str | None:
         # 优先用 Redis 原生 GETDEL（Redis >= 6.2）原子取出并删除；
         # 旧版本不支持时回退到 pipeline(GET+DEL)，单连接下两条命令顺序执行，
         # 同一 key 的并发兑换最多只有一个能拿到非空值（DEL 幂等）。
         try:
-            v = self._r.getdel(redis_key(key))
+            v = self._r.getdel(key)
         except Exception:
             pipe = self._r.pipeline()
-            pipe.get(redis_key(key))
-            pipe.delete(redis_key(key))
+            pipe.get(key)
+            pipe.delete(key)
             v = pipe.execute()[0]
         return v if isinstance(v, str) else None
 
@@ -183,6 +183,7 @@ def get_oauth_str_store() -> OAuthStrStore:
                 password=_resolve_redis_password(),
                 ssl=ssl,
                 username=(settings.redis_username or "").strip(),
+                key_prefix=settings.redis_key_prefix,
             )
             logger.info(
                 "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",
