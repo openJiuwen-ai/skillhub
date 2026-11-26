@@ -46,6 +46,10 @@ export const API_ENDPOINTS = {
     versionFiles: (assetId: string, version: string) =>
       `/plugins/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(version)}/files`,
     moderation: (assetId: string) => `/plugins/${encodeURIComponent(assetId)}/moderation`,
+    /** POST /api/v1/plugins/moderation/batch — 批量通过/驳回待审版本 */
+    moderationBatch: '/plugins/moderation/batch',
+    /** POST /api/v1/plugins/versions/batch-delete — 批量删除待审/审查中版本 */
+    versionsBatchDelete: '/plugins/versions/batch-delete',
     interactions: (assetId: string) => `/plugins/${encodeURIComponent(assetId)}/interactions`,
     interact: (assetId: string) => `/plugins/${encodeURIComponent(assetId)}/interact`,
     GIT_SOURCES: '/plugins/git-sources',

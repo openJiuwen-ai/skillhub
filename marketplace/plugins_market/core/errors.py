@@ -73,6 +73,7 @@ _REGISTERED_ERROR_METADATA: dict[str, ErrorMetadata] = {
     "version_not_found": ErrorMetadata("SKILLHUB_PLUGIN_VERSION_NOT_FOUND", "not_found"),
     "plugin_package_not_found": ErrorMetadata("SKILLHUB_PLUGIN_PACKAGE_NOT_FOUND", "not_found"),
     "version_deleted": ErrorMetadata("SKILLHUB_PLUGIN_VERSION_DELETED", "conflict"),
+    "version_not_deletable": ErrorMetadata("SKILLHUB_PLUGIN_VERSION_NOT_DELETABLE", "conflict"),
     "db_error": ErrorMetadata("SKILLHUB_DATABASE_ERROR", "internal"),
     "raw_zip_build_failed": ErrorMetadata("SKILLHUB_PLUGIN_RAW_ZIP_BUILD_FAILED", "internal"),
     "skill_not_found": ErrorMetadata("SKILLHUB_SKILL_NOT_FOUND", "not_found"),

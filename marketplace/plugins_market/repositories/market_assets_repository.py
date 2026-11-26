@@ -568,9 +568,11 @@ class MarketAssetRepository(MarketBaseRepository[MarketAssetDB]):
         if params.publisher_id:
             q_assets = q_assets.filter(MarketAssetDB.publisher_id == params.publisher_id)
         if params.publisher_name and params.publisher_name.strip():
-            q_assets = q_assets.filter(
-                MarketAssetDB.publisher_name.ilike(f"%{params.publisher_name.strip()}%")
-            )
+            pub_kw = _prepare_tag_keyword_for_like(params.publisher_name)
+            if pub_kw:
+                q_assets = q_assets.filter(
+                    MarketAssetDB.publisher_name.ilike(f"%{pub_kw}%", escape="\\")
+                )
         if params.category_id and params.category_id.strip():
             q_assets = q_assets.filter(MarketAssetDB.category_id == params.category_id.strip())
         if params.plugin_type and params.plugin_type.strip():
