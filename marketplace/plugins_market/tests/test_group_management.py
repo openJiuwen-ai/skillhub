@@ -109,25 +109,21 @@ def test_join_request_approval_adds_member():
     assert members.total == 2
 
 
-def test_join_request_approval_is_idempotent_when_user_already_joined():
+def test_join_request_is_rejected_when_user_already_became_member_before_approval():
     db = _db()
     group = create_group_service(GroupCreateRequest(name="研发组", visibility="listed"), _auth(), db)
-    first = create_join_request_service(
-        group.group_id, GroupJoinRequestCreate(message="第一次"), _auth("u2", "User2"), db
+    join_request = create_join_request_service(
+        group.group_id, GroupJoinRequestCreate(message="申请"), _auth("u2", "User2"), db
     )
-    decide_join_request_service(
-        group.group_id, first.request_id, GroupJoinRequestDecision(status="approved"), _auth(), db
-    )
-    remove_group_member_service(group.group_id, "u2", _auth("u2", "User2"), db)
-    second = create_join_request_service(
-        group.group_id, GroupJoinRequestCreate(message="第二次"), _auth("u2", "User2"), db
+    upsert_group_member_service(
+        group.group_id, GroupMemberUpsertRequest(user_id="u2", user_name="User2", role="member"), _auth(), db
     )
 
     decided = decide_join_request_service(
-        group.group_id, second.request_id, GroupJoinRequestDecision(status="approved"), _auth(), db
+        group.group_id, join_request.request_id, GroupJoinRequestDecision(status="approved"), _auth(), db
     )
 
-    assert decided.status == "approved"
+    assert decided.status == "rejected"
 
 
 def test_join_request_can_be_rejected_reapplied_and_rejected_again():
