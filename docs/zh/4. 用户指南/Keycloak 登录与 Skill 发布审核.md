@@ -71,7 +71,7 @@ MARKET_REVIEW_ADMIN_USERNAMES=reviewer01
 ```
 
 - `MARKET_IDENTITY_EXTENSIONS_ENABLED` 是所有第三方账号扩展的总开关，渠道的 `enabled` 或其他 `enabled_env` 不能覆盖它。关闭后扩展登录、回调、会话兑换以及已有扩展 token 的业务鉴权均被拒绝，GitCode、GitHub、AgentOS 和系统管理员 Token 的原有行为不变。修改开关后需重启全部后端副本；不会删除已有资产，也不会撤销 Keycloak 自身的 token 或单点登录会话。
-- `MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的前端回跳地址，只需配置一次。OpenShift 模板中的原有注释示例位于 GitCode 配置段，但同样供 Keycloak 使用；在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，填写浏览器实际访问的前端基地址，包含协议、实际端口和路径前缀。已有正确值时沿用，不重复添加同名项；保存后滚动重启全部后端副本。此项不代替各渠道的启用开关、客户端凭据和回调地址。前端以 `/hub` 部署时，基地址可为 `https://hub.example.com/hub`，回调继续使用同一域名根路径下的 `/api/v1/auth/oauth/keycloak/callback`，并确保网关转发这条路径。
+- `MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的前端回跳地址，只需配置一次。OpenShift 模板中的注释示例位于登录/审核公共配置区域，紧随 `MARKET_GITHUB_OAUTH_ENABLED`，同样供 Keycloak 使用；在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，填写浏览器实际访问的前端基地址，包含协议、实际端口和路径前缀。已有正确值时沿用，不重复添加同名项；保存后滚动重启全部后端副本。此项不代替各渠道的启用开关、客户端凭据和回调地址。前端以 `/hub` 部署时，基地址可为 `https://hub.example.com/hub`，回调继续使用同一域名根路径下的 `/api/v1/auth/oauth/keycloak/callback`，并确保网关转发这条路径。
 - 审核名单已有账号时，将 `reviewer01` 追加到原名单，例如 `alice,bob,reviewer01`。如果部署使用 `MARKET_REVIEW_ADMIN_USERNAMES_FILE`，在原名单文件中追加，保持环境变量名单为空以继续使用文件。权限判断按用户名跨渠道匹配，应采用在已启用渠道中不会冲突的审核员用户名，并由管理员管控其使用。
 - 通过部署的密钥管理机制，将 Keycloak Client Secret 以 `SKILLHUB_ENTERPRISE_SECRET` 注入后端进程。已启用 Skillhub 密钥加密的部署，沿用现有 Root Key 或 KMS 体系生成兼容密文再注入。将真实凭证仅保存在密钥管理系统及其受控运行环境。 [Skillhub 密钥读取实现](../../../marketplace/common/security/security_utils.py)
 - Skillhub 默认禁止自审。启用自动审查的环境中，Skill 需先通过自动审查，再进入人工审核。 [配置项与默认值](../../../.env.example)

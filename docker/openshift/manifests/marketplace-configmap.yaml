@@ -26,6 +26,7 @@ data:
   SYSTEM_ADMIN_USER: "system_admin"        # 系统令牌请求的用户标识，令牌本身放 Secret。
   MARKET_GITCODE_OAUTH_ENABLED: "false"   # 回调、Client ID/Secret 配齐后改 true。
   MARKET_GITHUB_OAUTH_ENABLED: "false"    # 本轮不用 GitHub 登录。
+  # MARKET_OAUTH_FRONTEND_ORIGIN: "https://HOST" # /hub 构建改为 https://HOST/hub。
   # 第三方账号扩展总开关：false 时禁用所有扩展渠道，渠道 YAML 开关不能覆盖。
   MARKET_IDENTITY_EXTENSIONS_ENABLED: "false"  # 配齐 YAML 和密钥后改 true，滚动更新全部后端副本。
   MARKET_IDENTITY_EXTENSIONS_CONFIG: ""   # 填写 YAML 在后端容器内的绝对路径。
@@ -61,7 +62,6 @@ data:
   # GitCode OAuth：Client ID/Secret 放 Secret；回调须与 GitCode 应用注册值一致。
   # AUTH_USER_API_URL: "https://gitcode.com/api/v5/user" # Bearer 用户信息接口。
   # MARKET_GITCODE_OAUTH_REDIRECT_URI: "https://HOST/api/v1/auth/oauth/gitcode/callback"
-  # MARKET_OAUTH_FRONTEND_ORIGIN: "https://HOST" # /hub 构建改为 https://HOST/hub。
   # MARKET_GITCODE_OAUTH_SCOPE: "user_info"
   # MARKET_GITCODE_OAUTH_AUTHORIZE_URL: "https://gitcode.com/oauth/authorize"
   # MARKET_GITCODE_OAUTH_TOKEN_URL: "https://gitcode.com/oauth/token"

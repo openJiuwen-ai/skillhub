@@ -37,7 +37,7 @@ AgentOS 回调：http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
 
 `MARKET_OAUTH_FRONTEND_ORIGIN` 由 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用，只需配置一次。它决定后端完成登录回调后将浏览器送回哪个 Skillhub 前端，不是某个提供方的授权码回调地址，也不会单独启用登录渠道。
 
-OpenShift 的 `docker/openshift/manifests/marketplace-configmap.yaml` 中，原有注释示例位于 GitCode 配置段，但对所有渠道生效。部署时在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，并填写浏览器实际访问的前端地址：
+OpenShift 的 `docker/openshift/manifests/marketplace-configmap.yaml` 中，注释示例位于登录/审核公共配置区域，紧随 `MARKET_GITHUB_OAUTH_ENABLED`，对所有渠道生效。部署时在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，并填写浏览器实际访问的前端地址：
 
 ```yaml
 data:

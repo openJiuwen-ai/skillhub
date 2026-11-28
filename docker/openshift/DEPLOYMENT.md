@@ -155,7 +155,7 @@ MinIO 示例使用 `STORAGE_TYPE=MinIO`、`MARKET_CREDENTIALS_MODE=static`、`MA
 
 ## 5. 启用登录、发布与审核
 
-`MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的登录完成后前端回跳地址，只需配置一次。虽然 `manifests/marketplace-configmap.yaml` 的原有注释示例位于 GitCode 配置段，但它不属于 GitCode 专用项。
+`MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的登录完成后前端回跳地址，只需配置一次。`manifests/marketplace-configmap.yaml` 的注释示例位于登录/审核公共配置区域，紧随 `MARKET_GITHUB_OAUTH_ENABLED`，供所有登录渠道共用。
 
 启用任意登录渠道前，在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，将 `https://HOST` 替换为浏览器实际访问的 Skillhub 前端地址（包含协议、实际端口和路径前缀）。例如：
 
