@@ -31,7 +31,6 @@ data:
   MARKET_IDENTITY_EXTENSIONS_CONFIG: ""   # 填写 YAML 在后端容器内的绝对路径。
   MARKET_REVIEW_ADMIN_USERNAMES: "REPLACE_WITH_REVIEWER_GITCODE_LOGIN" # 与已启用渠道的审核员 login 精确匹配。
   # 启用 Keycloak 的步骤及可选挂载见 docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md（仓库根目录下）；总开关默认保持 false。
-  # MARKET_OAUTH_FRONTEND_ORIGIN: "https://HOST" # 所有登录渠道共用；/hub 构建改为 https://HOST/hub。
   # 仅在已挂载包含公共 CA 和企业根 CA 的证书包后启用；路径必须与 mountPath 一致。
   # SSL_CERT_FILE: "/app/certs/ca-bundle.pem" # HTTPX 进程级信任配置，不是关闭证书校验。
   MARKET_SKILL_REVIEW_ENABLED: "false"    # 关闭 AI 审查，人工审核仍可用。
@@ -62,6 +61,7 @@ data:
   # GitCode OAuth：Client ID/Secret 放 Secret；回调须与 GitCode 应用注册值一致。
   # AUTH_USER_API_URL: "https://gitcode.com/api/v5/user" # Bearer 用户信息接口。
   # MARKET_GITCODE_OAUTH_REDIRECT_URI: "https://HOST/api/v1/auth/oauth/gitcode/callback"
+  # MARKET_OAUTH_FRONTEND_ORIGIN: "https://HOST" # /hub 构建改为 https://HOST/hub。
   # MARKET_GITCODE_OAUTH_SCOPE: "user_info"
   # MARKET_GITCODE_OAUTH_AUTHORIZE_URL: "https://gitcode.com/oauth/authorize"
   # MARKET_GITCODE_OAUTH_TOKEN_URL: "https://gitcode.com/oauth/token"

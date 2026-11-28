@@ -155,6 +155,17 @@ MinIO 示例使用 `STORAGE_TYPE=MinIO`、`MARKET_CREDENTIALS_MODE=static`、`MA
 
 ## 5. 启用登录、发布与审核
 
+`MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的登录完成后前端回跳地址，只需配置一次。虽然 `manifests/marketplace-configmap.yaml` 的原有注释示例位于 GitCode 配置段，但它不属于 GitCode 专用项。
+
+启用任意登录渠道前，在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，将 `https://HOST` 替换为浏览器实际访问的 Skillhub 前端地址（包含协议、实际端口和路径前缀）。例如：
+
+```yaml
+data:
+  MARKET_OAUTH_FRONTEND_ORIGIN: "https://hub.example.com"
+```
+
+前端部署在 `/hub` 时填写 `https://hub.example.com/hub`。已有正确的生效值时沿用即可，不为每个渠道重复添加，也不创建同名重复键。保存后滚动重启全部后端副本。此项仅控制前端回跳，各渠道仍需分别配置启用开关、凭据和回调地址；第三方插件还需打开总开关和渠道开关并挂载配置。
+
 ### 5.1 GitCode 登录
 
 1. 在 **Networking → Routes** 取得前端 HTTPS 地址 `https://HOST`。在 GitCode OAuth 应用中注册回调地址 `https://HOST/api/v1/auth/oauth/gitcode/callback`，必须与应用中配置的值完全一致。

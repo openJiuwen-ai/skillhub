@@ -125,6 +125,8 @@ Kubernetes/OpenShift 打开后端实际引用的业务 Secret，追加 `SKILLHUB
 
 ## 5. 设置开关、地址与证书路径
 
+`MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的前端回跳地址，只需配置一次。OpenShift 配置模板的原有注释示例虽然位于 GitCode 段，Keycloak 同样使用它；部署时在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，填写浏览器实际访问的前端地址，包含协议、实际端口及路径前缀。根路径示例为 `https://hub.example.com`，`/hub` 部署为 `https://hub.example.com/hub`；已有正确值时沿用，不重复添加同名项。保存后滚动重启全部后端副本。此项不代替各渠道的启用开关、客户端凭据和回调地址。
+
 以下是后端进程所需的环境变量。Kubernetes/OpenShift 在后端实际引用的普通 ConfigMap 的 `data` 中合并；Docker Compose 放到现有后端服务的 `environment` 中；直接运行则使用现有服务管理器注入。保留其余配置：
 
 ```yaml

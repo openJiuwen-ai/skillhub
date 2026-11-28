@@ -1,106 +1,129 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Exercise Keycloak discovery against a real, untrusted local TLS server."""
+"""Exercise Keycloak certificate trust over a real asynchronous TLS connection."""
 
 import asyncio
 import ipaddress
 import json
 import ssl
-import threading
 from datetime import UTC, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from plugins_market.identity_extensions.contracts import IdentityError
 from plugins_market.identity_extensions.keycloak import adapter as adapter_module
 from plugins_market.identity_extensions.keycloak.config import KeycloakConfig
 
 
-def _write_self_signed_certificate(tmp_path):
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = datetime.now(UTC)
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(days=1))
-        .not_valid_after(now + timedelta(days=1))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .add_extension(
-            x509.SubjectAlternativeName(
-                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
-            ),
-            critical=False,
-        )
-        .sign(private_key, hashes.SHA256())
-    )
-    certificate_path = tmp_path / "ca.pem"
-    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path = tmp_path / "key.pem"
-    key_path.write_bytes(
-        private_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
-    return certificate_path, key_path
-
-
 @pytest.fixture
-def self_signed_oidc_server(tmp_path, monkeypatch):
-    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
-    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
-    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+def local_tls_material(tmp_path, monkeypatch):
+    for variable in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+        monkeypatch.delenv(variable, raising=False)
+    for variable in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(variable, "127.0.0.1,localhost")
     monkeypatch.setattr(
         adapter_module.SecurityUtils,
         "get_decrypt_secret",
         lambda *args, **kwargs: "test-client-secret",
     )
-    certificate_path, key_path = _write_self_signed_certificate(tmp_path)
 
-    class DiscoveryHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            payload = json.dumps(
-                {
-                    "issuer": issuer,
-                    "authorization_endpoint": issuer + "/auth",
-                    "token_endpoint": issuer + "/token",
-                    "userinfo_endpoint": issuer + "/userinfo",
-                    "jwks_uri": issuer + "/certs",
-                }
-            ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+    # TLS trust does not depend on the ID Token signing algorithm. A small EC key
+    # keeps each isolated test's certificate generation inexpensive.
+    key = ec.generate_private_key(ec.SECP256R1())
+    identity = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "skillhub-tls-test")])
+    created_at = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .serial_number(x509.random_serial_number())
+        .subject_name(identity)
+        .issuer_name(identity)
+        .public_key(key.public_key())
+        .not_valid_before(created_at - timedelta(minutes=1))
+        .not_valid_after(created_at + timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    ca_file = tmp_path.joinpath("trusted-ca.pem")
+    ca_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    server_pem = tmp_path.joinpath("server-identity.pem")
+    server_pem.write_bytes(
+        b"".join(
+            (
+                ca_file.read_bytes(),
+                key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                ),
+            )
+        )
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(server_pem)
+    return context, ca_file
 
-        def log_message(self, message, *args):
-            pass
 
-    with ThreadingHTTPServer(("127.0.0.1", 0), DiscoveryHandler) as server:
-        issuer = f"https://127.0.0.1:{server.server_port}/realms/company"
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certificate_path, key_path)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+async def _authorize_over_tls(context, options, requests):
+    metadata = {}
+    finished = asyncio.Event()
+
+    async def discovery_connection(reader, writer):
         try:
-            yield issuer, certificate_path
+            headers = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            requests.append(headers.split(b"\r\n", 1)[0].decode("ascii"))
+            body = json.dumps(metadata).encode("utf-8")
+            response_headers = "\r\n".join(
+                (
+                    "HTTP/1.1 200 OK",
+                    "Content-Type: application/json",
+                    f"Content-Length: {len(body)}",
+                    "Connection: close",
+                    "",
+                    "",
+                )
+            ).encode("ascii")
+            writer.writelines((response_headers, body))
+            await writer.drain()
         finally:
-            server.shutdown()
-            thread.join(timeout=5)
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+
+    listener = await asyncio.start_server(
+        discovery_connection, host="127.0.0.1", port=0, ssl=context,
+        ssl_handshake_timeout=5, ssl_shutdown_timeout=5,
+    )
+    async with listener:
+        port = listener.sockets[0].getsockname()[1]
+        issuer = f"https://127.0.0.1:{port}/realms/company"
+        metadata["issuer"] = issuer
+        for field, relative in (
+            ("authorization_endpoint", "auth"),
+            ("token_endpoint", "token"),
+            ("userinfo_endpoint", "userinfo"),
+            ("jwks_uri", "certs"),
+        ):
+            metadata[field] = urljoin(f"{issuer}/", relative)
+        config = KeycloakConfig(
+            issuer=issuer,
+            client_id="skillhub",
+            client_secret_env="TEST_IDENTITY_SECRET",
+            redirect_uri="https://hub.example.test/api/v1/auth/oauth/keycloak/callback",
+            **options,
+        )
+        adapter = adapter_module.KeycloakAdapter("keycloak", config)
+        authorization = await adapter.start_authorization(state="test-state")
+        await asyncio.wait_for(finished.wait(), timeout=5)
+        return authorization, metadata
 
 
 @pytest.mark.parametrize(
@@ -113,25 +136,21 @@ def self_signed_oidc_server(tmp_path, monkeypatch):
     ],
 )
 def test_keycloak_tls_verification_with_self_signed_server(
-    self_signed_oidc_server, monkeypatch, options, trusted_ca, succeeds
+    local_tls_material, monkeypatch, options, trusted_ca, succeeds
 ):
-    issuer, certificate_path = self_signed_oidc_server
+    context, ca_file = local_tls_material
     if trusted_ca:
-        monkeypatch.setenv("SSL_CERT_FILE", str(certificate_path))
-    config = KeycloakConfig(
-        issuer=issuer,
-        client_id="skillhub",
-        client_secret_env="TEST_IDENTITY_SECRET",
-        redirect_uri="https://hub.example.test/api/v1/auth/oauth/keycloak/callback",
-        **options,
-    )
-    adapter = adapter_module.KeycloakAdapter("keycloak", config)
+        monkeypatch.setenv("SSL_CERT_FILE", str(ca_file))
+    requests = []
     if succeeds:
-        authorization = asyncio.run(adapter.start_authorization(state="test-state"))
-        assert authorization.url.startswith(issuer + "/auth?")
-        assert parse_qs(urlsplit(authorization.url).query)["state"] == ["test-state"]
+        authorization, metadata = asyncio.run(_authorize_over_tls(context, options, requests))
+        actual = urlsplit(authorization.url)
+        assert actual._replace(query="") == urlsplit(metadata["authorization_endpoint"])
+        assert parse_qs(actual.query)["state"] == ["test-state"]
+        assert requests == ["GET /realms/company/.well-known/openid-configuration HTTP/1.1"]
     else:
         with pytest.raises(IdentityError) as failure:
-            asyncio.run(adapter.start_authorization(state="test-state"))
+            asyncio.run(_authorize_over_tls(context, options, requests))
         assert isinstance(failure.value.__cause__, httpx.ConnectError)
         assert "CERTIFICATE_VERIFY_FAILED" in str(failure.value.__cause__)
+        assert requests == []
