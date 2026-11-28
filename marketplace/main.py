@@ -684,6 +684,9 @@ async def lifespan(app: FastAPI):
     _reload_task = getattr(app.state, "reload_task", None)
     if _reload_task is not None:
         _reload_task.cancel()
+        # 等待消费循环退出：其 finally 会 XGROUP DESTROY 自己的组，
+        # 必须在关闭 Redis 之前完成，否则销毁会落在已 disconnect 的连接池上。
+        await asyncio.gather(_reload_task, return_exceptions=True)
     _warmup_task = getattr(app.state, "warmup_task", None)
     if _warmup_task is not None:
         _warmup_task.cancel()

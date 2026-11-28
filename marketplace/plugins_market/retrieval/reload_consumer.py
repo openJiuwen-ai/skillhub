@@ -8,6 +8,7 @@ so every instance independently receives every reload broadcast.
 
 import asyncio
 import socket
+import uuid
 
 from plugins_market.core.logging import get_logger
 
@@ -33,6 +34,15 @@ def _ensure_consumer_group(redis_client, group: str) -> None:
         logger.warning("reload_consumer: xgroup_create failed group=%s: %s", group, exc)
 
 
+def _destroy_consumer_group(redis_client, group: str) -> None:
+    """Graceful shutdown cleanup: remove this process's own consumer group."""
+    try:
+        redis_client.xgroup_destroy(RELOAD_STREAM, group)
+        logger.info("reload_consumer: destroyed group=%s", group)
+    except Exception as exc:
+        logger.warning("reload_consumer: xgroup_destroy failed group=%s: %s", group, exc)
+
+
 def _is_nogroup_error(exc: BaseException) -> bool:
     msg = str(exc)
     return "NOGROUP" in msg or "No such key" in msg
@@ -48,50 +58,62 @@ async def run_reload_consumer(index_manager, redis_client) -> None:
         logger.info("reload_consumer: Redis not configured, consumer disabled")
         return
 
-    instance_id = f"{socket.gethostname()}-{id(index_manager)}"
+    # uuid 后缀：进程重启不复用旧组名，避免继承死进程遗留 group 的 PEL 而漏掉广播。
+    instance_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
     group = f"{_CONSUMER_GROUP_PREFIX}-{instance_id}"
     consumer = instance_id
 
     _ensure_consumer_group(redis_client, group)
     logger.info("reload_consumer started group=%s", group)
 
-    loop = asyncio.get_running_loop()
+    try:
+        loop = asyncio.get_running_loop()
 
-    def _xreadgroup_blocking():
-        return redis_client.xreadgroup(
-            group,
-            consumer,
-            {RELOAD_STREAM: ">"},
-            count=10,
-            block=5000,
-        )
+        def _xreadgroup_blocking():
+            return redis_client.xreadgroup(
+                group,
+                consumer,
+                {RELOAD_STREAM: ">"},
+                count=10,
+                block=5000,
+            )
 
-    while True:
+        while True:
+            try:
+                msgs = await loop.run_in_executor(None, _xreadgroup_blocking)
+                if not msgs:
+                    continue
+                for _stream, entries in msgs:
+                    for msg_id, fields in entries:
+                        await loop.run_in_executor(None, lambda f=fields: _apply_reload(index_manager, f))
+                        try:
+                            redis_client.xack(RELOAD_STREAM, group, msg_id)
+                        except Exception as exc:
+                            logger.warning("xack failed msg_id=%s: %s", msg_id, exc)
+            except asyncio.CancelledError:
+                logger.info("reload_consumer cancelled, stopping")
+                break
+            except Exception as exc:
+                if _is_nogroup_error(exc):
+                    logger.warning(
+                        "reload_consumer: stream/group missing, recreating group=%s (%s)",
+                        group,
+                        exc,
+                    )
+                    await loop.run_in_executor(None, lambda: _ensure_consumer_group(redis_client, group))
+                else:
+                    logger.error("reload_consumer error: %s", exc)
+                await asyncio.sleep(5)
+    finally:
         try:
-            msgs = await loop.run_in_executor(None, _xreadgroup_blocking)
-            if not msgs:
-                continue
-            for _stream, entries in msgs:
-                for msg_id, fields in entries:
-                    await loop.run_in_executor(None, lambda f=fields: _apply_reload(index_manager, f))
-                    try:
-                        redis_client.xack(RELOAD_STREAM, group, msg_id)
-                    except Exception as exc:
-                        logger.warning("xack failed msg_id=%s: %s", msg_id, exc)
-        except asyncio.CancelledError:
-            logger.info("reload_consumer cancelled, stopping")
-            break
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _destroy_consumer_group, redis_client, group)
         except Exception as exc:
-            if _is_nogroup_error(exc):
-                logger.warning(
-                    "reload_consumer: stream/group missing, recreating group=%s (%s)",
-                    group,
-                    exc,
-                )
-                await loop.run_in_executor(None, lambda: _ensure_consumer_group(redis_client, group))
-            else:
-                logger.error("reload_consumer error: %s", exc)
-            await asyncio.sleep(5)
+            logger.warning(
+                "reload_consumer: destroy via executor failed, fallback to direct call (%s)",
+                exc,
+            )
+            _destroy_consumer_group(redis_client, group)
 
 
 def _decode(value) -> str:

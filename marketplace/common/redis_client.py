@@ -102,6 +102,9 @@ class RedisClient:
     def xgroup_create(self, name, groupname, *args, **kwargs):
         return self._call("xgroup_create", self._key(name), groupname, *args, **kwargs)
 
+    def xgroup_destroy(self, name, groupname):
+        return self._call("xgroup_destroy", self._key(name), groupname)
+
     def xreadgroup(self, groupname, consumername, streams, *args, **kwargs):
         if not self.key_prefix:
             return self._call("xreadgroup", groupname, consumername, streams, *args, **kwargs)
