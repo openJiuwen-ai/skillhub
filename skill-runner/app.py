@@ -93,10 +93,16 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         pkg_bytes = b""
         if req.package_bytes_b64:
             import base64
+            # base64 长度约为解码后的 4/3：先在编码态拦截，避免超大包在解码阶段撑爆内存
+            if len(req.package_bytes_b64) > (settings.package_max_bytes // 3 + 1) * 4:
+                raise HTTPException(status_code=413, detail="skill package too large")
             try:
                 pkg_bytes = base64.b64decode(req.package_bytes_b64)
             except Exception:
                 logger.warning("failed to decode package_bytes_b64 for %s", req.skill_id)
+            else:
+                if len(pkg_bytes) > settings.package_max_bytes:
+                    raise HTTPException(status_code=413, detail="skill package too large")
         skill_bundle = SkillBundle(
             asset_id=req.skill_id,
             version=req.version,

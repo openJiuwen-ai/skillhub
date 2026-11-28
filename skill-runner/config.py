@@ -65,6 +65,13 @@ class Settings:
     # 每会话累计上传上限：文件数与总字节，防单会话占满 pod 磁盘
     upload_max_files_per_session: int = int(os.environ.get("SKILL_RUNNER_UPLOAD_MAX_FILES", "10"))
     upload_max_total_bytes: int = int(os.environ.get("SKILL_RUNNER_UPLOAD_MAX_TOTAL_BYTES", str(20 * 1024 * 1024)))
+    # 会话 skill 包（package_bytes）安全上限；解压上限需大于压缩上限，
+    # 否则有压缩比的合法大包会被必然拒绝（默认 2 倍压缩上限）。
+    package_max_bytes: int = int(os.environ.get("SKILL_RUNNER_PACKAGE_MAX_BYTES", str(512 * 1024 * 1024)))
+    package_zip_max_entries: int = int(os.environ.get("SKILL_RUNNER_ZIP_MAX_ENTRIES", "1000"))
+    package_zip_max_decompressed_bytes: int = int(
+        os.environ.get("SKILL_RUNNER_ZIP_MAX_DECOMPRESSED_BYTES", str(1024 * 1024 * 1024))
+    )
     # 向 SSE 队列投递事件的最长等待；超时=消费者已断连，中止本轮释放 pod
     sse_put_timeout_seconds: float = float(os.environ.get("SKILL_RUNNER_SSE_PUT_TIMEOUT", "30"))
 

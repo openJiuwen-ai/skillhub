@@ -16,6 +16,9 @@ from . import SandboxExecutor
 
 logger = logging.getLogger("skill_runner.local")
 
+_ZIP_STREAM_CHUNK_BYTES = 64 * 1024
+_ZIP_SYMLINK_MODE_MASK = 0xA000
+
 _LLM_MODEL: Any = None
 _LLM_LOCK = asyncio.Lock()
 
@@ -561,19 +564,16 @@ class LocalExecutor(SandboxExecutor):
                                 best_parent = parent
                     if best_parent:
                         prefix = prefix + best_parent + "/"
-                    for info in zf.infolist():
-                        if info.is_dir():
-                            continue
-                        rel = info.filename[len(prefix):] if prefix else info.filename
-                        if not rel or rel.startswith("/") or ".." in rel.split("/"):
-                            continue
-                        dest = os.path.join(skill_dir, rel)
-                        os.makedirs(os.path.dirname(dest), exist_ok=True)
-                        dest_path = os.path.normpath(dest)
-                        if not dest_path.startswith(os.path.normpath(skill_dir)):
-                            continue  # ZipSlip protection
-                        with open(dest_path, "wb") as f:
-                            f.write(zf.read(info))
+                    try:
+                        self._extract_package_entries(zf, prefix, skill_dir)
+                    except ValueError as exc:
+                        # 与 BadZipFile 同一降级契约：触及上限不阻断会话创建，
+                        # 清理半截文件后回落为纯文本会话。
+                        logger.warning(
+                            "provision: package limits exceeded for %s, falling back to text-only: %s",
+                            bundle.asset_id, exc,
+                        )
+                        self._provision_text_fields(bundle, skill_dir)
             else:
                 self._provision_text_fields(bundle, skill_dir)
         elif bundle is not None:
@@ -592,6 +592,46 @@ class LocalExecutor(SandboxExecutor):
         if getattr(bundle, "workflow_md", ""):
             with open(os.path.join(skill_dir, "workflow.md"), "w", encoding="utf-8") as f:
                 f.write(bundle.workflow_md)
+
+    def _extract_package_entries(self, zf: zipfile.ZipFile, prefix: str, skill_dir: str) -> None:
+        """Bounded streaming extraction: entry count, symlink ban and decompression cap."""
+        infos = zf.infolist()
+        if len(infos) > settings.package_zip_max_entries:
+            raise ValueError("skill package zip has too many entries")
+        skill_root = os.path.normpath(skill_dir)
+        total_read = 0
+        written: list[str] = []
+        try:
+            for info in infos:
+                if (info.external_attr >> 16) & 0xF000 == _ZIP_SYMLINK_MODE_MASK:
+                    raise ValueError("skill package zip contains symlink entries")
+                if info.is_dir():
+                    continue
+                rel = info.filename[len(prefix):] if prefix else info.filename
+                if not rel or rel.startswith("/") or ".." in rel.split("/"):
+                    continue
+                dest_path = os.path.normpath(os.path.join(skill_dir, rel))
+                if not dest_path.startswith(skill_root + os.sep):
+                    continue  # ZipSlip protection
+                written.append(dest_path)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                with zf.open(info, "r") as src, open(dest_path, "wb") as out:
+                    while True:
+                        chunk = src.read(_ZIP_STREAM_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        total_read += len(chunk)
+                        if total_read > settings.package_zip_max_decompressed_bytes:
+                            raise ValueError("skill package zip decompressed size exceeds limit")
+                        out.write(chunk)
+        except Exception:
+            # 半截文件不残留：解包失败时清理已写入文件，交由调用方降级处理
+            for path in written:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            raise
 
     def _session_dirs(self, session: Session) -> tuple[str, str]:
         work = os.path.join(settings.workspace_root, session.session_id, "work")

@@ -111,10 +111,16 @@ async def provision(req: ProvisionRequest, authorization: str | None = Header(de
 
     pkg = b""
     if req.package_bytes_b64:
+        # base64 长度约为解码后的 4/3：编码态先拦截，避免解码阶段撑爆内存
+        if len(req.package_bytes_b64) > (settings.package_max_bytes // 3 + 1) * 4:
+            raise HTTPException(status_code=413, detail="skill package too large")
         try:
             pkg = base64.b64decode(req.package_bytes_b64)
         except Exception:
             logger.warning("bad package_bytes_b64; ignoring")
+        else:
+            if len(pkg) > settings.package_max_bytes:
+                raise HTTPException(status_code=413, detail="skill package too large")
 
     session = Session(
         skill_id=os.environ.get("SESSION_ID", "pod"),
