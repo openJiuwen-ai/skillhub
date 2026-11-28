@@ -25,6 +25,7 @@ from plugins_market.core.playground_state import (
     get_playground_state_store,
 )
 from plugins_market.repositories.playground_quota_repository import PlaygroundQuotaRepository
+from plugins_market.core.viewer_context import ViewerContext
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,15 @@ async def _ensure_session_owner(session_id: str, auth: AuthContext) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": "not_your_session", "message": "无权操作他人的 Playground 会话"},
         )
+
+
+def _asset_visible_to_viewer(asset, viewer: ViewerContext, db) -> bool:
+    """与下载/互动读路径一致：OFFLINE 视为不存在，其余按 viewer 可见性判定。"""
+    if asset is None:
+        return False
+    if (getattr(asset, "status", "") or "").upper() == "OFFLINE":
+        return False
+    return viewer.can_view_skill_asset(asset, db)
 
 
 def _refund_quota(quota_repo: PlaygroundQuotaRepository | None, user_id: str) -> None:
@@ -273,7 +283,7 @@ def _parse_skill_zip(data: bytes) -> tuple[str, str, dict[str, str], str]:
     return skill_md, workflow_md, roles, _extract_team_mode(skill_md)
 
 
-async def _inject_skill_content(body: bytes) -> bytes:
+async def _inject_skill_content(body: bytes, auth: AuthContext) -> bytes:
     """解析 skill ZIP 并注入请求体，skill-runner 收到纯文本无需凭证。"""
     try:
         payload = json.loads(body)
@@ -316,6 +326,19 @@ async def _inject_skill_content(body: bytes) -> bytes:
             if asset is None:
                 logger.warning("playground proxy: asset not found: %s", skill_id)
                 return body
+            viewer = ViewerContext(
+                user_id=auth.acting_user_id,
+                user_login=auth.acting_user_name,
+                is_system_admin=auth.is_admin,
+            )
+            if not _asset_visible_to_viewer(asset, viewer, db):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "skill_not_found",
+                        "message": "Skill 不存在或暂不可用",
+                    },
+                )
             version_repo = MarketAssetVersionRepository(db)
             if not version or version == "latest":
                 row = version_repo.get_latest_version(asset_id=skill_id)
@@ -562,7 +585,7 @@ async def create_session(
     # _inject_skill_content 在 lock 外执行，避免 ZIP 下载阻塞并发请求
     if not auth.is_admin:
         body = _strip_client_content(body)
-    body = await _inject_skill_content(body)
+    body = await _inject_skill_content(body, auth)
     body = _inject_user_id(body, auth.acting_user_id)
 
     if auth.is_admin:
