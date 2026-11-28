@@ -40,7 +40,7 @@ def test_oauth_store_passes_acl_username(monkeypatch) -> None:
     import plugins_market.core.oauth_session_store as store
 
     monkeypatch.setattr(store, "_redis_store", None)
-    monkeypatch.setattr(store, "_redis_init_attempted", False)
+    monkeypatch.setattr(store, "_redis_init_failed_at", None)
     monkeypatch.setattr(store.settings, "redis_host", "127.0.0.1")
     monkeypatch.setattr(store.settings, "redis_port", 6379)
     monkeypatch.setattr(store.settings, "redis_db", 2)
@@ -60,7 +60,7 @@ def test_oauth_store_omits_blank_username(monkeypatch) -> None:
     import plugins_market.core.oauth_session_store as store
 
     monkeypatch.setattr(store, "_redis_store", None)
-    monkeypatch.setattr(store, "_redis_init_attempted", False)
+    monkeypatch.setattr(store, "_redis_init_failed_at", None)
     monkeypatch.setattr(store.settings, "redis_host", "127.0.0.1")
     monkeypatch.setattr(store.settings, "redis_port", 6379)
     monkeypatch.setattr(store.settings, "redis_db", 2)

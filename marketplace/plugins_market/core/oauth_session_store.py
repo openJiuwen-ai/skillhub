@@ -67,6 +67,16 @@ class _MemoryOAuthStore:
                 return None
             return val
 
+    def non_expired_entries(self) -> list[tuple[str, str, float]]:
+        """Return (key, value, remaining_ttl_seconds) for non-expired entries."""
+        now = time.monotonic()
+        with self._lock:
+            return [
+                (key, value, exp_at - now)
+                for key, (exp_at, value) in self._data.items()
+                if exp_at > now
+            ]
+
     def set_ex(self, key: str, value: str, ttl_seconds: int) -> None:
         with self._lock:
             self._purge_expired_locked()
@@ -153,16 +163,88 @@ class _RedisOAuthStore:
 
 _memory = _MemoryOAuthStore()
 _redis_store: _RedisOAuthStore | None = None
-_redis_init_attempted = False
+_redis_init_failed_at: float | None = None
 _warned_memory_no_redis_host = False
+
+# Redis 初始化失败后的重试冷却：瞬时故障恢复后自动重连，避免永久降级为内存模式。
+# 失败后的重试一律走后台线程：get_oauth_str_store 的调用方全部位于 async 端点内，
+# 同步 socket 建连（socket_connect_timeout=2.0）会阻塞事件循环，因此请求路径只读取
+# 已建好的 _redis_store，冷却到期时由后台线程探测并建连。
+_REDIS_RETRY_INTERVAL_SECONDS = 30.0
 
 
 def _resolve_redis_password() -> str:
     return (SecurityUtils.get_decrypt_secret("MARKET_REDIS_PASSWORD", default="") or "").strip()
 
 
+def _build_redis_store(host: str) -> tuple["_RedisOAuthStore", bool]:
+    from plugins_market.core.redis_client import resolve_redis_ssl
+
+    ssl = resolve_redis_ssl()
+    client = _RedisOAuthStore(
+        host=host,
+        port=int(settings.redis_port),
+        db=int(settings.redis_db),
+        password=_resolve_redis_password(),
+        ssl=ssl,
+        username=(settings.redis_username or "").strip(),
+        key_prefix=settings.redis_key_prefix,
+    )
+    return client, ssl
+
+
+def _migrate_memory_entries_to_redis(client: OAuthStrStore) -> None:
+    """Redis 恢复时迁移内存模式期间的 state/pending，保证进行中的登录不中断。"""
+    try:
+        entries = _memory.non_expired_entries()
+        migrated = 0
+        for key, value, remaining in entries:
+            if remaining <= 0:
+                continue
+            client.set_ex(key, value, max(1, int(remaining)))
+            migrated += 1
+        if migrated:
+            logger.info(
+                "OAuth session store: migrated %d in-memory entries to Redis", migrated
+            )
+    except Exception as exc:
+        logger.warning("OAuth session store: migrate in-memory entries failed: %s", exc)
+
+
+def _connect_redis_in_background(host: str) -> None:
+    """后台重试建连；成功则迁移内存态并切换，失败只更新冷却时间戳。"""
+    global _redis_store, _redis_init_failed_at
+    try:
+        client, ssl = _build_redis_store(host)
+    except Exception as e:
+        _redis_init_failed_at = time.monotonic()
+        logger.warning(
+            "OAuth session store: Redis init failed (%s), using memory; will retry", e
+        )
+        return
+    _redis_store = client
+    _redis_init_failed_at = None
+    _migrate_memory_entries_to_redis(client)
+    logger.info(
+        "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",
+        host,
+        settings.redis_port,
+        settings.redis_db,
+        ssl,
+    )
+
+
+def _spawn_redis_init_thread(host: str) -> None:
+    threading.Thread(
+        target=_connect_redis_in_background,
+        args=(host,),
+        daemon=True,
+        name="oauth-store-redis-init",
+    ).start()
+
+
 def get_oauth_str_store() -> OAuthStrStore:
-    global _redis_store, _redis_init_attempted, _warned_memory_no_redis_host
+    global _redis_store, _redis_init_failed_at, _warned_memory_no_redis_host
     host = (settings.redis_host or "").strip()
     if not host and not _warned_memory_no_redis_host:
         _warned_memory_no_redis_host = True
@@ -170,31 +252,29 @@ def get_oauth_str_store() -> OAuthStrStore:
             "OAuth session store: no REDIS_HOST/MARKET_REDIS_HOST; using in-process memory only. "
             "GitCode OAuth breaks when /start and /callback hit different workers or pods — configure shared Redis."
         )
-    if host and not _redis_init_attempted:
-        _redis_init_attempted = True
-        try:
-            from plugins_market.core.redis_client import resolve_redis_ssl
-
-            ssl = resolve_redis_ssl()
-            _redis_store = _RedisOAuthStore(
-                host=host,
-                port=int(settings.redis_port),
-                db=int(settings.redis_db),
-                password=_resolve_redis_password(),
-                ssl=ssl,
-                username=(settings.redis_username or "").strip(),
-                key_prefix=settings.redis_key_prefix,
-            )
-            logger.info(
-                "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",
-                host,
-                settings.redis_port,
-                settings.redis_db,
-                ssl,
-            )
-            return _redis_store
-        except Exception as e:
-            logger.warning("OAuth session store: Redis init failed (%s), using memory", e)
+    if host and _redis_store is None:
+        if _redis_init_failed_at is None:
+            # 首次初始化保持同步（与改动前一致），失败后转入后台按冷却重试。
+            try:
+                _redis_store, _ssl = _build_redis_store(host)
+                _redis_init_failed_at = None
+                logger.info(
+                    "OAuth session store: Redis (PING OK, host=%s port=%s db=%s ssl=%s)",
+                    host,
+                    settings.redis_port,
+                    settings.redis_db,
+                    _ssl,
+                )
+                return _redis_store
+            except Exception as e:
+                _redis_init_failed_at = time.monotonic()
+                logger.warning(
+                    "OAuth session store: Redis init failed (%s), using memory; will retry", e
+                )
+        elif time.monotonic() - _redis_init_failed_at >= _REDIS_RETRY_INTERVAL_SECONDS:
+            # 先写冷却时间戳再拉起线程：时间戳兼任单飞标记，避免并发请求重复建连。
+            _redis_init_failed_at = time.monotonic()
+            _spawn_redis_init_thread(host)
     if _redis_store is not None:
         return _redis_store
     return _memory
