@@ -22,6 +22,7 @@ loads the latest existing dir (which is always the last successful build).
 import json
 import re
 import time
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -916,6 +917,30 @@ _SKILL_TAG_LOCK_KEY = "retrieval:skill-tag:lock"
 _AGENT_TAG_LOCK_KEY = "retrieval:agent-tag:lock"
 _REBUILD_LOCK_TTL_SECONDS = 2400  # 40-minute upper bound for a full rebuild run
 
+_RELEASE_LOCK_LUA = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) end "
+    "return 0"
+)
+
+
+def _acquire_lock_with_owner(redis_client, key: str) -> str | None:
+    """Acquire a rebuild lock storing a unique owner token; None when held."""
+    owner = uuid.uuid4().hex
+    if bool(redis_client.set(key, owner, nx=True, ex=_REBUILD_LOCK_TTL_SECONDS)):
+        return owner
+    return None
+
+
+def _release_lock_if_owner(redis_client, key: str, owner: str | None) -> None:
+    """Release the lock only when the stored value still matches the owner."""
+    if not owner:
+        return
+    try:
+        redis_client.eval(_RELEASE_LOCK_LUA, 1, key, owner)
+    except Exception as exc:
+        logger.warning("failed to release %s: %s", key, exc)
+
 
 def rebuild_all(
     db_factory,
@@ -947,10 +972,10 @@ def rebuild_all(
     runtime_config: IndexBuildRuntimeConfig fallback when BuildConfig is not provided.
     run_skill_tag: whether to run skill tag classification in the same pass.
     """
-    lock_acquired = False
+    lock_owner: str | None = None
     if redis_client is not None and not skip_lock:
-        lock_acquired = bool(redis_client.set(_REBUILD_LOCK_KEY, "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS))
-        if not lock_acquired:
+        lock_owner = _acquire_lock_with_owner(redis_client, _REBUILD_LOCK_KEY)
+        if not lock_owner:
             logger.info("rebuild_all: another instance holds the rebuild lock, skipping this run")
             return
 
@@ -985,11 +1010,8 @@ def rebuild_all(
             finally:
                 db.close()
     finally:
-        if redis_client is not None and lock_acquired:
-            try:
-                redis_client.delete(_REBUILD_LOCK_KEY)
-            except Exception as exc:
-                logger.warning("rebuild_all: failed to release rebuild lock: %s", exc)
+        if redis_client is not None and lock_owner:
+            _release_lock_if_owner(redis_client, _REBUILD_LOCK_KEY, lock_owner)
 
 
 def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
@@ -1003,12 +1025,10 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
     runtime_config = options.runtime_config
     skip_lock = options.skip_lock
 
-    lock_acquired = False
+    lock_owner: str | None = None
     if redis_client is not None and not skip_lock:
-        lock_acquired = bool(
-            redis_client.set(_SKILL_TAG_LOCK_KEY, "1", nx=True, ex=_REBUILD_LOCK_TTL_SECONDS)
-        )
-        if not lock_acquired:
+        lock_owner = _acquire_lock_with_owner(redis_client, _SKILL_TAG_LOCK_KEY)
+        if not lock_owner:
             logger.info("refresh_skill_tags: another instance holds the lock, skipping this run")
             return
 
@@ -1049,26 +1069,16 @@ def refresh_skill_tags(options: SkillTagRefreshOptions) -> None:
         finally:
             db.close()
     finally:
-        if redis_client is not None and lock_acquired:
-            try:
-                redis_client.delete(_SKILL_TAG_LOCK_KEY)
-            except Exception as exc:
-                logger.warning("refresh_skill_tags: failed to release lock: %s", exc)
+        if redis_client is not None and lock_owner:
+            _release_lock_if_owner(redis_client, _SKILL_TAG_LOCK_KEY, lock_owner)
 
 
 def refresh_agent_tags(options: AgentTagRefreshOptions) -> None:
     """Refresh classification for each Agent asset type without touching Skill state."""
-    lock_acquired = False
+    lock_owner: str | None = None
     if options.redis_client is not None and not options.skip_lock:
-        lock_acquired = bool(
-            options.redis_client.set(
-                _AGENT_TAG_LOCK_KEY,
-                "1",
-                nx=True,
-                ex=_REBUILD_LOCK_TTL_SECONDS,
-            )
-        )
-        if not lock_acquired:
+        lock_owner = _acquire_lock_with_owner(options.redis_client, _AGENT_TAG_LOCK_KEY)
+        if not lock_owner:
             logger.info("refresh_agent_tags: another instance holds the lock, skipping this run")
             return
 
@@ -1115,8 +1125,5 @@ def refresh_agent_tags(options: AgentTagRefreshOptions) -> None:
             finally:
                 db.close()
     finally:
-        if options.redis_client is not None and lock_acquired:
-            try:
-                options.redis_client.delete(_AGENT_TAG_LOCK_KEY)
-            except Exception as exc:
-                logger.warning("refresh_agent_tags: failed to release lock: %s", exc)
+        if options.redis_client is not None and lock_owner:
+            _release_lock_if_owner(options.redis_client, _AGENT_TAG_LOCK_KEY, lock_owner)

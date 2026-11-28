@@ -425,7 +425,16 @@ def test_retrieval_broadcast_and_lock_are_namespaced(monkeypatch, prefix):
         redis_client=RedisClient(client, prefix),
     )
     assert client.set.call_args.args[0] == (prefix + "retrieval:rebuild:lock")
-    client.delete.assert_called_once_with(prefix + "retrieval:rebuild:lock")
+    assert client.set.call_args.kwargs.get("nx") is True
+    assert client.set.call_args.kwargs.get("ex") == rebuild._REBUILD_LOCK_TTL_SECONDS
+    owner = client.set.call_args.args[1]
+    assert client.eval.call_args.args == (
+        rebuild._RELEASE_LOCK_LUA,
+        1,
+        (prefix + "retrieval:rebuild:lock"),
+        owner,
+    )
+    client.delete.assert_not_called()
 
 
 @pytest.mark.parametrize("prefix", ["", "app:", "app::"])
@@ -449,8 +458,17 @@ def test_tag_refresh_locks_use_namespace_on_acquire_and_release(
             rebuild.AgentTagRefreshOptions(agent_prefixes={"agent": "agents"}, **common)
         )
     expected = prefix + "retrieval:" + kind + "-tag:lock"
-    assert client.set.call_args.args == (expected, "1")
-    client.delete.assert_called_once_with(expected)
+    assert client.set.call_args.args[0] == expected
+    assert client.set.call_args.args[1] != "1"
+    assert client.set.call_args.kwargs.get("nx") is True
+    assert client.set.call_args.kwargs.get("ex") == rebuild._REBUILD_LOCK_TTL_SECONDS
+    assert client.eval.call_args.args == (
+        rebuild._RELEASE_LOCK_LUA,
+        1,
+        expected,
+        client.set.call_args.args[1],
+    )
+    client.delete.assert_not_called()
 
 
 @pytest.mark.parametrize("value", [None, "", "  ", "app", "app:", "app::"])
