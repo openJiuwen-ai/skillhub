@@ -22,6 +22,7 @@ class KeycloakConfig(BaseModel):
     algorithms: list[str] = Field(default_factory=lambda: ["RS256"])
     metadata_ttl_seconds: int = Field(default=300, ge=10, le=86400)
     timeout_seconds: float = Field(default=15, gt=0, le=60)
+    ssl_verify: bool = Field(default=True, strict=True)
     allow_insecure_http: bool = False
 
     def validate_url(self, value: str) -> str:

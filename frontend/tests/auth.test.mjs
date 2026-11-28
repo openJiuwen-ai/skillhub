@@ -43,7 +43,7 @@ const auth = await import(`data:text/javascript;base64,${Buffer.from(bundled.out
 
 test('built-in and configured extension providers share the existing OAuth routes', async () => {
   globalThis.httpCalls = []
-  for (const provider of ['gitcode', 'github', 'agentos', 'enterprise', 'future-idp']) {
+  for (const provider of ['gitcode', 'github', 'agentos', 'keycloak', 'future-idp']) {
     assert.equal(auth.getOAuthStartUrl(provider), `/api/v1/auth/oauth/${provider}/start`)
     const result = await auth.exchangeOAuthSession(provider, 'pending-session')
     assert.equal(result.provider, provider)
@@ -63,7 +63,7 @@ test('refresh preserves configured extension ID and logout clears the existing s
     removeItem: key => values.delete(key),
   }
   assert.equal(auth.getStoredOAuthProvider(), 'gitcode')
-  for (const provider of ['gitcode', 'github', 'agentos', 'enterprise']) {
+  for (const provider of ['gitcode', 'github', 'agentos', 'keycloak']) {
     auth.setOAuthSession('token', {id: 'u', login: 'alice', name: 'Alice'}, provider)
     assert.equal(auth.getStoredOAuthProvider(), provider)
     assert.equal(auth.getStoredOAuthToken(), 'token')
@@ -78,11 +78,11 @@ test('refresh preserves configured extension ID and logout clears the existing s
 test('extension callback handling leaves built-in selection and fallback to the original flow', () => {
   for (const provider of ['gitcode', 'github', 'agentos']) {
     assert.equal(auth.isExtensionProvider(provider), false)
-    assert.equal(auth.resolveExtensionCallbackProvider(provider, 'enterprise'), null)
+    assert.equal(auth.resolveExtensionCallbackProvider(provider, 'keycloak'), null)
     assert.equal(auth.resolveExtensionCallbackProvider('', provider), null)
     assert.equal(auth.resolveExtensionCallbackProvider('../invalid', provider), null)
   }
-  assert.equal(auth.resolveExtensionCallbackProvider('enterprise', 'github'), 'enterprise')
-  assert.equal(auth.resolveExtensionCallbackProvider('', 'enterprise'), 'enterprise')
+  assert.equal(auth.resolveExtensionCallbackProvider('keycloak', 'github'), 'keycloak')
+  assert.equal(auth.resolveExtensionCallbackProvider('', 'keycloak'), 'keycloak')
   assert.equal(auth.resolveExtensionCallbackProvider('../invalid', null), null)
 })

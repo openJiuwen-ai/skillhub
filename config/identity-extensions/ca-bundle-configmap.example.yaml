@@ -1,0 +1,11 @@
+# Optional Kubernetes/OpenShift CA bundle; only for an identity CA not yet trusted.
+# Replace the entire value with a complete PEM bundle of public and enterprise CAs.
+# The marker below is NOT a certificate. Do not deploy it unchanged.
+# Do not include private keys or commit customer-specific certificate bundles.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: skillhub-ca-bundle
+data:
+  ca-bundle.pem: |
+    REPLACE_WITH_COMPLETE_PUBLIC_AND_ENTERPRISE_CA_PEM_BUNDLE

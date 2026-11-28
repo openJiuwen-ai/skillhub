@@ -1,5 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
+# Optional Keycloak config/CA mounts: see the common TLS guide under
+# docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md (repository root) and
+# config/identity-extensions/marketplace-deployment-tls.patch.example.yaml (repository root).
+# The base Deployment has no dependency on optional identity ConfigMaps.
 metadata:
   name: skillhub-backend
   labels:

@@ -10,6 +10,7 @@
 | [Docker 一键部署](./Docker方式安装/openJiuwen-Agentic-Hub安装指导-一键部署.md) | 一条命令启动 MySQL + Redis + MinIO + Backend + Frontend，适合快速试用 |
 | [Docker 安装](./Docker方式安装/openJiuwen-Agentic-Hub安装指导.md) | 手动构建运行各容器，支持复用宿主机已有的 MySQL / MinIO |
 | [K8s 安装](./K8s方式安装/openJiuwen-Agentic-Hub安装指导.md) | 完整 K8s 部署（marketplace + frontend + skill-runner） |
+| [Keycloak HTTPS 证书配置与挂载](<Keycloak HTTPS 证书配置与挂载.md>) | 通用证书信任配置，覆盖直接运行、Docker Compose、Kubernetes 和 OpenShift |
 | [升级说明](./升级说明.md) | 升级前检查项、数据备份和变更记录阅读路径 |
 
 ## 安装前置依赖
