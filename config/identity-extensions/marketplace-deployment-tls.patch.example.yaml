@@ -1,0 +1,39 @@
+# STRATEGIC MERGE PATCH, not a standalone Deployment or a JSON merge patch.
+# Merge these entries into the existing Kubernetes/OpenShift Deployment YAML.
+# Never import/apply this incomplete Deployment as a replacement resource.
+# Preserve image, command, args, env, envFrom, probes, resources and other mounts.
+# Use the backend's actual Deployment and container names.
+# This example uses backend; the repository Kubernetes template uses marketplace.
+# For an already trusted public CA, omit identity-ca-bundle from BOTH lists and
+# do not set a custom SSL_CERT_FILE. Keep the identity-extensions mount.
+# This patch deliberately does not change switches, replicas or history retention.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skillhub-backend
+spec:
+  template:
+    spec:
+      volumes:
+        - name: identity-extensions
+          configMap:
+            name: skillhub-identity-extensions
+            defaultMode: 420
+        - name: identity-ca-bundle
+          configMap:
+            name: skillhub-ca-bundle
+            defaultMode: 420
+            items:
+              - key: ca-bundle.pem
+                path: ca-bundle.pem
+      containers:
+        - name: backend
+          volumeMounts:
+            - name: identity-extensions
+              mountPath: /app/config/identity-extensions.yaml
+              subPath: identity-extensions.yaml
+              readOnly: true
+            - name: identity-ca-bundle
+              mountPath: /app/certs/ca-bundle.pem
+              subPath: ca-bundle.pem
+              readOnly: true

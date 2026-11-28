@@ -70,7 +70,7 @@ def test_global_off_skips_configuration_discovery_and_plugin_import(
 ):
     path = tmp_path / "extensions.yaml"
     path.write_text(
-        yaml.safe_dump({"providers": {"enterprise": {**channel, "adapter": "keycloak"}}}),
+        yaml.safe_dump({"providers": {"keycloak": {**channel, "adapter": "keycloak"}}}),
         encoding="utf-8",
     )
     monkeypatch.setenv("CUSTOM_LOGIN_ENABLED", "true")
@@ -81,7 +81,7 @@ def test_global_off_skips_configuration_discovery_and_plugin_import(
         blocked.setattr(registry.Path, "open", forbidden)
         blocked.setattr(registry.pkgutil, "iter_modules", forbidden)
         blocked.setattr(registry.importlib, "import_module", forbidden)
-        assert registry.get_registry().get("enterprise") is None
+        assert registry.get_registry().get("keycloak") is None
         assert registry.get_runtime_registry().public_providers() == []
     forbidden.assert_not_called()
 
@@ -117,21 +117,21 @@ def test_global_and_channel_switches_are_both_required(
     monkeypatch.setattr(keycloak, "create_adapter", factory)
     path = tmp_path / "extensions.yaml"
     path.write_text(
-        yaml.safe_dump({"providers": {"enterprise": {**channel, "adapter": "keycloak"}}}),
+        yaml.safe_dump({"providers": {"keycloak": {**channel, "adapter": "keycloak"}}}),
         encoding="utf-8",
     )
     monkeypatch.setattr(settings, "identity_extensions_config", str(path))
     expected = global_enabled and channel_enabled
     strict = registry.get_registry()
     runtime = registry.get_runtime_registry()
-    assert (strict.get("enterprise") is not None) is expected
+    assert (strict.get("keycloak") is not None) is expected
     assert bool(runtime.public_providers()) is expected
     assert runtime is strict
     assert factory.call_count == int(expected)
     if not global_enabled:
         # The off state must not cache an empty result that prevents later opt-in.
         monkeypatch.setattr(settings, "identity_extensions_enabled", True)
-        assert (registry.get_registry().get("enterprise") is not None) is channel_enabled
+        assert (registry.get_registry().get("keycloak") is not None) is channel_enabled
         assert bool(registry.get_runtime_registry().public_providers()) is channel_enabled
         assert factory.call_count == int(channel_enabled)
 
@@ -148,7 +148,7 @@ def test_unavailable_extension_token_never_falls_back_to_builtin(
         monkeypatch.setattr(oauth_user_profile, name, lookup)
         lookups.append(lookup)
     assert asyncio.run(
-        oauth_user_profile.fetch_oauth_user_profile("enterprise", "extension-token")
+        oauth_user_profile.fetch_oauth_user_profile("keycloak", "extension-token")
     ) is None
     for lookup in lookups:
         lookup.assert_not_awaited()
@@ -299,7 +299,7 @@ def test_invalid_and_disabled_configuration(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError):
         IdentityRegistry(
-            {"providers": {"enterprise": {"enabled": True, "adapter": "missing"}}}
+            {"providers": {"keycloak": {"enabled": True, "adapter": "missing"}}}
         )
     path = tmp_path / "duplicate.yaml"
     path.write_text("providers:\n  duplicate: {}\n  duplicate: {}\n", encoding="utf-8")
@@ -313,7 +313,7 @@ def test_invalid_and_disabled_configuration(tmp_path, monkeypatch):
     [
         ("providers: {}\nproviders: {}\n", ValueError),
         (
-            "providers:\n  enterprise:\n    enabled: false\n    enabled: true\n",
+            "providers:\n  keycloak:\n    enabled: false\n    enabled: true\n",
             ValueError,
         ),
         ("providers:\n  1: {}\n", ValueError),
@@ -695,7 +695,7 @@ def test_broken_extension_config_does_not_break_builtin_routes(
         path.write_text("providers: [invalid", encoding="utf-8")
     elif broken == "missing-adapter":
         path.write_text(
-            "providers:\n  enterprise:\n    enabled: true\n    adapter: absent\n",
+            "providers:\n  keycloak:\n    enabled: true\n    adapter: absent\n",
             encoding="utf-8",
         )
     elif broken == "missing-secret":
@@ -704,7 +704,7 @@ def test_broken_extension_config_does_not_break_builtin_routes(
             json.dumps(
                 {
                     "providers": {
-                        "enterprise": {
+                        "keycloak": {
                             "enabled": True,
                             "adapter": "keycloak",
                             "settings": {
@@ -737,7 +737,7 @@ def test_broken_extension_config_does_not_break_builtin_routes(
         assert parse_qs(urlsplit(original.headers["location"]).query)["client_id"] == [
             "original-client"
         ]
-        assert client.get("/api/v1/auth/oauth/enterprise/start").status_code == 404
+        assert client.get("/api/v1/auth/oauth/keycloak/start").status_code == 404
 
 
 @pytest.fixture
@@ -755,7 +755,7 @@ def oidc_app(tmp_path, monkeypatch, request):
                     name: {
                         "enabled_env": "TEST_IDENTITY_EXTENSIONS_ENABLED",
                         "adapter": "keycloak",
-                        "display_name": "Enterprise",
+                        "display_name": "Keycloak",
                         "settings": {
                             "issuer": configured_issuer,
                             "client_id": "skillhub",
@@ -765,7 +765,7 @@ def oidc_app(tmp_path, monkeypatch, request):
                             ),
                         },
                     }
-                    for name in ("enterprise", "other")
+                    for name in ("keycloak", "other")
                 }
             }
         ),
@@ -777,7 +777,13 @@ def oidc_app(tmp_path, monkeypatch, request):
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))
     public.update(kid="key1", alg="RS256", use="sig")
-    state = {"fault": None, "nonce": "", "challenge": "", "requests": []}
+    state = {
+        "fault": None,
+        "nonce": "",
+        "challenge": "",
+        "requests": [],
+        "tls_requests": [],
+    }
 
     def upstream(request):
         state["requests"].append(request)
@@ -888,13 +894,17 @@ def oidc_app(tmp_path, monkeypatch, request):
         raise AssertionError(str(request.url))
 
     original_client = httpx.AsyncClient
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda **kwargs: original_client(
-            transport=httpx.MockTransport(upstream), **kwargs
-        ),
-    )
+
+    def oidc_client(**kwargs):
+        verify = kwargs.get("verify", True)
+
+        def tracked_upstream(request):
+            state["tls_requests"].append((request.url.path, verify))
+            return upstream(request)
+
+        return original_client(transport=httpx.MockTransport(tracked_upstream), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", oidc_client)
     app = FastAPI()
     register_exception_handlers(app)
     app.include_router(builtin_router, prefix="/api/v1/auth")
@@ -913,7 +923,7 @@ def oidc_app(tmp_path, monkeypatch, request):
 
 def begin(client, state, query=""):
     response = client.get(
-        f"/api/v1/auth/oauth/enterprise/start{query}", follow_redirects=False
+        f"/api/v1/auth/oauth/keycloak/start{query}", follow_redirects=False
     )
     assert response.status_code == 302
     params = parse_qs(urlsplit(response.headers["location"]).query)
@@ -925,19 +935,40 @@ def begin(client, state, query=""):
 @pytest.mark.parametrize("prompt", [None, "login"])
 def test_optional_login_prompt(oidc_app, prompt):
     app, _, _ = oidc_app
-    adapter = registry.get_registry().get("enterprise").adapter
+    adapter = registry.get_registry().get("keycloak").adapter
     adapter.config.prompt = prompt
     with TestClient(app) as client:
         response = client.get(
-            "/api/v1/auth/oauth/enterprise/start", follow_redirects=False
+            "/api/v1/auth/oauth/keycloak/start", follow_redirects=False
         )
     params = parse_qs(urlsplit(response.headers["location"]).query)
     assert params.get("prompt") == (["login"] if prompt else None)
 
 
+def test_keycloak_ssl_verify_is_isolated_between_channels(oidc_app):
+    from pathlib import Path
+
+    _, state, _ = oidc_app
+    path = Path(settings.identity_extensions_config)
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["providers"]["keycloak"]["settings"]["ssl_verify"] = False
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    providers = registry.get_registry()
+
+    for channel, expected_verify in (("keycloak", False), ("other", True)):
+        state["tls_requests"].clear()
+        adapter = providers.get(channel).adapter
+        assert adapter.config.ssl_verify is expected_verify
+        assert asyncio.run(adapter.fetch_profile("access-token"))["login"] == "reviewer01"
+        assert len(state["tls_requests"]) == 2
+        assert all(verify is expected_verify for _, verify in state["tls_requests"])
+
+    assert providers.get("keycloak").adapter.config.ssl_verify is False
+
+
 def finish(client, login_state):
     return client.get(
-        "/api/v1/auth/oauth/enterprise/callback",
+        "/api/v1/auth/oauth/keycloak/callback",
         params={"state": login_state, "code": "code"},
         follow_redirects=False,
     )
@@ -969,13 +1000,13 @@ def test_healthy_oidc_login_and_business_auth_survive_another_channel_failure(
             "oauth_session"
         ][0]
         exchanged = client.post(
-            "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+            "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
         )
         assert exchanged.status_code == 200
         assert exchanged.json()["data"]["user"]["id"] == "keycloak-user"
         headers = {
             "Authorization": "Bearer access-token",
-            "X-OAuth-Provider": "enterprise",
+            "X-OAuth-Provider": "keycloak",
         }
         assert (
             client.get("/api/v1/auth/me", headers=headers).json()["data"]["login"]
@@ -990,7 +1021,7 @@ def test_healthy_oidc_login_and_business_auth_survive_another_channel_failure(
         assert {
             p["id"] for p in asyncio.run(get_site_config())["identity_extensions"]
         } == {
-            "enterprise",
+            "keycloak",
             "other",
         }
         upstream_count = len(state["requests"])
@@ -1045,13 +1076,13 @@ def test_global_off_blocks_cached_providers_pending_login_and_existing_token(
     monkeypatch.setattr(plugin, "moderate_skill_asset_service", moderate)
     headers = {
         "Authorization": "Bearer access-token",
-        "X-OAuth-Provider": "enterprise",
+        "X-OAuth-Provider": "keycloak",
     }
     with TestClient(app, base_url="https://hub.example.test") as client:
         callback = finish(client, begin(client, state))
         session = parse_qs(urlsplit(callback.headers["location"]).query)["oauth_session"][0]
         exchanged = client.post(
-            "/api/v1/auth/oauth/enterprise/session", json={"session": session}
+            "/api/v1/auth/oauth/keycloak/session", json={"session": session}
         )
         assert exchanged.json()["data"]["access_token"] == "access-token"
         assert client.get("/business", headers=headers).json()["reviewer"] is True
@@ -1062,17 +1093,17 @@ def test_global_off_blocks_cached_providers_pending_login_and_existing_token(
         login_state = begin(client, state)
         loaded = registry.get_registry()
         assert registry.get_runtime_registry() is loaded
-        assert loaded.get("enterprise") is not None
+        assert loaded.get("keycloak") is not None
         upstream_count = len(state["requests"])
 
         monkeypatch.setattr(settings, "identity_extensions_enabled", False)
-        assert registry.get_registry().get("enterprise") is None
+        assert registry.get_registry().get("keycloak") is None
         assert registry.get_runtime_registry().public_providers() == []
         assert asyncio.run(get_site_config())["identity_extensions"] == []
-        assert client.get("/api/v1/auth/oauth/enterprise/start").status_code == 404
+        assert client.get("/api/v1/auth/oauth/keycloak/start").status_code == 404
         assert finish(client, login_state).status_code == 404
         assert client.post(
-            "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+            "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
         ).status_code == 404
         for path in ("/api/v1/auth/me", "/business"):
             assert client.get(path, headers=headers).status_code == 400
@@ -1083,12 +1114,12 @@ def test_global_off_blocks_cached_providers_pending_login_and_existing_token(
             json={"action": "approve", "version": "1.0.0"},
         ).status_code == 400
         assert asyncio.run(
-            oauth_user_profile.fetch_oauth_user_profile("enterprise", "access-token")
+            oauth_user_profile.fetch_oauth_user_profile("keycloak", "access-token")
         ) is None
         assert len(state["requests"]) == upstream_count
         # Refused exchanges do not consume Redis entries; normal TTL handles expiry.
-        assert store.get(f"market_oauth_state:enterprise:{login_state}")
-        assert store.get(f"market_oauth_pending:enterprise:{pending}")
+        assert store.get(f"market_oauth_state:keycloak:{login_state}")
+        assert store.get(f"market_oauth_pending:keycloak:{pending}")
     publish.assert_not_called()
     moderate.assert_not_called()
 
@@ -1106,7 +1137,7 @@ def test_global_off_preserves_system_token_authentication(monkeypatch):
             Request({"type": "http", "headers": [], "client": ("127.0.0.1", 1)}),
             authorization=None,
             x_system_token="system-token",
-            x_oauth_provider="enterprise",
+            x_oauth_provider="keycloak",
         )
     )
     assert auth.is_admin is True
@@ -1129,8 +1160,8 @@ def test_browser_cookie_uses_external_callback_path(
     oidc_app, monkeypatch, frontend_prefix, callback_prefix, suffix
 ):
     app, state, _ = oidc_app
-    provider = registry.get_registry().get("enterprise")
-    callback_path = f"{callback_prefix}/api/v1/auth/oauth/enterprise/callback"
+    provider = registry.get_registry().get("keycloak")
+    callback_path = f"{callback_prefix}/api/v1/auth/oauth/keycloak/callback"
     callback_uri = f"https://hub.example.test{callback_path}{suffix}"
     provider.adapter.config.redirect_uri = callback_uri
     monkeypatch.setattr(
@@ -1140,7 +1171,7 @@ def test_browser_cookie_uses_external_callback_path(
         app, base_url="https://hub.example.test", root_path=callback_prefix
     ) as client:
         response = client.get(
-            f"{callback_prefix}/api/v1/auth/oauth/enterprise/start",
+            f"{callback_prefix}/api/v1/auth/oauth/keycloak/start",
             follow_redirects=False,
         )
         assert response.status_code == 302
@@ -1182,20 +1213,20 @@ def test_extension_uses_shared_operation_logs_and_no_duplicate_routes(
         ][0]
         assert (
             client.post(
-                "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+                "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
             ).status_code
             == 200
         )
         state["fault"] = "nonce"
         assert "oauth_error" in finish(client, begin(client, state)).headers["location"]
-        assert client.get("/api/v1/auth/extensions/enterprise/start").status_code == 404
+        assert client.get("/api/v1/auth/extensions/keycloak/start").status_code == 404
     operations = {
         call.kwargs.get("operation_type") for call in logger.info.call_args_list
     }
     assert operations == {"oauth_start", "oauth_callback", "oauth_session_exchange"}
     for call in logger.info.call_args_list:
         assert call.kwargs.get("operation_id")
-        assert call.kwargs.get("provider") == "enterprise"
+        assert call.kwargs.get("provider") == "keycloak"
     assert any(
         call.kwargs.get("result") == "failure" for call in logger.warning.call_args_list
     )
@@ -1240,7 +1271,7 @@ def test_extension_success_logs_have_real_request_context_and_verified_actor(
     app, state, _, log = identity_operation_logs
     with TestClient(app, base_url="https://hub.example.test") as client:
         start = client.get(
-            "/api/v1/auth/oauth/enterprise/start", follow_redirects=False
+            "/api/v1/auth/oauth/keycloak/start", follow_redirects=False
         )
         fields = _completion_for_response(log, start)
         assert fields["operation_type"] == "oauth_start"
@@ -1255,13 +1286,13 @@ def test_extension_success_logs_have_real_request_context_and_verified_actor(
             "oauth_session"
         ][0]
         exchanged = client.post(
-            "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+            "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
         )
         me = client.get(
             "/api/v1/auth/me",
             headers={
                 "Authorization": "Bearer access-token",
-                "X-OAuth-Provider": "enterprise",
+                "X-OAuth-Provider": "keycloak",
             },
         )
         for response, operation in (
@@ -1291,7 +1322,7 @@ def test_extension_resolution_failures_have_operation_logs(
     from pathlib import Path
 
     app, state, _, log = identity_operation_logs
-    provider = "enterprise"
+    provider = "keycloak"
     if failure == "global-off":
         registry.get_runtime_registry()
         monkeypatch.setattr(settings, "identity_extensions_enabled", False)
@@ -1347,7 +1378,7 @@ def test_extension_callback_failure_logs_once_even_for_http_redirects(
     with TestClient(app, base_url="https://hub.example.test") as client:
         login_state = begin(client, state)
         if failure == "expired":
-            store.get_del(f"market_oauth_state:enterprise:{login_state}")
+            store.get_del(f"market_oauth_state:keycloak:{login_state}")
         elif failure == "binding":
             client.cookies.clear()
         elif failure == "nonce":
@@ -1356,7 +1387,7 @@ def test_extension_callback_failure_logs_once_even_for_http_redirects(
             assert "oauth_session" in finish(client, login_state).headers["location"]
         if failure == "cancel":
             response = client.get(
-                "/api/v1/auth/oauth/enterprise/callback",
+                "/api/v1/auth/oauth/keycloak/callback",
                 params={
                     "state": login_state,
                     "error": "access_denied",
@@ -1366,7 +1397,7 @@ def test_extension_callback_failure_logs_once_even_for_http_redirects(
             )
         elif failure == "missing":
             response = client.get(
-                "/api/v1/auth/oauth/enterprise/callback", follow_redirects=False
+                "/api/v1/auth/oauth/keycloak/callback", follow_redirects=False
             )
         else:
             response = finish(client, login_state)
@@ -1391,13 +1422,13 @@ def test_extension_session_failures_log_once_including_pre_handler_validation(
         pending = parse_qs(urlsplit(callback.headers["location"]).query)[
             "oauth_session"
         ][0]
-        provider = "enterprise"
+        provider = "keycloak"
         if failure == "expired":
-            store.get_del(f"market_oauth_pending:enterprise:{pending}")
+            store.get_del(f"market_oauth_pending:keycloak:{pending}")
         elif failure == "replay":
             assert (
                 client.post(
-                    "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+                    "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
                 ).status_code
                 == 200
             )
@@ -1405,7 +1436,7 @@ def test_extension_session_failures_log_once_including_pre_handler_validation(
             provider = "other"
         elif failure == "corrupt":
             store.set_ex(
-                f"market_oauth_pending:enterprise:{pending}", "private-broken-json", 120
+                f"market_oauth_pending:keycloak:{pending}", "private-broken-json", 120
             )
         body = {"session": "short"} if failure == "422" else {"session": pending}
         response = client.post(f"/api/v1/auth/oauth/{provider}/session", json=body)
@@ -1428,7 +1459,7 @@ def test_plugin_exceptions_are_safe_and_have_one_operation_completion(
     from plugins_market.identity_extensions.contracts import IdentityError
 
     app, state, _, log = identity_operation_logs
-    provider = registry.get_runtime_registry().get("enterprise")
+    provider = registry.get_runtime_registry().get("keycloak")
     private = "private-token private-secret private-cookie private-verifier private-code private-nonce"
     errors = {
         "expected": IdentityError(private),
@@ -1449,7 +1480,7 @@ def test_plugin_exceptions_are_safe_and_have_one_operation_completion(
         )
         if method == "start_authorization":
             response = client.get(
-                "/api/v1/auth/oauth/enterprise/start", follow_redirects=False
+                "/api/v1/auth/oauth/keycloak/start", follow_redirects=False
             )
         elif method == "complete_authorization":
             response = finish(client, login_state)
@@ -1458,7 +1489,7 @@ def test_plugin_exceptions_are_safe_and_have_one_operation_completion(
                 "/api/v1/auth/me",
                 headers={
                     "Authorization": "Bearer private-token",
-                    "X-OAuth-Provider": "enterprise",
+                    "X-OAuth-Provider": "keycloak",
                 },
             )
     fields = _completion_for_response(log, response)
@@ -1487,7 +1518,7 @@ def test_extension_me_validation_failures_have_anonymous_operation_logs(
     identity_operation_logs, failure
 ):
     app, state, _, log = identity_operation_logs
-    headers = {"X-OAuth-Provider": "enterprise"}
+    headers = {"X-OAuth-Provider": "keycloak"}
     if failure != "missing-bearer":
         headers["Authorization"] = "Bearer access-token"
     if failure == "invalid-token":
@@ -1515,7 +1546,7 @@ def test_extension_response_construction_failure_is_not_logged_as_success(
     )
     with TestClient(app, base_url="https://hub.example.test") as client:
         response = client.get(
-            "/api/v1/auth/oauth/enterprise/start", follow_redirects=False
+            "/api/v1/auth/oauth/keycloak/start", follow_redirects=False
         )
     assert response.status_code == 500
     fields = _completion_for_response(log, response)
@@ -1532,12 +1563,12 @@ def test_extension_validation_logs_do_not_include_rejected_request_body(
     with TestClient(app, base_url="https://hub.example.test") as client:
         if payload == "shape":
             response = client.post(
-                "/api/v1/auth/oauth/enterprise/session",
+                "/api/v1/auth/oauth/keycloak/session",
                 json={"session": ["private-token"]},
             )
         else:
             response = client.post(
-                "/api/v1/auth/oauth/enterprise/session",
+                "/api/v1/auth/oauth/keycloak/session",
                 content='{"session":"private-token"',
                 headers={"Content-Type": "application/json"},
             )
@@ -1549,11 +1580,15 @@ def test_extension_validation_logs_do_not_include_rejected_request_body(
 
 
 @pytest.mark.parametrize("oidc_app", ["", "/"], indirect=True)
+@pytest.mark.parametrize("ssl_verify", [None, True, False])
 @pytest.mark.parametrize(
     "fault", [None, "mixed-jwks", "valid-azp", "multi-audience-valid-azp"]
 )
-def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
+def test_oidc_login_session_and_existing_business_identity(oidc_app, fault, ssl_verify):
     app, state, _ = oidc_app
+    adapter = registry.get_registry().get("keycloak").adapter
+    if ssl_verify is not None:
+        adapter.config.ssl_verify = ssl_verify
     state["fault"] = fault
     with TestClient(app, base_url="https://hub.example.test") as client:
         login_state = begin(client, state)
@@ -1562,14 +1597,14 @@ def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
         )
         response = finish(client, login_state)
         query = parse_qs(urlsplit(response.headers["location"]).query)
-        assert query["oauth_provider"] == ["enterprise"]
+        assert query["oauth_provider"] == ["keycloak"]
         pending = query["oauth_session"][0]
         wrong = client.post(
             "/api/v1/auth/oauth/other/session", json={"session": pending}
         )
         assert wrong.status_code == 400
         exchanged = client.post(
-            "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+            "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
         )
         assert exchanged.status_code == 200
         assert exchanged.headers["cache-control"] == "no-store"
@@ -1577,14 +1612,14 @@ def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
         assert "refresh_token" not in exchanged.text
         assert (
             client.post(
-                "/api/v1/auth/oauth/enterprise/session", json={"session": pending}
+                "/api/v1/auth/oauth/keycloak/session", json={"session": pending}
             ).status_code
             == 400
         )
         assert "oauth_error" in finish(client, login_state).headers["location"]
         headers = {
             "Authorization": "Bearer access-token",
-            "X-OAuth-Provider": "enterprise",
+            "X-OAuth-Provider": "keycloak",
         }
         me = client.get("/api/v1/auth/me", headers=headers)
         assert me.status_code == 200
@@ -1598,6 +1633,15 @@ def test_oidc_login_session_and_existing_business_identity(oidc_app, fault):
         }
         state["fault"] = "invalid-token"
         assert client.get("/business", headers=headers).status_code == 401
+
+    assert {path.rsplit("/", 1)[-1] for path, _ in state["tls_requests"]} == {
+        "openid-configuration",
+        "token",
+        "certs",
+        "userinfo",
+    }
+    expected_verify = ssl_verify is not False
+    assert all(verify is expected_verify for _, verify in state["tls_requests"])
 
 
 @pytest.mark.parametrize("oidc_app", ["", "/"], indirect=True)
@@ -1618,7 +1662,7 @@ def test_oidc_issuer_normalization_preserves_exact_server_validation(
     with TestClient(app, base_url="https://hub.example.test") as client:
         if issuer_field == "metadata_issuer":
             response = client.get(
-                "/api/v1/auth/oauth/enterprise/start", follow_redirects=False
+                "/api/v1/auth/oauth/keycloak/start", follow_redirects=False
             )
             assert response.status_code == 502
             assert len(state["requests"]) == 1
@@ -1631,6 +1675,7 @@ def test_oidc_issuer_normalization_preserves_exact_server_validation(
             assert len(state["requests"]) == 3
 
 
+@pytest.mark.parametrize("ssl_verify", [True, False])
 @pytest.mark.parametrize(
     "fault",
     [
@@ -1650,8 +1695,9 @@ def test_oidc_issuer_normalization_preserves_exact_server_validation(
         "reserved-id",
     ],
 )
-def test_invalid_oidc_result_cannot_create_session(oidc_app, fault):
+def test_invalid_oidc_result_cannot_create_session(oidc_app, fault, ssl_verify):
     app, state, _ = oidc_app
+    registry.get_registry().get("keycloak").adapter.config.ssl_verify = ssl_verify
     state["fault"] = fault
     with TestClient(app, base_url="https://hub.example.test") as client:
         response = finish(client, begin(client, state))
@@ -1666,7 +1712,7 @@ def test_browser_binding_loopback_and_expiry(oidc_app, monkeypatch):
         assert client.get("/api/v1/auth/oauth/github/start").status_code == 404
         assert (
             client.get(
-                "/api/v1/auth/oauth/enterprise/start",
+                "/api/v1/auth/oauth/keycloak/start",
                 params={"redirect_to": "https://evil.test/cb"},
             ).status_code
             == 400
@@ -1708,6 +1754,13 @@ def test_browser_binding_loopback_and_expiry(oidc_app, monkeypatch):
         {"issuer": "https://user:password@sso.test/realms/company/"},
         {"redirect_uri": "http://hub.test/cb"},
         {"redirect_uri": "https://hub.test/cb#fragment"},
+        {"ssl_verify": "false"},
+        {"ssl_verify": "true"},
+        {"ssl_verify": 0},
+        {"ssl_verify": 1},
+        {"ssl_verify": None},
+        {"ssl_verify": False, "issuer": "http://sso.test"},
+        {"ssl_verify": False, "redirect_uri": "http://hub.test/cb"},
     ],
 )
 def test_oidc_configuration_rejects_invalid_protocol_settings(change):
@@ -1721,6 +1774,23 @@ def test_oidc_configuration_rejects_invalid_protocol_settings(change):
                 **change,
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [({}, True), ({"ssl_verify": True}, True), ({"ssl_verify": False}, False)],
+)
+def test_keycloak_ssl_verify_defaults_true_and_accepts_only_booleans(options, expected):
+    config = KeycloakConfig.model_validate(
+        {
+            "issuer": "https://sso.test",
+            "client_id": "hub",
+            "client_secret_env": "SECRET",
+            "redirect_uri": "https://hub.test/cb",
+            **options,
+        }
+    )
+    assert config.ssl_verify is expected
 
 
 @pytest.mark.parametrize(
@@ -1758,8 +1828,9 @@ def test_oidc_configuration_accepts_trusted_urls(
     assert config.issuer == expected_issuer
 
 
+@pytest.mark.parametrize("ssl_verify", [True, False])
 def test_extension_identity_reaches_existing_publish_and_moderation_services(
-    oidc_app, monkeypatch
+    oidc_app, monkeypatch, ssl_verify
 ):
     """Use actual publish routing and actual moderation service, with local I/O fixtures."""
     import io
@@ -1779,6 +1850,7 @@ def test_extension_identity_reaches_existing_publish_and_moderation_services(
     path = Path(settings.identity_extensions_config)
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
     config["providers"]["broken"] = {"enabled": True, "adapter": "absent"}
+    config["providers"]["keycloak"]["settings"]["ssl_verify"] = ssl_verify
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
     # Initial /start obtains metadata; later userinfo requests use the same fixture.
     with TestClient(app, base_url="https://hub.example.test") as client:
@@ -1792,7 +1864,7 @@ def test_extension_identity_reaches_existing_publish_and_moderation_services(
                 request,
                 authorization="Bearer access-token",
                 x_system_token=None,
-                x_oauth_provider="enterprise",
+                x_oauth_provider="keycloak",
             )
         )
 
@@ -1822,7 +1894,7 @@ def test_extension_identity_reaches_existing_publish_and_moderation_services(
         version_desc=None,
         force=False,
     )
-    publish_auth = plugin.get_publish_auth("Bearer access-token", None, "enterprise")
+    publish_auth = plugin.get_publish_auth("Bearer access-token", None, "keycloak")
     result = asyncio.run(
         plugin.publish_plugin(
             request,

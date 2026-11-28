@@ -11,8 +11,12 @@
 | `nginx/` | 新前端镜像专用的非 root Nginx 配置与入口脚本 |
 | `manifests/marketplace-*.yaml` | Marketplace（Backend）的 Secret、ConfigMap、Deployment、内部 Service；ConfigMap/Secret 按功能列出可选配置，只有取消注释后才生效 |
 | `manifests/frontend-*.yaml` | Frontend 的 Deployment、内部 Service、HTTPS Route |
+| [公共身份配置示例](../../config/identity-extensions/) | 唯一原始插件配置、内部 CA 证书包和挂载补丁；原始配置需通过 `--from-file` 生成 ConfigMap，不能作为资源直接导入；不属于默认七份清单 |
+| [Keycloak HTTPS 证书配置与挂载](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md>) | 通用证书配置及挂载指南，包含 OpenShift 控制台操作 |
 | `DEPLOYMENT.md` | 从构建、推送镜像到 OCP 页面安装、验收和回退的完整基础市场指导 |
 
 按 [部署指导](DEPLOYMENT.md) 从构建执行到验收。设计背景见 [OPENSHIFT.md](../OPENSHIFT.md)。
+
+需要 Keycloak 登录时，按 [Keycloak HTTPS 证书配置与挂载](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md>) 选择公共可信 CA 或企业内部 CA 路线。基础清单的 `MARKET_IDENTITY_EXTENSIONS_ENABLED` 和新增可选渠道示例均默认关闭；未启用时无需创建身份配置、CA ConfigMap 或新增 Secret 键。`ssl_verify` 默认 `true`，不修改 GitCode/GitHub/AgentOS 的原有认证实现。可选挂载文件是战略合并补丁，不能当作完整 Deployment 导入；不要递归批量导入未填写的 `.example.yaml`。
 
 本轮采用单 Backend 副本；数据库和对象存储由用户预先提供。`app.log`、`framework.log`、`access.log` 和 `interface.log` 写到 Marketplace 容器可写层，容器重新创建后丢失；已有应用/框架控制台日志和前端 Nginx 日志可由集群的容器日志链路采集。是否进入集中检索系统取决于 OCP 集群是否安装并配置日志采集。

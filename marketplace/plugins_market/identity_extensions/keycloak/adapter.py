@@ -52,7 +52,9 @@ class KeycloakAdapter:
                 return cached[1]
             self.config.validate_url(url)
             async with httpx.AsyncClient(
-                timeout=self.config.timeout_seconds, follow_redirects=False
+                timeout=self.config.timeout_seconds,
+                follow_redirects=False,
+                verify=self.config.ssl_verify,
             ) as client:
                 response = await client.get(url, headers={"Accept": "application/json"})
                 response.raise_for_status()
@@ -135,7 +137,9 @@ class KeycloakAdapter:
     async def _userinfo(self, access_token: str) -> dict:
         metadata = await self._metadata()
         async with httpx.AsyncClient(
-            timeout=self.config.timeout_seconds, follow_redirects=False
+            timeout=self.config.timeout_seconds,
+            follow_redirects=False,
+            verify=self.config.ssl_verify,
         ) as client:
             response = await client.get(
                 metadata["userinfo_endpoint"],
@@ -245,7 +249,9 @@ class KeycloakAdapter:
             else:
                 data.update(client_id=self.config.client_id, client_secret=secret)
             async with httpx.AsyncClient(
-                timeout=self.config.timeout_seconds, follow_redirects=False
+                timeout=self.config.timeout_seconds,
+                follow_redirects=False,
+                verify=self.config.ssl_verify,
             ) as client:
                 response = await client.post(
                     metadata["token_endpoint"],

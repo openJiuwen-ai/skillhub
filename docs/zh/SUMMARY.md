@@ -7,6 +7,7 @@
   - [Docker 一键部署](3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导-一键部署.md)
   - [Docker 安装](3.%20安装指导/Docker方式安装/openJiuwen-Agentic-Hub安装指导.md)
   - [K8s 安装](3.%20安装指导/K8s方式安装/openJiuwen-Agentic-Hub安装指导.md)
+  - [Keycloak HTTPS 证书配置与挂载](<3. 安装指导/Keycloak HTTPS 证书配置与挂载.md>)
   - [升级说明](3.%20安装指导/升级说明.md)
 - [用户指南](4.%20用户指南/README.md)
   - [Agent资产发布](4.%20用户指南/Agent资产发布.md)

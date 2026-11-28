@@ -33,6 +33,19 @@ AgentOS 回调：http://skillhub.local:9002/api/v1/auth/oauth/agentos/callback
 
 > 配置项的写入位置随部署方式不同：本地安装和 Docker 一键部署均写 `.env`，K8s 写入 `marketplace-config.yaml`（非敏感项）和 `skillhub-secrets` Secret（Client ID/Secret）。
 
+## 所有渠道共用的前端回跳地址
+
+`MARKET_OAUTH_FRONTEND_ORIGIN` 由 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用，只需配置一次。它决定后端完成登录回调后将浏览器送回哪个 Skillhub 前端，不是某个提供方的授权码回调地址，也不会单独启用登录渠道。
+
+OpenShift 的 `docker/openshift/manifests/marketplace-configmap.yaml` 中，注释示例位于登录/审核公共配置区域，紧随 `MARKET_GITHUB_OAUTH_ENABLED`，对所有渠道生效。部署时在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，并填写浏览器实际访问的前端地址：
+
+```yaml
+data:
+  MARKET_OAUTH_FRONTEND_ORIGIN: "https://hub.example.com"
+```
+
+地址须包含协议、实际端口和路径前缀；`/hub` 部署填写 `https://hub.example.com/hub`。若已为任一渠道配置正确值，其他渠道继续共用，不重复添加同名配置。修改后滚动重启全部后端副本。各渠道的启用开关、Client ID/Secret 和回调地址仍需单独配置；第三方插件还需配置总开关、渠道开关和插件文件。
+
 ## GitCode OAuth
 
 1. 登录 GitCode，进入“个人设置 → OAuth 应用”，创建应用。

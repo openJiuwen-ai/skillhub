@@ -12,6 +12,7 @@
 | 数据库 | 可由 Backend Pod 访问的 MySQL 兼容数据库、库名、账号、密码及建表/读写权限 |
 | 对象存储 | 已创建的 Bucket、Backend Pod 与用户浏览器可访问的 S3 端点、区域及静态 AK/SK |
 | GitCode | 发布者和不同的审核员账号；可配置回调地址的 GitCode OAuth 应用 |
+| Keycloak（可选） | 已部署且可访问的 Realm、OIDC 客户端及两类业务用户；默认校验证书，内部 CA 按 [HTTPS 配置指导](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md>) 提供可信证书包 |
 
 本清单不安装数据库或对象存储。若测试库是 MariaDB 11.8 且启用了 `ORACLE` 等特殊 `sql_mode`，须在独立测试库验证建表、发布与审核；本交付物没有修改 SQL，不能将镜像构建成功视为数据库兼容性验收。
 
@@ -125,6 +126,7 @@ docker buildx build --secret id=index_url,src=/path/to/private-index-url \
 | Redis 服务启用密码认证 | `MARKET_REDIS_PASSWORD` | Redis 地址、端口等放 ConfigMap；多 Backend 副本需要共享状态，本轮单副本不用 Redis |
 | OBS 动态 IAM 凭据 | `HUAWEICLOUD_USERNAME`、`HUAWEICLOUD_PASSWORD` | ConfigMap 设 `MARKET_CREDENTIALS_MODE=dynamic`，并指定 `HUAWEICLOUD_PROJECT_ID` 或 `HUAWEICLOUD_PROJECT_NAME` 等非敏感项 |
 | GitHub 或 AgentOS OAuth | `MARKET_GITHUB_OAUTH_CLIENT_ID`、`MARKET_GITHUB_OAUTH_CLIENT_SECRET`；或 `MARKET_AGENTOS_OAUTH_CLIENT_ID`、`MARKET_AGENTOS_OAUTH_CLIENT_SECRET` | 各自的启用开关和回调地址放 ConfigMap |
+| Keycloak 插件 | `SKILLHUB_ENTERPRISE_SECRET`，或插件 `client_secret_env` 指定的实际键名 | 追加到后端现有业务 Secret；普通开关放 ConfigMap，插件 YAML 与可选 CA 通过独立 ConfigMap 挂载，见 [完整步骤](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md>) |
 | 系统管理员令牌 | `SYSTEM_ADMIN_TOKEN` | 仅使用 `X-System-Token` 管理接口时需要 |
 | 检索、推荐或 AI 审查 | `MARKET_RETRIEVAL_EMBEDDING_API_KEY`、`MARKET_RETRIEVAL_MODEL_API_KEY`、`MARKET_REC_EMBEDDING_API_KEY`、`MARKET_SKILL_REVIEW_MODEL_API_KEY` 等按启用能力填写 | 模型地址、名称及开关放 ConfigMap；本轮 AI 审查关闭 |
 | 启用加密或推荐服务认证 | `SERVER_AES_MASTER_KEY`、`MARKET_MILVUS_PASSWORD` 等按实际能力填写 | 加密模式、Milvus 地址等非敏感项放 ConfigMap |
@@ -153,6 +155,19 @@ MinIO 示例使用 `STORAGE_TYPE=MinIO`、`MARKET_CREDENTIALS_MODE=static`、`MA
 
 ## 5. 启用登录、发布与审核
 
+`MARKET_OAUTH_FRONTEND_ORIGIN` 是 GitCode、GitHub、AgentOS 和第三方插件（如 Keycloak）共用的登录完成后前端回跳地址，只需配置一次。`manifests/marketplace-configmap.yaml` 的注释示例位于登录/审核公共配置区域，紧随 `MARKET_GITHUB_OAUTH_ENABLED`，供所有登录渠道共用。
+
+启用任意登录渠道前，在后端实际引用的 ConfigMap 的 `data` 下取消该项注释，将 `https://HOST` 替换为浏览器实际访问的 Skillhub 前端地址（包含协议、实际端口和路径前缀）。例如：
+
+```yaml
+data:
+  MARKET_OAUTH_FRONTEND_ORIGIN: "https://hub.example.com"
+```
+
+前端部署在 `/hub` 时填写 `https://hub.example.com/hub`。已有正确的生效值时沿用即可，不为每个渠道重复添加，也不创建同名重复键。保存后滚动重启全部后端副本。此项仅控制前端回跳，各渠道仍需分别配置启用开关、凭据和回调地址；第三方插件还需打开总开关和渠道开关并挂载配置。
+
+### 5.1 GitCode 登录
+
 1. 在 **Networking → Routes** 取得前端 HTTPS 地址 `https://HOST`。在 GitCode OAuth 应用中注册回调地址 `https://HOST/api/v1/auth/oauth/gitcode/callback`，必须与应用中配置的值完全一致。
 2. 确认 `skillhub-backend-secrets` 中的 `MARKET_GITCODE_OAUTH_CLIENT_ID` 和 `MARKET_GITCODE_OAUTH_CLIENT_SECRET` 已填写真实值；如果之前为只浏览场景省略了这两项，此时在 Secrets 页面添加。
 3. 编辑 `skillhub-backend-config`，设 `MARKET_GITCODE_OAUTH_ENABLED=true`、`MARKET_GITCODE_OAUTH_REDIRECT_URI=https://HOST/api/v1/auth/oauth/gitcode/callback`、`MARKET_OAUTH_FRONTEND_ORIGIN=https://HOST`。若前端是 `/hub` 构建，最后一项使用 `https://HOST/hub`。
@@ -169,7 +184,20 @@ MinIO 示例使用 `STORAGE_TYPE=MinIO`、`MARKET_CREDENTIALS_MODE=static`、`MA
 | 审核员 GitCode 登录并批准 | 审核员能看到待审核项，批准后资产进入公开列表 |
 | 退出登录后检索、查看并下载该资产 | 列表、详情和下载链接可用 |
 
+### 5.2 可选 Keycloak 登录：保持 `ssl_verify: true`
+
+完整控制台操作、证书包制作和故障定位见 [Keycloak HTTPS 登录配置](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md>)。这些配置与 GitCode 可并存，不修改原有 GitCode/GitHub/AgentOS 开关、凭据或回调。
+
+1. 确认 Keycloak 至少有一个就绪 Pod，Discovery 返回 JSON；配置客户端、业务账号及实际渠道对应的回调地址。
+2. 填写公共目录的[唯一原始插件配置](../../config/identity-extensions/identity-extensions-configmap.example.yaml)。该文件顶层为 `providers`，不是 ConfigMap 清单；按[通用指南第 4.1 节](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md#41-创建身份配置-configmap>)使用 `oc create configmap --from-file` 或控制台表单创建 ConfigMap，数据键固定为 `identity-extensions.yaml`。示例渠道统一为 `keycloak`，默认关闭；准备启用时改为 `enabled: true`，保持 `ssl_verify: true`。
+3. 内部 CA 场景创建真实的 `skillhub-ca-bundle`，在后端普通 ConfigMap 中添加 `SSL_CERT_FILE=/app/certs/ca-bundle.pem`；已受信任的公共 CA 无需自定义证书包或此环境变量。
+4. 将 Client Secret 追加到后端现有业务 Secret。更新总开关、配置文件路径、前端地址和审核员名单，再将挂载补丁合并到已有 Deployment；所有资源位于同一 Project。
+5. 检查 Deployment Conditions、Events、ReplicaSet 配额及新 Pod 的所有者。`Available=True` 或探针成功不代表新模板已经部署，不能继续使用旧 ReplicaSet 的 Pod 验证新增挂载。
+6. 在每个新后端 Pod 内确认挂载文件可读、开启证书校验访问 Discovery 返回 `200`，再分别验证发布者登录、Skill 发布和审核员审批。后端多副本时，先确认 OAuth 使用共享 Redis 且 PING 成功，没有退回进程内存。
+
 ## 6. 日志、限制与回退
+
+Keycloak 登录报 `CERTIFICATE_VERIFY_FAILED`、证书路径存在于环境变量但文件不存在、或更新被 ReplicaSet 配额阻止时，按 [HTTPS 指导的故障排查](<../../docs/zh/3. 安装指导/Keycloak HTTPS 证书配置与挂载.md#9-故障排查与证书更新>) 检查。不要为解决配额问题反复删除仍在服务的 Pod；确认历史 ReplicaSet 已缩容且无需回滚后再清理，或联系管理员提高配额。`revisionHistoryLimit` 可按运维回滚要求单独评估，基础模板不改变默认保留策略。
 
 OCP Pod **Logs** 页面可查看现有 Backend 应用/框架/访问控制台输出和前端 Nginx 标准输出/错误；能否进入集中检索还取决于集群日志采集组件，须在其查询页面单独验证。Marketplace 的 `/app/logs`、`/app/data` 与原 K8s 部署一样写入容器可写层，`interface.log` 等文件不会自动进入容器日志采集，容器重新创建后丢失。
 
